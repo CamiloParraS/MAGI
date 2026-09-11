@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+rustc-ice-*.txt
+
+# Node / frontend
+node_modules/
+dist/
+
+# App data
+vendor/
+models/cache/
+*.db
+*.db-wal
+*.db-shm
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json

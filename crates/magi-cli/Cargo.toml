@@ -1,0 +1,9 @@
+[package]
+name = "magi-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+magi-core = { path = "../magi-core" }
+anyhow = { workspace = true }
