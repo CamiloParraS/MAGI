@@ -22,6 +22,13 @@ glob = "0.3.4"
 dunce = "1.0.5"
 tempfile = "3.27.0"
 clap = { version = "4.6.6", features = ["derive"] }
+infer = "0.22.0"
+ignore = "0.4.33"
+isolang = { version = "2.4.0", default-features = false }
+whatlang = "0.18.0"
+chardetng = "1.0.0"
+encoding_rs = "0.8.41"
+unicode-normalization = "0.1.25"
 
 [profile.release]
 lto = "thin"

@@ -16,9 +16,11 @@ pub struct Root {
     pub status: String,
 }
 
-/// True if `path` is the same as, or nested inside, `other`.
+/// True if `path` is nested inside `other` (in either direction), not
+/// counting the identical-path case — that's an "already exists" error,
+/// not a "nested root" one (see `add`).
 fn is_nested(path: &Path, other: &Path) -> bool {
-    path == other || path.starts_with(other) || other.starts_with(path)
+    path != other && (path.starts_with(other) || other.starts_with(path))
 }
 
 /// Registers a root after canonicalizing it and rejecting it if it's
@@ -147,6 +149,16 @@ mod tests {
         add(&conn, &child).unwrap();
         let err = add(&conn, parent.path()).unwrap_err();
         assert!(matches!(err, Error::NestedRoot { .. }));
+    }
+
+    #[test]
+    fn readding_same_root_reports_already_exists_not_nested() {
+        let (_dir, conn) = open_test_db();
+        let root_dir = tempfile::tempdir().unwrap();
+
+        add(&conn, root_dir.path()).unwrap();
+        let err = add(&conn, root_dir.path()).unwrap_err();
+        assert!(matches!(err, Error::RootAlreadyExists(_)));
     }
 
     #[test]
