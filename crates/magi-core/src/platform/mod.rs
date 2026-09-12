@@ -35,3 +35,16 @@ pub trait PowerStatus {
 pub trait ThreadPriority {
     fn lower_current_thread(&self);
 }
+
+/// The kernel's inotify watch limit, for `magi-cli doctor`. `None` on
+/// platforms without inotify.
+pub fn inotify_watch_limit() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::inotify_watch_limit()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
