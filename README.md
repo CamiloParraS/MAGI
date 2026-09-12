@@ -1,4 +1,4 @@
-# magi
+# MAGI
 
 Local semantic file search. Indexes the contents of files in folders you
 choose (text, code, PDFs, Office documents, images via OCR and visual
