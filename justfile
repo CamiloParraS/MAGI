@@ -7,7 +7,7 @@ default:
 # Set up development environment and dependencies
 setup:
     cd apps/desktop; pnpm install
-    cargo xtask fetch-pdfium
+    cargo run -p xtask -- fetch-pdfium
 
 # Start the development server
 dev:
@@ -34,7 +34,7 @@ bindings:
 
 # Download required models into the dev data directory
 models:
-    cargo xtask fetch-models
+    cargo run -p xtask -- fetch-models
 
 # Run evaluations using the CLI against test fixtures
 eval:
