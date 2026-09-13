@@ -1,9 +1,4 @@
 //! hash -> extract -> chunk -> embed -> write. Implemented starting M2
-//! (see SPEC.md §5.4 processing a pending file).
-//!
-//! M2 implements a one-shot walk -> classify -> extract -> chunk -> write
-//! pass (`index_root`, used by `magi-cli index`). Hashing, the pending
-//! state machine, and the worker/scheduler threads are M5.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -22,11 +17,8 @@ use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 
-/// Per-file extraction timeout (see SPEC.md §5.4 step 5).
 pub const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Bytes read from the file head for magic-byte sniffing when the
-/// extension doesn't resolve a [`Kind`].
 const SNIFF_HEADER_LEN: usize = 8192;
 
 pub struct IndexRootOptions {
@@ -505,6 +497,81 @@ mod tests {
         );
         assert_eq!(
             crate::search::fts::search_fts(&conn, "widget", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// Real files from an actual nested user document tree (not
+    /// synthetic tempfile writes), edge-case fixture
+    /// list: a genuinely empty file, a file over the size cap, and a
+    /// realistically deep directory — see `fixtures/corpus/edge/`.
+    #[test]
+    fn real_empty_file_is_indexed_with_only_a_filename_chunk() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/empty_real.gitignore");
+        assert_eq!(fs::metadata(&fixture).unwrap().len(), 0);
+        fs::copy(&fixture, root_path.join("empty_real.gitignore")).unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.indexed, 1);
+        let row = db::files::get_by_path(&conn, &root_path.join("empty_real.gitignore"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "indexed");
+    }
+
+    #[test]
+    fn real_file_over_cap_is_skipped_with_reason() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/edge/huge_real.pdf");
+        assert!(fs::metadata(&fixture).unwrap().len() > 1024 * 1024);
+        fs::copy(&fixture, root_path.join("huge_real.pdf")).unwrap();
+
+        // default_options() caps at 1 MB; huge_real.pdf is ~1.4 MB.
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.skipped, 1);
+        let row = db::files::get_by_path(&conn, &root_path.join("huge_real.pdf"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "skipped");
+        assert_eq!(row.skip_reason.as_deref(), Some("too_large"));
+    }
+
+    #[test]
+    fn real_deeply_nested_file_is_indexed_and_searchable() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let fixture_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/edge/deep_real");
+        let rel = Path::new(
+            "Tercer Semestre/Fisica/asuntosSinImportancia/solarcalculator/solarcalculator/src/main/java/com/example/solarcalculator/model/calculateRequest.java",
+        );
+        // Rebuild component-by-component rather than a single `join(rel)`:
+        // `rel`'s forward slashes survive verbatim inside a joined PathBuf
+        // on Windows, producing mixed separators that don't string-match
+        // the walker's own (all-backslash) path for the same file.
+        let dest = rel
+            .components()
+            .fold(root_path.clone(), |acc, c| acc.join(c));
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        fs::copy(fixture_root.join(rel), &dest).unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.indexed, 1);
+        let row = db::files::get_by_path(&conn, &dest).unwrap().unwrap();
+        assert_eq!(row.state, "indexed");
+        assert_eq!(row.kind, "code");
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "irradiacionSolar", 10)
                 .unwrap()
                 .len(),
             1
