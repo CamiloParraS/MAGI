@@ -33,10 +33,12 @@ const TEXT_EXTENSIONS: &[&str] = &[
 ];
 
 // Extensions for the tree-sitter grammars listed in SPEC.md §3 (Rust,
-// Python, JS/TS, Java, C/C++, Go, C#).
+// Python, JS/TS, Java, C/C++, Go, C#), plus a few common languages without
+// a grammar here — those fall back to line-window chunking (see
+// `extract::code`) rather than being mis-classified as `Other`.
 const CODE_EXTENSIONS: &[&str] = &[
     "rs", "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "java", "c", "h", "cc", "cpp", "cxx",
-    "hpp", "hh", "go", "cs",
+    "hpp", "hh", "go", "cs", "rb", "php", "sh", "bash", "kt", "kts", "swift",
 ];
 
 const PDF_EXTENSIONS: &[&str] = &["pdf"];

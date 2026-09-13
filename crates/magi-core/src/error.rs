@@ -43,6 +43,15 @@ pub enum Error {
 
     #[error("extraction of {} panicked: {message}", .path.display())]
     ExtractionPanicked { path: PathBuf, message: String },
+
+    #[error("PDF error: {0}")]
+    Pdf(String),
+
+    #[error("Office document error: {0}")]
+    Office(String),
+
+    #[error("code parse error: {0}")]
+    Code(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

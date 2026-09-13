@@ -48,3 +48,36 @@ pub fn inotify_watch_limit() -> Option<u64> {
         None
     }
 }
+
+/// The `vendor/pdfium/<dir>/` subdirectory name for the current OS/arch,
+/// matching `xtask`'s fetch targets.
+pub fn pdfium_vendor_dir() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        windows::PDFIUM_VENDOR_DIR
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::PDFIUM_VENDOR_DIR
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::PDFIUM_VENDOR_DIR
+    }
+}
+
+/// The PDFium shared library's filename for the current OS.
+pub fn pdfium_library_filename() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        windows::PDFIUM_LIBRARY_FILENAME
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::PDFIUM_LIBRARY_FILENAME
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::PDFIUM_LIBRARY_FILENAME
+    }
+}

@@ -15,7 +15,10 @@ use rusqlite::Connection;
 use crate::db::files::{FileRecord, upsert_file};
 use crate::discovery::{self, Kind, WalkOptions};
 use crate::error::{Error, Result};
+use crate::extract::code::CodeExtractor;
 use crate::extract::filename::filename_chunk;
+use crate::extract::office::OfficeExtractor;
+use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 
@@ -153,11 +156,37 @@ fn errored(kind: Kind, message: String) -> FileOutcome {
     }
 }
 
+/// Which extractor (if any) handles a [`Kind`]. A single exhaustive match
+/// over `Kind` here — rather than separate `has_extractor` and
+/// `extract_for_kind` matches — means the compiler forces both "should we
+/// read this file's bytes" and "how do we extract it" to stay in sync
+/// whenever a `Kind` variant is added.
+enum Dispatch {
+    Text,
+    Pdf,
+    Office,
+    Code,
+    /// Image extraction (OCR/QR/embeddings) lands in M4; until then it
+    /// falls back to filename-only indexing, same as an unsupported
+    /// (`Other`) file.
+    None,
+}
+
+fn dispatch_for(kind: Kind) -> Dispatch {
+    match kind {
+        Kind::Text => Dispatch::Text,
+        Kind::Pdf => Dispatch::Pdf,
+        Kind::Office => Dispatch::Office,
+        Kind::Code => Dispatch::Code,
+        Kind::Image | Kind::Other => Dispatch::None,
+    }
+}
+
 /// Whether `extract_for_kind` does real content extraction for `kind`.
 /// Kinds without one fall back to filename-only indexing, so there's no
 /// point reading their full file content.
 fn has_extractor(kind: Kind) -> bool {
-    matches!(kind, Kind::Text)
+    !matches!(dispatch_for(kind), Dispatch::None)
 }
 
 fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
@@ -216,14 +245,12 @@ fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
 }
 
 fn extract_for_kind(kind: Kind, path: &Path, bytes: &[u8]) -> Result<ExtractedDoc> {
-    match kind {
-        Kind::Text => TextExtractor.extract(path, bytes),
-        // Code/PDF/Office/Image extractors land in later M2/M4 slices;
-        // until then these kinds fall back to filename-only indexing,
-        // same as an unsupported (`Other`) file.
-        Kind::Code | Kind::Pdf | Kind::Office | Kind::Image | Kind::Other => {
-            Ok(ExtractedDoc::default())
-        }
+    match dispatch_for(kind) {
+        Dispatch::Text => TextExtractor.extract(path, bytes),
+        Dispatch::Pdf => PdfExtractor.extract(path, bytes),
+        Dispatch::Office => OfficeExtractor.extract(path, bytes),
+        Dispatch::Code => CodeExtractor.extract(path, bytes),
+        Dispatch::None => Ok(ExtractedDoc::default()),
     }
 }
 
@@ -390,5 +417,130 @@ mod tests {
 
         assert_eq!(first_count, second_count);
         assert_eq!(second_count, 2);
+    }
+
+    #[test]
+    fn pdf_files_are_extracted_per_page_and_searchable() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/pdf/report.pdf");
+        fs::copy(&fixture, root_path.join("report.pdf")).unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        let row = db::files::get_by_path(&conn, &root_path.join("report.pdf"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.indexed, 1);
+        assert_eq!(row.state, "indexed");
+        assert_eq!(row.kind, "pdf");
+        assert_eq!(row.lang.as_deref(), Some("en"));
+
+        let hits = crate::search::fts::search_fts(&conn, "Expenses", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn password_protected_pdf_is_indexed_by_filename_only_via_error_path() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/password_protected.pdf");
+        fs::copy(&fixture, root_path.join("password_protected.pdf")).unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.errored, 1);
+        let row = db::files::get_by_path(&conn, &root_path.join("password_protected.pdf"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "error");
+        // Still findable by name even though content extraction failed.
+        let hits = crate::search::fts::search_fts(&conn, "protected", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn office_files_are_extracted_and_searchable() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let office_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/office");
+        fs::copy(office_dir.join("notes.docx"), root_path.join("notes.docx")).unwrap();
+        fs::copy(
+            office_dir.join("kickoff.pptx"),
+            root_path.join("kickoff.pptx"),
+        )
+        .unwrap();
+        fs::copy(
+            office_dir.join("inventory.xlsx"),
+            root_path.join("inventory.xlsx"),
+        )
+        .unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.indexed, 3);
+        for name in ["notes.docx", "kickoff.pptx", "inventory.xlsx"] {
+            let row = db::files::get_by_path(&conn, &root_path.join(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.state, "indexed");
+            assert_eq!(row.kind, "office");
+        }
+
+        // Not "warehouse" alone: it appears in both notes.docx ("the new
+        // warehouse") and inventory.xlsx ("Warehouse A"/"Warehouse B").
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "migration", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "presupuesto", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "widget", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn code_files_are_chunked_by_symbol_and_searchable() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let code_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/code");
+        fs::copy(code_dir.join("sample.rs"), root_path.join("sample.rs")).unwrap();
+        fs::copy(code_dir.join("muestra.py"), root_path.join("muestra.py")).unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.indexed, 2);
+        for name in ["sample.rs", "muestra.py"] {
+            let row = db::files::get_by_path(&conn, &root_path.join(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.state, "indexed");
+            assert_eq!(row.kind, "code");
+        }
+
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "origin", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "calculadora", 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
