@@ -3,6 +3,7 @@
 //! §7 M1, §5.5 schema).
 
 pub mod files;
+pub mod meta;
 pub mod roots;
 
 use std::path::Path;
