@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-**Read [`SPEC.md`](SPEC.md) §0 before writing any code.** It is the authoritative spec (requirements, tech stack, directory layout, DB schema, IPC contract, milestone roadmap) — if code and spec disagree, the spec wins until the spec is updated. `AGENTS.md` is a short pointer to the same rules.
+**Read [`SPEC.md`](docs\SPEC.md) §0 before writing any code.** It is the authoritative spec (requirements, tech stack, directory layout, DB schema, IPC contract, milestone roadmap) — if code and spec disagree, the spec wins until the spec is updated. `AGENTS.md` is a short pointer to the same rules.
 
 ## What this project is
 
@@ -12,16 +12,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common commands
 
-| Command | Does |
-|---|---|
-| `just setup` | Install frontend deps, fetch PDFium binaries |
-| `just dev` | Run the Tauri app in dev mode |
-| `just check` | fmt, clippy, `cargo test`, frontend lint/typecheck/test — run before committing |
-| `just test` | Rust + frontend tests only (no network, fake embedder) |
-| `just bindings` | Regenerate ts-rs bindings, fails on unexpected diff |
-| `just models` | Download ML models into the dev data directory |
-| `just eval` | Run search-quality evaluation against `eval/queries.jsonl` |
-| `just build` | Production build of the desktop app |
+| Command         | Does                                                                            |
+| --------------- | ------------------------------------------------------------------------------- |
+| `just setup`    | Install frontend deps, fetch PDFium binaries                                    |
+| `just dev`      | Run the Tauri app in dev mode                                                   |
+| `just check`    | fmt, clippy, `cargo test`, frontend lint/typecheck/test — run before committing |
+| `just test`     | Rust + frontend tests only (no network, fake embedder)                          |
+| `just bindings` | Regenerate ts-rs bindings, fails on unexpected diff                             |
+| `just models`   | Download ML models into the dev data directory                                  |
+| `just eval`     | Run search-quality evaluation against `eval/queries.jsonl`                      |
+| `just build`    | Production build of the desktop app                                             |
 
 Single-crate/test equivalents (justfile wraps these): `cargo test -p magi-core <name>`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cd apps/desktop && pnpm test`.
 
@@ -42,6 +42,7 @@ Single-crate/test equivalents (justfile wraps these): `cargo test -p magi-core <
 Single process: the Tauri app (`apps/desktop/src-tauri`) hosts `magi-core::Engine` in-process, talking to it through an `EngineHandle` (channels + a read-only DB connection pool for search). `magi-cli daemon` hosts the same engine headless for dev/testing. Full thread/data-flow diagram: SPEC.md §5.3.
 
 Crates (Cargo workspace, see `Cargo.toml`):
+
 - **`crates/magi-core`** — all business logic, no Tauri dependency, no async (uses `std::thread` + `crossbeam-channel`; async only at Tauri command boundaries). Key modules: `engine.rs` (owns threads/channels/lifecycle), `dto.rs` (DTOs, `ts-rs`-derived, exported to the frontend — never hand-write IPC types), `db/` (SQLite via `rusqlite`, WAL, FTS5, `sqlite-vec`), `discovery/` (walk + classify), `extract/` (per-filetype extractors), `chunk.rs`, `embed/` (text/image embedder traits + model manager with lazy load/idle unload), `index/` (scheduler → pipeline → single DB-writer thread), `watch/` (file-system watcher, reconciliation scans, polling fallback), `search/` (BM25 + vector + Reciprocal Rank Fusion), `platform/` (OS-specific traits: permissions, power status, cloud placeholders, thread priority).
 - **`crates/magi-cli`** — dev/test CLI: `doctor`, `roots`, `index`, `daemon`, `search`, `eval`.
 - **`apps/desktop/src-tauri`** — thin Tauri command wrappers only; no business logic. `commands.rs` wraps `magi-core`, `events.rs` forwards engine events to the frontend, `state.rs` holds `AppState { engine: EngineHandle }`.
