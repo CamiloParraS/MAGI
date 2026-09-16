@@ -1,4 +1,4 @@
-//! hash -> extract -> chunk -> embed -> write. Implemented starting M2
+//! hash -> extract -> chunk -> embed -> write.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -86,7 +86,13 @@ pub fn index_root(
             .unwrap_or_default();
         let ext = entry.path.extension().and_then(|e| e.to_str());
 
-        let outcome = process_entry(&entry.path, entry.size, max_size_bytes);
+        let outcome = if entry.is_dir {
+            // Opaque bundles (.app/.photoslibrary/...) are indexed by name
+            // only; never opened as a file.
+            indexed_no_chunks(Kind::Other)
+        } else {
+            process_entry(&entry.path, entry.size, max_size_bytes)
+        };
 
         let mut chunks = outcome.chunks;
         chunks.push(filename_chunk(rel_path));
@@ -348,6 +354,23 @@ mod tests {
             .unwrap();
         assert_eq!(row.state, "skipped");
         assert_eq!(row.skip_reason.as_deref(), Some("too_large"));
+    }
+
+    #[test]
+    fn opaque_bundle_is_indexed_by_name_not_errored() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::create_dir(root_path.join("Photos.photoslibrary")).unwrap();
+        fs::write(root_path.join("Photos.photoslibrary/masters.db"), "x").unwrap();
+
+        let summary = index_root(&mut conn, root_id, &root_path, &default_options(), 1).unwrap();
+
+        assert_eq!(summary.indexed, 1);
+        assert_eq!(summary.errored, 0);
+        let row = db::files::get_by_path(&conn, &root_path.join("Photos.photoslibrary"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "indexed");
     }
 
     #[test]
