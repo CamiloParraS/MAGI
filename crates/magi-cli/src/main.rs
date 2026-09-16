@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use magi_core::embed::FakeEmbedder;
 use magi_core::index::pipeline::{IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
 use magi_core::{config, db, paths};
@@ -102,10 +103,22 @@ fn roots(action: RootsAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn embedder_from_env() -> anyhow::Result<FakeEmbedder> {
+    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
+        Ok(FakeEmbedder)
+    } else {
+        anyhow::bail!(
+            "no real text embedder yet (lands in a later M3 slice); \
+             set MAGI_FAKE_EMBEDDER=1 to index/search with the fake one"
+        )
+    }
+}
+
 fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
     let config = config::load()?;
+    let embedder = embedder_from_env()?;
 
     let root_row = match db::roots::add(&conn, &root) {
         Ok(r) => r,
@@ -124,7 +137,14 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     let options = IndexRootOptions::from_config(&config.indexing)?;
     // ponytail: fixed scan_id since reconciliation (M5) doesn't exist yet;
     // each one-shot `index` run reuses id 1.
-    let summary = index_root(&mut conn, root_row.id, &root_row.path, &options, 1)?;
+    let summary = index_root(
+        &mut conn,
+        root_row.id,
+        &root_row.path,
+        &options,
+        1,
+        &embedder,
+    )?;
 
     println!(
         "indexed: {}  skipped: {}  errors: {}",
@@ -134,16 +154,34 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
 }
 
 fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
-    if mode != "fts" {
-        anyhow::bail!("unsupported search mode {mode:?}; only \"fts\" is implemented until M3");
-    }
     let conn = db::open(&db_path())?;
-    let hits = search_fts(&conn, query, limit)?;
-    if hits.is_empty() {
-        println!("no results");
-    }
-    for hit in hits {
-        println!("{}\t{}", hit.path.display(), hit.snippet);
+    match mode {
+        "fts" => {
+            let hits = search_fts(&conn, query, limit)?;
+            if hits.is_empty() {
+                println!("no results");
+            }
+            for hit in hits {
+                println!("{}\t{}", hit.path.display(), hit.snippet);
+            }
+        }
+        "hybrid" => {
+            let embedder = embedder_from_env()?;
+            let hits = magi_core::search::hybrid_search(&conn, &embedder, query, limit)?;
+            if hits.is_empty() {
+                println!("no results");
+            }
+            for hit in hits {
+                println!(
+                    "{}\t{:.4}\t{:?}\t{}",
+                    hit.path.display(),
+                    hit.score,
+                    hit.match_sources,
+                    hit.snippet
+                );
+            }
+        }
+        other => anyhow::bail!("unsupported search mode {other:?}; use \"fts\" or \"hybrid\""),
     }
     Ok(())
 }
