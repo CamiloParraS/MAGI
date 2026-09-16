@@ -20,3 +20,6 @@ models/cache/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Screenshots
+docs/screenshots/
