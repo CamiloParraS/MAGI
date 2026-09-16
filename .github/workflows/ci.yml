@@ -47,6 +47,9 @@ jobs:
         working-directory: apps/desktop
         run: pnpm install --frozen-lockfile
 
+      - name: Fetch PDFium binaries
+        run: cargo run -p xtask -- fetch-pdfium
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 

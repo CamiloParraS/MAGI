@@ -157,6 +157,21 @@ clean.
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
 
+**CI fix (found by the first CI run against this branch):** `cargo test`
+in `.github/workflows/ci.yml` failed on all three OSes with `PDFium
+library not found` for the three PDF-dependent tests
+(`extract::pdf::tests::extracts_text_per_page_with_page_numbers`,
+`extract::pdf::tests::extracts_spanish_text_and_detects_language`,
+`index::pipeline::tests::pdf_files_are_extracted_per_page_and_searchable`).
+Root cause: M2 slice 2 added PDF extraction (`pdfium-render` binding a
+vendored binary from `vendor/pdfium/<target>/bin/` at runtime), but
+`ci.yml` — last touched at repo init, before PDF extraction existed — was
+never updated to run `cargo xtask fetch-pdfium` before `cargo test`, so
+`vendor/` (gitignored) was empty in CI. `just setup` and local dev always
+ran `xtask fetch-pdfium` first, which is why this was invisible locally.
+Fixed by adding a "Fetch PDFium binaries" step before `cargo fmt`/`clippy`/
+`test`. Not yet reverified against a green CI run on all three OSes.
+
 ### Slice 2: PDF, Office, and Code extraction
 
 - [x] PDF extraction (`extract::pdf`, `pdfium-render`): one chunk group
