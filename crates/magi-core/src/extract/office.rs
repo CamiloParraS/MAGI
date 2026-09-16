@@ -1,6 +1,8 @@
 //! DOCX/PPTX text extraction (zip + `quick-xml`) and XLSX extraction
-//! (`calamine`), dispatched by extension since all three share the
-//! `office` [`super::super::discovery::Kind`] (see SPEC.md §7 M2).
+//! (`calamine`). Dispatched by extension when it resolves, falling back to
+//! sniffing the zip's well-known part names for extension-less/misnamed
+//! files that were classified as `office` via magic bytes (see SPEC.md §7
+//! M2).
 
 use std::io::{Cursor, Read};
 
@@ -14,17 +16,36 @@ pub struct OfficeExtractor;
 
 impl Extractor for OfficeExtractor {
     fn extract(&self, path: &std::path::Path, bytes: &[u8]) -> Result<ExtractedDoc> {
-        match path
+        let by_extension = path
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
+            .filter(|ext| matches!(ext.as_str(), "docx" | "pptx" | "xlsx"));
+        let format = by_extension.or_else(|| sniff_format(bytes));
+
+        match format.as_deref() {
             Some("docx") => extract_docx(bytes),
             Some("pptx") => extract_pptx(bytes),
             Some("xlsx") => extract_xlsx(bytes),
             _ => Ok(ExtractedDoc::default()),
         }
+    }
+}
+
+/// Identifies which Office format `bytes` is by its well-known zip part,
+/// for files whose extension is missing or doesn't match the content (the
+/// caller already classified these as `office` via magic-byte sniffing).
+fn sniff_format(bytes: &[u8]) -> Option<String> {
+    let archive = open_zip(bytes).ok()?;
+    let names: Vec<&str> = archive.file_names().collect();
+    if names.contains(&"word/document.xml") {
+        Some("docx".to_string())
+    } else if names.contains(&"ppt/presentation.xml") {
+        Some("pptx".to_string())
+    } else if names.contains(&"xl/workbook.xml") {
+        Some("xlsx".to_string())
+    } else {
+        None
     }
 }
 
@@ -195,6 +216,15 @@ mod tests {
         assert!(doc.chunks[0].text.contains("Widget"));
         assert!(doc.chunks[0].text.contains("Warehouse A"));
         assert!(doc.chunks[1].text.contains("Electricista Lopez"));
+    }
+
+    #[test]
+    fn extensionless_docx_is_extracted_via_zip_sniffing() {
+        let bytes = fixture("notes.docx");
+        let doc = OfficeExtractor.extract(Path::new("notes"), &bytes).unwrap();
+
+        let joined: String = doc.chunks.iter().map(|c| c.text.as_str()).collect();
+        assert!(joined.contains("Project Notes"));
     }
 
     #[test]
