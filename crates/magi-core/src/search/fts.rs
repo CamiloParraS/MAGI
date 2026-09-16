@@ -148,11 +148,19 @@ mod tests {
     fn accented_query_matches_unaccented_and_vice_versa() {
         let (_dir, mut conn) = open_test_db();
         index_text(&mut conn, "/roots/a/song.txt", "una canción muy bonita");
+        index_text(
+            &mut conn,
+            "/roots/a/book.txt",
+            "en la primera pagina del libro",
+        );
 
         // tokenize = 'unicode61 remove_diacritics 2' means accents are
-        // stripped before indexing, so "cancion" (no accent) must match.
-        let hits = search_fts(&conn, "cancion", 10).unwrap();
-        assert_eq!(hits.len(), 1);
+        // stripped before indexing, so an unaccented query matches
+        // accented text ("cancion" -> "canción") and an accented query
+        // matches unaccented text ("página" -> "pagina") — both spec
+        // examples from SPEC.md §7 M2.
+        assert_eq!(search_fts(&conn, "cancion", 10).unwrap().len(), 1);
+        assert_eq!(search_fts(&conn, "página", 10).unwrap().len(), 1);
     }
 
     #[test]
