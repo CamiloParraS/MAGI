@@ -1,0 +1,40 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: CodeSymbol,
+            text: "# Fixture de ejemplo en espanol para pruebas de extraccion de codigo.",
+            page: None,
+            line_start: Some(
+                1,
+            ),
+            line_end: Some(
+                1,
+            ),
+        },
+        RawChunk {
+            source: CodeSymbol,
+            text: "def saludar(nombre):\n    \"\"\"Devuelve un saludo personalizado.\"\"\"\n    return f\"hola {nombre}\"",
+            page: None,
+            line_start: Some(
+                4,
+            ),
+            line_end: Some(
+                6,
+            ),
+        },
+        RawChunk {
+            source: CodeSymbol,
+            text: "class Calculadora:\n    \"\"\"Realiza operaciones aritmeticas simples.\"\"\"\n\n    def sumar(self, a, b):\n        return a + b",
+            page: None,
+            line_start: Some(
+                9,
+            ),
+            line_end: Some(
+                13,
+            ),
+        },
+    ],
+    lang: Some(
+        "es",
+    ),
+}
