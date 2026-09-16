@@ -24,7 +24,7 @@ fn resolve_library_path() -> Option<PathBuf> {
     let candidate = workspace_root
         .join("vendor/pdfium")
         .join(crate::platform::pdfium_vendor_dir())
-        .join("bin")
+        .join(crate::platform::pdfium_library_subdir())
         .join(crate::platform::pdfium_library_filename());
     candidate.exists().then_some(candidate)
 }

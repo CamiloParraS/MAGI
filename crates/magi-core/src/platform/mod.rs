@@ -81,3 +81,21 @@ pub fn pdfium_library_filename() -> &'static str {
         linux::PDFIUM_LIBRARY_FILENAME
     }
 }
+
+/// The subdirectory (relative to `vendor/pdfium/<dir>/`) holding the
+/// PDFium shared library on the current OS: `bin` on Windows, `lib` on
+/// macOS/Linux — the pdfium-binaries releases lay these out differently.
+pub fn pdfium_library_subdir() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        windows::PDFIUM_LIBRARY_SUBDIR
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::PDFIUM_LIBRARY_SUBDIR
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::PDFIUM_LIBRARY_SUBDIR
+    }
+}

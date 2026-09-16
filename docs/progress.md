@@ -157,20 +157,33 @@ clean.
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
 
-**CI fix (found by the first CI run against this branch):** `cargo test`
-in `.github/workflows/ci.yml` failed on all three OSes with `PDFium
-library not found` for the three PDF-dependent tests
+**CI fixes (found across the first two CI runs against this branch):**
+`cargo test` in `.github/workflows/ci.yml` failed with `PDFium library not
+found` for the three PDF-dependent tests
 (`extract::pdf::tests::extracts_text_per_page_with_page_numbers`,
 `extract::pdf::tests::extracts_spanish_text_and_detects_language`,
 `index::pipeline::tests::pdf_files_are_extracted_per_page_and_searchable`).
-Root cause: M2 slice 2 added PDF extraction (`pdfium-render` binding a
-vendored binary from `vendor/pdfium/<target>/bin/` at runtime), but
-`ci.yml` — last touched at repo init, before PDF extraction existed — was
-never updated to run `cargo xtask fetch-pdfium` before `cargo test`, so
-`vendor/` (gitignored) was empty in CI. `just setup` and local dev always
-ran `xtask fetch-pdfium` first, which is why this was invisible locally.
-Fixed by adding a "Fetch PDFium binaries" step before `cargo fmt`/`clippy`/
-`test`. Not yet reverified against a green CI run on all three OSes.
+Two distinct bugs, fixed in sequence:
+
+1. All three OSes failed the same way (`ci.yml` — last touched at repo
+   init, before PDF extraction existed — never ran
+   `cargo xtask fetch-pdfium` before `cargo test`, so `vendor/`
+   (gitignored) was empty in CI; `just setup` and local dev always ran it
+   first, which is why this was invisible locally). Fixed by adding a
+   "Fetch PDFium binaries" step before `cargo fmt`/`clippy`/`test`.
+2. After (1), Windows went green but macOS and Linux still failed with
+   the same "not found" error. Root cause: `extract::pdf::resolve_library_path`
+   hardcoded the vendored library's subdirectory as `bin`, but that's only
+   true for the pdfium-binaries Windows release (`bin/pdfium.dll` +
+   `lib/pdfium.dll.lib`) — verified by downloading and listing the actual
+   `chromium/8044` Linux and macOS release archives, which have no `bin/`
+   at all and put the shared library straight in `lib/`
+   (`lib/libpdfium.so`, `lib/libpdfium.dylib`). Fixed by adding a
+   per-OS `PDFIUM_LIBRARY_SUBDIR` constant (`platform::{windows,macos,linux}`,
+   exposed via `platform::pdfium_library_subdir()`) instead of a hardcoded
+   `"bin"`, mirroring the existing per-OS vendor-dir/filename constants.
+
+Not yet reverified against a green CI run on all three OSes.
 
 ### Slice 2: PDF, Office, and Code extraction
 
