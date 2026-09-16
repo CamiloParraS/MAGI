@@ -53,22 +53,82 @@ Not yet verified on macOS/Linux CI (no access to those machines locally).
 
 ## M2 — Discovery and text extraction
 
-Two slices landed: walker/classifier/text/filename/lang/FTS search (slice
-1), and PDF/Office/Code extraction (slice 2, below), plus golden tests and
-the remaining edge-case fixtures (slice 3, below).
+Three slices landed: walker/classifier/text/filename/lang/FTS search
+(slice 1), PDF/Office/Code extraction (slice 2), and golden tests plus the
+remaining edge-case fixtures (slice 3, below). A fourth pass closed the
+gaps a review found in slice 3's evidence (fixture corpus, accent
+coverage, idempotence, throughput) — see "Slice 3 follow-up" below.
+
+### Slice 3 follow-up: closing the evidence gaps
+
+A review of Slice 3's claims found five gaps between what was checked off
+and what SPEC.md §7 M2's verification list actually requires. All five are
+now closed with real, fixture-driven evidence (no synthetic/manual-only
+substitutes):
+
+- [x] **Fixture corpus populated.** `fixtures/corpus/en/onboarding_notes.txt`
+      and `fixtures/corpus/es/notas_incorporacion.txt` added (short,
+      hand-written, license-clean, matching the SPEC.md §5.1 corpus
+      layout). The Spanish fixture contains both `canción` and `página` so
+      it doubles as accent-test content. Golden tests added for both
+      (`text_en_onboarding_notes_matches_golden`,
+      `text_es_notas_incorporacion_matches_golden` in
+      `crates/magi-core/tests/golden.rs`), closing the "plain-text golden
+      coverage is skipped" gap noted in the original Slice 3 entry above.
+      The stray untracked `fixtures/corpus/.venv/` (leftover from Slice
+      2's PDF/Office fixture generation, never committed) was deleted;
+      it's not needed after generation and was never part of the corpus.
+- [x] **`pagina` → `página` accent evidence.** Only `cancion` → `canción`
+      had a test before. `search::fts::tests::accented_query_matches_unaccented_and_vice_versa`
+      now indexes two documents and asserts both SPEC.md §7 M2 examples:
+      unaccented query `cancion` matches accented `canción`, and accented
+      query `página` matches unaccented `pagina` — genuinely exercising
+      both directions the test's name always claimed. A second, fully
+      end-to-end confirmation (decode → index → search, not just the FTS
+      layer) lives in the new Windows-1252 test below.
+- [x] **Windows-1252 fixture-driven, not just unit-level.** Added a real
+      byte-for-byte cp1252-encoded fixture
+      (`fixtures/corpus/edge/windows1252_real.txt`, containing `canción`
+      and `página`) and
+      `index::pipeline::tests::real_windows1252_file_decodes_and_accents_survive`,
+      which copies it through the full index → extract → search pipeline
+      and asserts both accent-folded queries hit. (0-byte-as-empty was
+      already fixture-driven via `real_empty_file_is_indexed_with_only_a_filename_chunk`
+      against `fixtures/corpus/edge/empty_real.gitignore` — the review's
+      claim that this one was unit-only was incorrect; left as-is.)
+- [x] **Idempotence evidence matches the spec's wording.** SPEC.md §7 M2
+      asks for indexing `fixtures/corpus` twice with identical row counts,
+      not a manual run against `docs/` or the working tree. Added
+      `crates/magi-core/tests/idempotence.rs`:
+      `indexing_fixture_corpus_twice_is_idempotent` indexes the real
+      `fixtures/corpus` directory (using `IndexingConfig::default()`'s
+      exclude globs, the same `.venv`/`__pycache__`/etc. exclusions
+      production indexing applies) into a fresh DB twice and asserts
+      identical `files` and `chunks` row counts, plus an identical
+      `IndexSummary` (indexed/skipped/errored counts match exactly).
+- [x] **`docs/benchmarks.md` created.** Throughput recorded per file type
+      (code/pdf/office/text-en/text-es), measured with the release
+      `magi-cli` binary against replicated fixture copies to dilute
+      per-run startup overhead, plus a raw single-fixture-count reference
+      table and the edge-case batch (3 indexed, 2 errored, 0 crashes) for
+      comparison. Reference machine and methodology documented there.
+
+Verification (`cargo test -p magi-core`): 83 unit tests + 9 golden tests +
+1 idempotence test, up from 79 unit + 7 golden. `cargo fmt --check` and
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`
+clean.
 
 ### Slice 3: golden tests and real-file edge-case fixtures
 
 - [x] Golden tests (`crates/magi-core/tests/golden.rs`): each of the code,
-      PDF, and Office extractors' output (`{:#?}`-formatted `ExtractedDoc`)
-      is compared byte-for-byte against `fixtures/golden/*.txt`, one file
-      per corpus fixture (`code_sample_rs`, `code_muestra_py`, `pdf_report`,
+      PDF, Office, and (since the follow-up above) plain-text extractors'
+      output (`{:#?}`-formatted `ExtractedDoc`) is compared byte-for-byte
+      against `fixtures/golden/*.txt`, one file per corpus fixture
+      (`code_sample_rs`, `code_muestra_py`, `pdf_report`,
       `pdf_factura_electricista`, `office_notes_docx`, `office_kickoff_pptx`,
-      `office_inventory_xlsx`). Golden files are regenerated by re-running
-      with `MAGI_BLESS_GOLDEN=1`. Plain-text golden coverage is skipped:
-      `fixtures/corpus/en|es` are still empty (pre-existing gap, not part of
-      this slice) and text extraction already has thorough unit tests
-      including the Windows-1252 round-trip.
+      `office_inventory_xlsx`, `text_en_onboarding_notes`,
+      `text_es_notas_incorporacion`). Golden files are regenerated by
+      re-running with `MAGI_BLESS_GOLDEN=1`.
 - [x] Real-file edge-case integration tests (`index::pipeline::tests`),
       using genuine files copied from an actual nested personal document
       tree rather than synthetic tempfile writes, per SPEC.md §7 M2's
@@ -85,12 +145,14 @@ the remaining edge-case fixtures (slice 3, below).
         didn't string-match the walker's all-backslash path in the DB
         lookup — fixed by rebuilding the path component-by-component
         (`rel.components().fold(root_path, |acc, c| acc.join(c))`).
+      - `real_windows1252_file_decodes_and_accents_survive` — added in the
+        follow-up above.
       The existing walker unit test already covers deep nesting
-      synthetically; these three add real content going through the full
+      synthetically; these add real content going through the full
       index → extract → search pipeline.
-- [x] 79 unit tests + 7 golden tests (`cargo test -p magi-core`, up from
-      76), `cargo fmt --check` and `cargo clippy --all-targets
-      --all-features -- -D warnings` clean.
+- [x] 83 unit tests + 9 golden tests + 1 idempotence test
+      (`cargo test -p magi-core`), `cargo fmt --check` and `cargo clippy
+      --all-targets --all-features -- -D warnings` clean.
 
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
