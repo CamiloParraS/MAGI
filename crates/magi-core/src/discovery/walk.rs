@@ -23,6 +23,7 @@ pub struct WalkEntry {
     pub path: PathBuf,
     pub size: u64,
     pub mtime_ns: i64,
+    pub is_dir: bool,
 }
 
 fn is_opaque_bundle(path: &Path) -> bool {
@@ -35,8 +36,9 @@ fn is_opaque_bundle(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn matches_exclude(path: &Path, patterns: &[glob::Pattern]) -> bool {
-    let normalized = path.to_string_lossy().replace('\\', "/");
+fn matches_exclude(path: &Path, root: &Path, patterns: &[glob::Pattern]) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let normalized = rel.to_string_lossy().replace('\\', "/");
     patterns.iter().any(|p| p.matches(&normalized))
 }
 
@@ -78,7 +80,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
             {
                 return false;
             }
-            if path != root_owned && matches_exclude(path, &exclude_globs) {
+            if path != root_owned && matches_exclude(path, &root_owned, &exclude_globs) {
                 return false;
             }
             if entry.file_type().is_some_and(|t| t.is_dir()) && is_opaque_bundle(path) {
@@ -110,6 +112,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
             path: path.to_path_buf(),
             size: meta.len(),
             mtime_ns: mtime_ns(&meta),
+            is_dir,
         });
     }
     Ok(entries)
@@ -191,6 +194,23 @@ mod tests {
             rel_paths(root, &entries),
             vec!["Photos.photoslibrary".to_string()]
         );
+    }
+
+    #[test]
+    fn exclude_globs_match_relative_to_root_not_ancestor_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // The root itself is named "target", which would false-positive
+        // against a "**/target/**" exclude if matched against the full
+        // absolute path instead of paths relative to this root.
+        let root = dir.path().join("target");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("keep.txt"), "hi").unwrap();
+
+        let mut options = default_options();
+        options.exclude_globs = vec![glob::Pattern::new("**/target/**").unwrap()];
+        let entries = walk(&root, &options).unwrap();
+
+        assert_eq!(rel_paths(&root, &entries), vec!["keep.txt".to_string()]);
     }
 
     #[test]
