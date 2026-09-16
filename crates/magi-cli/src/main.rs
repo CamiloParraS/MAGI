@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use magi_core::{db, paths};
+use magi_core::index::pipeline::{IndexRootOptions, index_root};
+use magi_core::search::fts::search_fts;
+use magi_core::{config, db, paths};
 
 #[derive(Parser)]
 #[command(name = "magi-cli")]
@@ -21,6 +23,16 @@ enum Command {
     Roots {
         #[command(subcommand)]
         action: RootsAction,
+    },
+    /// One-shot index of a root folder (no watcher; see SPEC.md §7 M2).
+    Index { root: PathBuf },
+    /// Search indexed content.
+    Search {
+        query: String,
+        #[arg(long, default_value = "fts")]
+        mode: String,
+        #[arg(long, default_value_t = 30)]
+        limit: u32,
     },
 }
 
@@ -40,6 +52,8 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Doctor => doctor()?,
         Command::Roots { action } => roots(action)?,
+        Command::Index { root } => index_cmd(root)?,
+        Command::Search { query, mode, limit } => search_cmd(&query, &mode, limit)?,
     }
     Ok(())
 }
@@ -84,6 +98,52 @@ fn roots(action: RootsAction) -> anyhow::Result<()> {
             db::roots::remove(&conn, id)?;
             println!("removed root {id}");
         }
+    }
+    Ok(())
+}
+
+fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
+    std::fs::create_dir_all(paths::data_dir())?;
+    let mut conn = db::open(&db_path())?;
+    let config = config::load()?;
+
+    let root_row = match db::roots::add(&conn, &root) {
+        Ok(r) => r,
+        Err(magi_core::Error::RootAlreadyExists(canonical)) => db::roots::list(&conn)?
+            .into_iter()
+            .find(|r| r.path == canonical)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "root {} vanished after being reported as already registered",
+                    canonical.display()
+                )
+            })?,
+        Err(e) => return Err(e.into()),
+    };
+
+    let options = IndexRootOptions::from_config(&config.indexing)?;
+    // ponytail: fixed scan_id since reconciliation (M5) doesn't exist yet;
+    // each one-shot `index` run reuses id 1.
+    let summary = index_root(&mut conn, root_row.id, &root_row.path, &options, 1)?;
+
+    println!(
+        "indexed: {}  skipped: {}  errors: {}",
+        summary.indexed, summary.skipped, summary.errored
+    );
+    Ok(())
+}
+
+fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
+    if mode != "fts" {
+        anyhow::bail!("unsupported search mode {mode:?}; only \"fts\" is implemented until M3");
+    }
+    let conn = db::open(&db_path())?;
+    let hits = search_fts(&conn, query, limit)?;
+    if hits.is_empty() {
+        println!("no results");
+    }
+    for hit in hits {
+        println!("{}\t{}", hit.path.display(), hit.snippet);
     }
     Ok(())
 }

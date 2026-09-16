@@ -1,0 +1,16 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Project Notes\nThe migration to the new warehouse is on schedule.\nSegunda seccion: la reunion sera el martes en la manana.",
+            page: Some(
+                1,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "en",
+    ),
+}

@@ -37,6 +37,21 @@ pub enum Error {
 
     #[error("root id {0} not found")]
     RootIdNotFound(i64),
+
+    #[error("extraction of {} timed out after {seconds}s", .path.display())]
+    ExtractionTimeout { path: PathBuf, seconds: u64 },
+
+    #[error("extraction of {} panicked: {message}", .path.display())]
+    ExtractionPanicked { path: PathBuf, message: String },
+
+    #[error("PDF error: {0}")]
+    Pdf(String),
+
+    #[error("Office document error: {0}")]
+    Office(String),
+
+    #[error("code parse error: {0}")]
+    Code(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,0 +1,34 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Quarterly Report - Page One\r\nRevenue grew steadily this quarter.",
+            page: Some(
+                1,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+        RawChunk {
+            source: Body,
+            text: "Quarterly Report - Page Two\r\nExpenses were kept under control.",
+            page: Some(
+                2,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+        RawChunk {
+            source: Body,
+            text: "Quarterly Report - Page Three\r\nOutlook remains positive for next year.",
+            page: Some(
+                3,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "en",
+    ),
+}
