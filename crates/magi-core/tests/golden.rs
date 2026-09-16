@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use magi_core::extract::code::CodeExtractor;
 use magi_core::extract::office::OfficeExtractor;
 use magi_core::extract::pdf::PdfExtractor;
+use magi_core::extract::text::TextExtractor;
 use magi_core::extract::{ExtractedDoc, Extractor};
 
 fn corpus_dir() -> PathBuf {
@@ -33,6 +34,24 @@ fn check(name: &str, rel_path: &str, extractor: &dyn Extractor) {
     let bytes = std::fs::read(&path).unwrap();
     let doc = extractor.extract(&path, &bytes).unwrap();
     assert_matches_golden(name, &doc);
+}
+
+#[test]
+fn text_en_onboarding_notes_matches_golden() {
+    check(
+        "text_en_onboarding_notes",
+        "en/onboarding_notes.txt",
+        &TextExtractor,
+    );
+}
+
+#[test]
+fn text_es_notas_incorporacion_matches_golden() {
+    check(
+        "text_es_notas_incorporacion",
+        "es/notas_incorporacion.txt",
+        &TextExtractor,
+    );
 }
 
 #[test]
