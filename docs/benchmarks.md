@@ -1,0 +1,74 @@
+# Benchmarks
+
+Measured evidence for SPEC.md §2.2's NFR targets and §7's milestone
+throughput requirement. Updated as each milestone adds a measurable
+capability; only M2 (discovery + text extraction, no ML) is covered so far.
+
+## Reference machine
+
+- AMD Ryzen 7 7445HS (8 cores / 16 threads), 16 GB RAM
+- Windows 11 Home Single Language 10.0.26200, x86_64
+- `magi-cli` built with `cargo build --release` (commit at time of
+  measurement: `feat/text-extraction`, post-M2 slice 3)
+
+## M2 — indexing throughput (files/s per type)
+
+**Method:** each file type's fixture(s) from `fixtures/corpus/<type>/` were
+copied under unique names to reach a larger, steadier sample (25 copies of
+each source file — `fixtures/corpus/office` has 3 source files, so 75
+total), then indexed in one `magi-cli index <root>` run against a fresh,
+empty `MAGI_DATA_DIR`, timed end-to-end (process start to exit). This
+dilutes the fixed ~85 ms process/DB-open/migration overhead (measured by
+timing a single-file run per type) across many files, giving a rate closer
+to steady-state than a bare 1-3-file run would.
+
+| Type   | Files indexed | Wall time | Throughput  |
+| ------ | -------------:| ---------:| -----------:|
+| code   | 50            | 153 ms    | ~327 files/s |
+| pdf    | 50            | 221 ms    | ~226 files/s |
+| office | 75            | 190 ms    | ~395 files/s |
+| text (en) | 25         | 112 ms    | ~223 files/s |
+| text (es) | 25         | 124 ms    | ~202 files/s |
+
+All runs report `skipped: 0, errors: 0` — every copy indexed successfully.
+
+**Caveats:**
+
+- The underlying fixture corpus is small (1-3 distinct files per type,
+  a few KB to low hundreds of KB each) and license-clean by design (SPEC.md
+  §5.1); these numbers are indicative of per-file-type extractor cost on
+  small files, not a substitute for the NFR-2/NFR-4 reference-machine
+  benchmarks (which need realistic file-size and corpus-size distributions
+  and land with M3's search latency work and later crash/watch milestones).
+  No embedding/ML work runs yet (M2 has no ML), so these numbers only cover
+  walk → classify → extract → chunk → FTS-index.
+- PDF and code extraction pay one-time setup costs (PDFium binding,
+  tree-sitter grammar loading) on the first file of their kind per process;
+  amortized here across 50 files each, but a cold single-file run is
+  slower (see below).
+
+### Single-fixture-count reference (no replication, 3 trials each)
+
+Included for comparison — shows the fixed per-run overhead that the
+replicated numbers above dilute away:
+
+| Type   | Files | Trials (ms)     | Notes |
+| ------ | -----:| ---------------- | ----- |
+| code   | 2     | 92, 87, 89       | `code/sample.rs`, `code/muestra.py` |
+| pdf    | 2     | 92, 96, 100      | `pdf/report.pdf`, `pdf/factura_electricista.pdf` |
+| office | 3     | 93, 98, 86       | `office/notes.docx`, `kickoff.pptx`, `inventory.xlsx` |
+| en     | 1     | 99, 88, 89       | `en/onboarding_notes.txt` |
+| es     | 1     | 87, 85, 91       | `es/notas_incorporacion.txt` |
+| edge   | 5     | 694, 706, 699    | `edge/*` — 3 indexed, 2 errored (password-protected + truncated PDFs), 0 crashes; run under the default 50 MB size cap, so `huge_real.pdf` (~1.4 MB) is indexed rather than skipped here (the pipeline's dedicated 1 MB-cap test covers the skip path — see `crates/magi-core/tests` and `index::pipeline::tests::real_file_over_cap_is_skipped_with_reason`) |
+
+The edge run's higher per-file cost reflects three PDFs in a five-file
+batch (one genuinely larger, two exercised via the extraction-error path)
+rather than a representative per-type rate — it is not included in the
+per-type table above.
+
+## Reproducing
+
+```
+cargo build -p magi-cli --release
+MAGI_DATA_DIR=<fresh empty dir> ./target/release/magi-cli index <fixture-type-dir>
+```
