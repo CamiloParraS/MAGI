@@ -99,3 +99,38 @@ pub fn pdfium_library_subdir() -> &'static str {
         linux::PDFIUM_LIBRARY_SUBDIR
     }
 }
+
+/// The `vendor/onnxruntime/<dir>/` subdirectory name for the current
+/// OS/arch, matching `xtask fetch-onnxruntime`'s targets.
+pub fn onnxruntime_vendor_dir() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        windows::ONNXRUNTIME_VENDOR_DIR
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::ONNXRUNTIME_VENDOR_DIR
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::ONNXRUNTIME_VENDOR_DIR
+    }
+}
+
+/// The ONNX Runtime shared library's filename for the current OS. Always
+/// under a `lib/` subdirectory (unlike PDFium, the official onnxruntime
+/// releases lay this out the same way on all three OSes).
+pub fn onnxruntime_library_filename() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        windows::ONNXRUNTIME_LIBRARY_FILENAME
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::ONNXRUNTIME_LIBRARY_FILENAME
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::ONNXRUNTIME_LIBRARY_FILENAME
+    }
+}

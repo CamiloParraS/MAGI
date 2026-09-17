@@ -8,3 +8,7 @@ pub const PDFIUM_LIBRARY_FILENAME: &str = "pdfium.dll";
 /// shared library directly in `lib/` — verified against the actual
 /// `chromium/8044` release archives, not assumed.
 pub const PDFIUM_LIBRARY_SUBDIR: &str = "bin";
+
+/// Matches `xtask fetch-onnxruntime`'s `vendor/onnxruntime/<dir>/` layout.
+pub const ONNXRUNTIME_VENDOR_DIR: &str = "win-x64";
+pub const ONNXRUNTIME_LIBRARY_FILENAME: &str = "onnxruntime.dll";

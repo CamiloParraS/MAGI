@@ -5,6 +5,8 @@ pub mod e5;
 pub mod manager;
 pub mod siglip;
 
+pub use e5::E5Embedder;
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
