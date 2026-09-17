@@ -116,13 +116,13 @@ borrow this single instance rather than each parsing their own copy —
 ADR-0005's RSS investigation found the earlier two-copies design cost
 ~200-260 MB of pure duplication.
 
-Quantization (fp32 vs. int8) is decided-but-not-switched: ADR-0005 records
-real recall/RSS numbers for both (int8 within SPEC.md §7 M3's 2-point
-recall allowance and only 67 MB over the ≤700 MB RSS target, vs. fp32's
-400 MB over) and recommends int8 as the next default, but the manifest
-still ships fp32 pending that follow-up (parity-tolerance and eval
-re-verification) — see `models/manifest.toml`'s comment for the verified
-int8 alternative's hash.
+Quantization (fp32 vs. int8): **int8 ships as the default** (ADR-0005) —
+within SPEC.md §7 M3's 2-point recall allowance (0.967 vs. fp32's 0.983
+recall@5) and 66 MB over the ≤700 MB RSS target vs. fp32's 400 MB over.
+`e5_parity.rs`'s tolerance is `0.97` (SPEC.md §7 M3's quantized-model rule,
+down from `0.99` for fp32) — re-verified against the real int8 model at a
+worst-case cosine of 0.9953 vs. the fp32 Python reference. fp32's hash is
+kept in `models/manifest.toml`'s comment for rollback.
 
 ## Text embedder (`embed::e5::E5Embedder`)
 
@@ -167,6 +167,6 @@ both currently **fail** (cold 3,176 ms vs. ≤3,000 ms; warm p95 585 ms vs.
 ≤300 ms) — root cause is `vec_text`'s brute-force (no ANN index) scan
 scaling with corpus size, not the embedder itself, and fixing it needs a
 sqlite-vec partitioning/quantization strategy, out of scope for this
-slice (`docs/eval.md`). And the ≤700 MB RSS target is still not met by
-either quantization variant, though int8 is now only 67 MB over after the
-tokenizer-duplication fix above (ADR-0005).
+slice (`docs/eval.md`). And the ≤700 MB RSS target is still not met — the
+shipped int8 default is 66 MB over, after the tokenizer-duplication fix
+above (ADR-0005).

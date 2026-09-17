@@ -12,9 +12,16 @@ for the query-file format and `eval/queries.jsonl` for the 60 queries.
 
 ## Baseline: fp32 `intfloat/multilingual-e5-small`
 
+**int8 is the manifest's shipped default now** (ADR-0005) — this baseline
+is fp32 anyway because it's `tools/reference_embeddings.py`'s reference
+implementation and the fixed point everything else (int8's own numbers,
+below) is compared against. See "Quantization: int8 vs. fp32" below for
+the variant actually shipped.
+
 **Method:** `magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`,
-real `E5Embedder` (fp32 `model.onnx`, the manifest's current default — see
-`models/manifest.toml`), fresh temp DB. `fixtures/corpus` indexed 37 files
+real `E5Embedder` (fp32 `model.onnx`, swapped in for this baseline
+measurement only — see `models/manifest.toml`), fresh temp DB.
+`fixtures/corpus` indexed 37 files
 (2 errored: `edge/truncated.pdf` and `edge/password_protected.pdf`, both
 intentionally-broken fixtures that M2's own tests assert error cleanly —
 not a regression).
@@ -71,14 +78,20 @@ Same eval, int8 `model_qint8_avx512_vnni.onnx` swapped in for
 points — within SPEC.md §7 M3's 2-point allowance).
 
 Peak RSS of `magi-cli index fixtures/corpus` (37 files; Windows
-`PeakWorkingSet64`, reference machine above): **fp32 1,302.5 MB, int8
-1,024.9 MB**. SPEC.md §7 M3's target is ≤ 700 MB for the text-only
-pipeline — **neither variant meets it**; int8 saves 277.6 MB but is still
-~325 MB over budget. Full decision and analysis in ADR-0005: fp32 stays
-the shipped default for now, since a recall-only comparison on this small
-eval corpus is weak evidence either way, and the RSS overshoot needs its
-own investigation (likely `ort` thread-pool defaults and/or the
-tokenizer's ~250k-entry vocab) regardless of which variant ships.
+`PeakWorkingSet64`, reference machine above), at the time of this initial
+comparison (before the tokenizer-duplication fix below): **fp32 1,302.5 MB,
+int8 1,024.9 MB** — neither met the ≤ 700 MB target. Full analysis in
+ADR-0005.
+
+**Decision executed**: `models/manifest.toml` now ships int8 as the
+default (fp32's hash kept in a comment for rollback). `e5_parity.rs`'s
+tolerance was lowered to `0.97` per SPEC.md §7 M3's quantized-model rule
+and re-verified against the real int8 model: worst-case cosine vs. the
+fp32 Python reference is **0.9953**. The recall numbers above and the
+cross-lingual smoke test were re-run against int8 as the actual shipped
+file and are unchanged (0.967/0.967, smoke test passes). Current peak RSS
+with the tokenizer fix applied: **766.4 MB** (see "RSS root-cause and fix"
+below) — 66 MB over target, the closest measurement so far.
 
 ## Latency (NFR-2/NFR-3) on 100k synthetic chunks
 
@@ -134,10 +147,11 @@ now only 67 MB over (down from 325 MB).
 
 - A larger, messier corpus to make the hybrid-vs-vector-only comparison
   and the quantization recall comparison above less provisional.
-- Switching the manifest default to int8 (now the closer variant on both
-  recall and RSS) — needs `e5_parity.rs`'s tolerance revisited per SPEC.md
-  §7 M3's "≥ 0.97 if the quantized model is chosen" rule and this eval
-  re-run against the new default; not done as a byproduct of the RSS
-  investigation (see ADR-0005).
+- The remaining 66 MB over the ≤ 700 MB RSS target (int8, post-fix) — the
+  gap is understood (fixed model/session/tokenizer load cost, see
+  ADR-0005) but not closed.
 - Vector search's brute-force scaling at 100k+ chunks (above) — needs an
-  ANN/partitioning strategy, not addressed here.
+  ANN/partitioning strategy, not addressed here. The 100k benchmark above
+  was measured against fp32; not worth re-running against int8, since the
+  bottleneck is `vec0`'s corpus-size scaling, not per-query embed cost
+  (already isolated as ~13 ms/call, not the dominant term).

@@ -18,7 +18,7 @@ is recorded here only once every verification item passes on all three OSes.
       win-x64, mac-arm64, mac-x64, and linux-x64.
 - [x] `just check` passes locally on the developer machine (Windows 11,
       x86_64): `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
+  --all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
       `pnpm typecheck`, `pnpm test` all green.
 - [x] CI green on all three OSes — (workflow added at
       `.github/workflows/ci.yml`).
@@ -132,27 +132,23 @@ clean.
 - [x] Real-file edge-case integration tests (`index::pipeline::tests`),
       using genuine files copied from an actual nested personal document
       tree rather than synthetic tempfile writes, per SPEC.md §7 M2's
-      fixture list:
-      - `real_empty_file_is_indexed_with_only_a_filename_chunk` — a real
-        0-byte `.gitignore` (`fixtures/corpus/edge/empty_real.gitignore`).
-      - `real_file_over_cap_is_skipped_with_reason` — a real 1.4 MB PDF
-        (`fixtures/corpus/edge/huge_real.pdf`) against a 1 MB test cap.
-      - `real_deeply_nested_file_is_indexed_and_searchable` — a real Java
-        source file preserved at its original 13-level-deep relative path
-        (`fixtures/corpus/edge/deep_real/...`). Building the destination
-        path with `root_path.join(rel)` where `rel` contains forward
-        slashes silently produced mixed `/`/`\` separators on Windows that
-        didn't string-match the walker's all-backslash path in the DB
-        lookup — fixed by rebuilding the path component-by-component
-        (`rel.components().fold(root_path, |acc, c| acc.join(c))`).
-      - `real_windows1252_file_decodes_and_accents_survive` — added in the
-        follow-up above.
+      fixture list: - `real_empty_file_is_indexed_with_only_a_filename_chunk` — a real
+      0-byte `.gitignore` (`fixtures/corpus/edge/empty_real.gitignore`). - `real_file_over_cap_is_skipped_with_reason` — a real 1.4 MB PDF
+      (`fixtures/corpus/edge/huge_real.pdf`) against a 1 MB test cap. - `real_deeply_nested_file_is_indexed_and_searchable` — a real Java
+      source file preserved at its original 13-level-deep relative path
+      (`fixtures/corpus/edge/deep_real/...`). Building the destination
+      path with `root_path.join(rel)` where `rel` contains forward
+      slashes silently produced mixed `/`/`\` separators on Windows that
+      didn't string-match the walker's all-backslash path in the DB
+      lookup — fixed by rebuilding the path component-by-component
+      (`rel.components().fold(root_path, |acc, c| acc.join(c))`). - `real_windows1252_file_decodes_and_accents_survive` — added in the
+      follow-up above.
       The existing walker unit test already covers deep nesting
       synthetically; these add real content going through the full
       index → extract → search pipeline.
 - [x] 83 unit tests + 9 golden tests + 1 idempotence test
       (`cargo test -p magi-core`), `cargo fmt --check` and `cargo clippy
-      --all-targets --all-features -- -D warnings` clean.
+    --all-targets --all-features -- -D warnings` clean.
 
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
@@ -331,7 +327,7 @@ verification checklist below, none of which is checked off yet.
 - [x] 130 unit tests (`cargo test -p magi-core`, plus 1 `#[ignore]`d real-
       tokenizer test run manually as above) + 9 golden + 1 idempotence
       test; `cargo fmt --check` and `cargo clippy --workspace --all-targets
-      --all-features -- -D warnings` clean; `cargo test --workspace` green.
+    --all-features -- -D warnings` clean; `cargo test --workspace` green.
 
 ### Slice: real e5 ONNX embedder
 
@@ -342,7 +338,7 @@ verification checklist below, none of which is checked off yet.
       wrong `pad_token_id` for this model — verified by inspecting both
       files directly, not assumed), `add_special_tokens = true` (the
       tokenizer's own `TemplateProcessing` post-processor wraps `<s> ...
-      </s>`, confirmed from `tokenizer.json`), mean pooling over the
+    </s>`, confirmed from `tokenizer.json`), mean pooling over the
       attention mask (the exported ONNX graph has no pooling baked in —
       confirmed by inspecting its actual input/output tensor names and
       shapes with the `onnx` Python package, not assumed), L2
@@ -375,11 +371,11 @@ verification checklist below, none of which is checked off yet.
       manually with `MAGI_DATA_DIR` pointed at a directory containing the
       downloaded model/tokenizer, after `cargo xtask fetch-onnxruntime`).
 - [x] `magi-cli`'s `embedder_from_env()` now returns `Box<dyn
-      TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
+    TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
       under `MAGI_FAKE_EMBEDDER=1` (previously the CLI only ever bailed
       out asking for the fake one, since no real embedder existed).
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-      --all-features -- -D warnings`, and `cargo test --workspace` all
+    --all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green with the new `ort`/`ndarray` dependencies.
 
 ### Slice: reference-vector parity, eval harness, quantization decision
@@ -417,7 +413,7 @@ verification checklist below, none of which is checked off yet.
       machine): fts-only overall recall@5 = 0.417 (0.000 on `cross` —
       keyword search structurally can't do cross-lingual), vector-only =
       0.983, hybrid = 0.983. **Honest open finding, not hidden:** hybrid
-      *ties* vector-only on recall@5 and is slightly worse on MRR (0.807
+      _ties_ vector-only on recall@5 and is slightly worse on MRR (0.807
       vs. 0.818) — SPEC.md §7 M3 says hybrid "MUST beat" both, which this
       measurement doesn't show. Recorded as unresolved with an explanation
       (vector-only is already near recall@5's ceiling on this small,
@@ -471,7 +467,7 @@ verification checklist below, none of which is checked off yet.
       only 67 MB over (was 325 MB). Full writeup in ADR-0005's "Update:
       RSS root-cause investigation".
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-      --all-features -- -D warnings`, and `cargo test --workspace` (130
+    --all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green after the `embed::e5`/`embed::manager`
       changes; the real-model `#[ignore]`d tests (parity, cross-lingual
       smoke test) re-verified manually.
@@ -487,3 +483,76 @@ understood, fix out of scope for this slice). Recommended next steps
 (switching the manifest default to int8, an ANN/partitioning strategy for
 vector search at scale, a larger eval corpus) are tracked in `docs/eval.md`
 and ADR-0005 rather than actioned here — each is its own scoped follow-up.
+
+### Slice: repo-integrity fix, then int8 switch executed
+
+- [x] **Found and fixed a real repo bug, not part of the M3 feature work
+      itself**: a prior commit (`8672c45`) added `fixtures/*` to
+      `.gitignore` and, as an unintended side effect landing in the same
+      commit, deleted the three already-tracked office fixtures
+      (`notes.docx`, `kickoff.pptx`, `inventory.xlsx`) from git. Since then
+      every file under `fixtures/` — including 22 new EN/ES eval corpus
+      documents and `fixtures/reference_embeddings/e5_small.json`, real
+      work from the previous two slices — was silently untracked and
+      invisible to `git status`. Caught by independently re-running
+      `cargo test --workspace` rather than trusting a prior "all green"
+      summary: 5 office-extraction tests were failing (fixture files
+      physically missing from disk). Fixed: removed `fixtures/*` from
+      `.gitignore` (kept the unrelated `superpowers/` entry),
+      regenerated the office fixtures via
+      `fixtures/corpus/generate_office.py` (byte-identical to the
+      existing golden files — all 3 office golden tests pass unchanged),
+      and deleted a stray duplicate `fixtures/corpus/es/office/`
+      (leftover from a script run with the wrong working directory).
+      130 unit + 9 golden + 1 idempotence tests pass again.
+- [x] **int8 switch executed** (ADR-0005's recommendation, on request):
+      `models/manifest.toml`'s text slot now points at
+      `onnx/model_qint8_avx512_vnni.onnx` (fp32's hash kept in a comment
+      for rollback). `e5_parity.rs`'s tolerance lowered to `0.97` per
+      SPEC.md §7 M3's quantized-model rule. Re-verified against the real
+      int8 model, not assumed carried over from the earlier comparison:
+      parity worst-case cosine **0.9953** (vs. the fp32 Python reference),
+      cross-lingual smoke test still passes, `magi-cli eval` recall@5
+      unchanged at 0.967 (vector-only and hybrid), peak RSS **766.4 MB**
+      (matches the 767.1 MB comparison measurement within noise) — 66 MB
+      over the ≤700 MB target, the closest this project has measured.
+- [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
+    --all-features -- -D warnings`, and `cargo test --workspace` (130
+      unit tests) all clean/green.
+
+**Still open, unchanged**: the NFR-2/NFR-3 100k-chunk latency targets
+(both fail; root cause is `vec0`'s brute-force scan scaling with corpus
+size, not affected by which quantization variant is used for the small
+per-query embed cost — not worth re-measuring against int8), the
+remaining 66 MB over the RSS target, and a larger/messier eval corpus to
+make the hybrid-vs-vector-only and quantization-recall comparisons less
+provisional. Nothing else from SPEC.md §7 M3's verification checklist is
+outstanding.
+
+int8 switch: done. Final M3 check below.
+
+int8 switch executed (real benefit, not just "closer to target"): recall drop is 1.6 points (within the 2-point allowance), and it cuts peak RSS from 1,100 MB to 766 MB — meaningfully closer to the 700 MB budget, plus a 4x smaller download (NFR-7 relevance). Re-verified against the actual int8 model, not assumed: parity worst-case cosine 0.9953 (≥0.97 bar), cross-lingual smoke test still passes, eval recall unchanged (0.967), RSS 766.4 MB. models/manifest.toml now ships it as default; fp32's hash stays in a comment for rollback. e5_parity.rs's tolerance lowered to 0.97 per spec's quantized-model rule. ADR-0005, docs/eval.md, docs/architecture.md, docs/progress.md all updated. Full suite re-verified: 130 passed, 0 failed, 3 ignored (real-model tests, run manually).
+
+Final M3 check — against SPEC.md §7's actual checklist
+
+I re-ran everything rather than trust prior summaries, including re-indexing the current full corpus and directly checking SPEC's own two smoke-test queries at --limit 3. Straight answer: M3 is thoroughly evidenced but not complete — 3 of 8 verification items still fail their stated numeric bar, and per this repo's own rule ("don't start milestone N+1 until every verification item passes"), that matters.
+
+Passing, with real evidence:
+
+- Parity ≥0.97 for the quantized model — 0.9953
+- int8 recall@5 within 2 points of fp32 — 1.6 points ✓
+- Cross-lingual smoke test — electrician invoicet rank 2/3; receta de arepas → arepas_recipe.txtat rank 2/3 ✓ (just reconfirmed against the live corpus)
+- Download interrupted/resumed/corrupted-rejecte
+- just test needs no network — ✓
+
+Still failing, honestly recorded, not hidden:
+
+- Hybrid doesn't beat vector-only on recall@5 (t0.967 int8; MRR slightly worse)
+- 100k-chunk latency: cold 3,176ms vs ≤3,000ms target, warm p95 585ms vs ≤300ms target
+- Peak RSS: 766.4MB vs ≤700MB target (66MB over
+
+Two deliverables gaps I found during this final :
+
+- embed/manager.rs's "unloads models after the idle timeout" — the config value (idle_unload_minutes) exists but there's no actual unload mechanism anywhere. Lazy load isemented at all.
+- "Re-embedding is triggered when the model changes" — deliberately deferred to M5's scheduler (documented consistently since the first M3 slice), so not a regression, but as SPEC literally lists it.
+  Bottom line: don't start M4 yet by this project'tually close M3: an ANN/partitioning strategy for vector search (or accept the NFR miss and document why), the idle-unload mechanism, and a decision on whether the hybrid-doesn't-beat-vector and 66MB-RSS gaps areore work. All three are real engineering, notpaperwork — happy to keep going on any of them if you want to close the milestone rather than carry it forward as open debt.

@@ -1,7 +1,9 @@
 //! Parity between `embed::e5::E5Embedder` (Rust, ONNX) and
 //! `tools/reference_embeddings.py`'s output (Python, PyTorch via
-//! sentence-transformers) for the same sentences — SPEC.md §7 M3: "cosine
-//! >= 0.99 for every fixture sentence".
+//! sentence-transformers, always the fp32 model) for the same sentences —
+//! SPEC.md §7 M3: "cosine >= 0.99 ... (>= 0.97 if the quantized model is
+//! chosen; the reference is always the fp32 model)". ADR-0005 chose int8
+//! (`models/manifest.toml`), so the tolerance here is 0.97.
 //!
 //! Requires the real model/tokenizer (`just models`) and the vendored
 //! ONNX Runtime library (`cargo xtask fetch-onnxruntime`), neither of
@@ -14,7 +16,7 @@ use std::path::Path;
 use magi_core::embed::{E5Embedder, TextEmbedder};
 use serde::Deserialize;
 
-const MIN_COSINE: f32 = 0.99;
+const MIN_COSINE: f32 = 0.97;
 
 #[derive(Deserialize)]
 struct ReferenceEntry {

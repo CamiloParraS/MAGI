@@ -17,18 +17,22 @@ query_prefix = "query: "
 passage_prefix = "passage: "
 pooling = "mean"
 files = [
-  { name = "model.onnx", url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/model.onnx", sha256 = "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665", size = 470268510 },
+  { name = "model.onnx", url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/model_qint8_avx512_vnni.onnx", sha256 = "dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88", size = 118346824 },
   { name = "tokenizer.json", url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/tokenizer.json", sha256 = "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39", size = 17082730 },
 ]
 
 # Quantization decision (SPEC.md §7 M3: "fp32 vs. int8 based on eval
-# results and memory, recorded in an ADR") is not yet made — the manifest
-# ships the fp32 model as the reference implementation for now. The int8
-# variant's hash is recorded here so the eval slice doesn't need to
-# re-verify it: onnx/model_qint8_avx512_vnni.onnx,
-# sha256 = dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88,
-# size = 118346824 (same revision as above). Swap `files` above to it and
-# add the ADR once eval shows the recall/memory tradeoff holds.
+# results and memory, recorded in an ADR") is made: int8 ships as the
+# default per ADR-0005 — recall@5 within SPEC's 2-point allowance (0.967
+# vs. fp32's 0.983) and, after ADR-0005's tokenizer-duplication fix, only
+# 67 MB over the 700 MB RSS target vs. fp32's 400 MB over. `name` is the
+# local destination filename (unchanged from the fp32 layout, so no code
+# depends on which variant is fetched under it), not the upstream
+# release's filename — the URL above is the real, verified
+# `onnx/model_qint8_avx512_vnni.onnx` asset. fp32's hash is kept here for
+# rollback: onnx/model.onnx,
+# sha256 = ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665,
+# size = 470268510 (same revision as above).
 
 # [[model]]
 # slot = "image"

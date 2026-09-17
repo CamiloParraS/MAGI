@@ -28,7 +28,7 @@ reference-machine section):
 (Peak RSS via Windows' own `PeakWorkingSet64`, polled every 50 ms across
 the process's lifetime — same reference machine as `docs/eval.md`.)
 
-## Decision
+## Decision (superseded — see "Update: decision executed" below)
 
 Ship fp32 as the manifest's default for now — **not** because int8 fails
 the recall bar (a 1.6-point recall@5 drop is well within SPEC's 2-point
@@ -105,26 +105,45 @@ to the 37-file `fixtures/corpus` run — so the remaining budget is almost
 entirely fixed model+session+tokenizer load cost, not per-chunk work.
 
 **int8 is now close enough to the target that switching is the obvious
-next lever** (67 MB over vs. fp32's 400 MB over), but this ADR does not
-make that call: switching the shipped default needs `models/manifest.toml`
-updated, `e5_parity.rs`'s tolerance revisited per SPEC.md §7 M3's "≥ 0.97 if
-the quantized model is chosen" rule (currently asserts ≥ 0.99 against the
-fp32 reference), and `docs/eval.md`/this ADR's recall table re-run against
-whatever the shipped default becomes — a follow-up task, not a
-byproduct of an RSS investigation.
+next lever** (67 MB over vs. fp32's 400 MB over) — see "Update: decision
+executed" below.
+
+## Update: decision executed
+
+Switched. `models/manifest.toml`'s text slot now points at
+`onnx/model_qint8_avx512_vnni.onnx` (fp32's hash kept in a comment for
+rollback); `e5_parity.rs`'s tolerance is now `0.97` per SPEC.md §7 M3's
+"≥ 0.97 if the quantized model is chosen" rule (was `0.99` against the
+fp32 reference, which no longer applies since the reference is always
+fp32 but the model under test is now int8).
+
+Re-verified against the real int8 model, same reference machine:
+
+- **Parity**: `e5_parity.rs` vs. the fp32 Python reference — worst-case
+  cosine **0.9953** (well above the 0.97 floor).
+- **Cross-lingual smoke test** (`embed::e5::tests::real_model_embeds_plausible_vectors`):
+  still passes.
+- **Eval** (`magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`):
+  identical to the comparison measurement above — vector-only/hybrid
+  recall@5 0.967, confirming the earlier number wasn't a fluke of how it
+  was measured.
+- **Peak RSS** (`magi-cli index fixtures/corpus`): **766.4 MB** (matches
+  the 767.1 MB post-tokenizer-fix measurement above within noise) — still
+  66 MB over the 700 MB target, not zero, but the closest this project has
+  gotten to it.
 
 ## Consequences
 
-- No manifest change from this ADR; `model.onnx` (fp32) stays the shipped
-  default. Production code changed (`embed::e5`, `embed::manager`) to
-  eliminate the duplicate-tokenizer waste described above — a real, free
-  ~200-260 MB reduction for both variants regardless of which ships.
-- The eval harness (`magi-cli eval`) now supports re-running this
-  comparison cheaply (swap the file in `<data_dir>/models/text/`, re-run)
-  once a better corpus exists.
-- The ≤700 MB text-pipeline RSS target (SPEC.md §7 M3) is still not met by
-  either variant — fp32 is 400 MB over, int8 is 67 MB over — but the gap is
-  now understood (fixed model/session/tokenizer load cost, not thread
-  config or per-chunk work) and int8 is close. Switching the default to
-  int8 is the recommended next step, tracked as a follow-up rather than
-  done here (see "Update" above for what that follow-up needs to touch).
+- `models/manifest.toml` now ships int8 as the default; fp32's hash stays
+  in a comment for rollback. Production code (`embed::e5`,
+  `embed::manager`) was already changed to eliminate the
+  duplicate-tokenizer waste described above — a real, free ~200-260 MB
+  reduction that applied regardless of which variant ships.
+- The eval harness (`magi-cli eval`) supports re-running this comparison
+  cheaply (swap the file in `<data_dir>/models/text/`, re-run) once a
+  better corpus exists.
+- The ≤700 MB text-pipeline RSS target (SPEC.md §7 M3) is **still not
+  met** — int8 is 66 MB over — but the gap is well understood (fixed
+  model/session/tokenizer load cost, not thread config or per-chunk work)
+  and small enough that it's a reasonable target for a follow-up profiling
+  pass rather than a blocker.
