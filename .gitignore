@@ -23,3 +23,7 @@ models/cache/
 
 # Screenshots
 docs/screenshots/
+
+# Fixtures
+fixtures/*
+superpowers/

@@ -1,0 +1,60 @@
+{"query": "electrician invoice total amount", "lang": "en", "expected": ["en/electrician_invoice.txt"], "notes": "keyword+semantic"}
+{"query": "arepas recipe instructions", "lang": "en", "expected": ["en/arepas_recipe.txt"], "notes": "keyword+semantic"}
+{"query": "team meeting action items", "lang": "en", "expected": ["en/meeting_notes.txt"], "notes": "keyword+semantic"}
+{"query": "flight and hotel travel plans", "lang": "en", "expected": ["en/travel_itinerary.txt"], "notes": "semantic paraphrase"}
+{"query": "doctor appointment checkup reminder", "lang": "en", "expected": ["en/doctor_appointment.txt"], "notes": "keyword+semantic"}
+{"query": "apartment lease rent due date", "lang": "en", "expected": ["en/lease_agreement.txt"], "notes": "semantic paraphrase"}
+{"query": "grocery shopping list eggs milk", "lang": "en", "expected": ["en/grocery_list.txt"], "notes": "keyword+semantic"}
+{"query": "file watcher bug after sleep", "lang": "en", "expected": ["en/bug_report.txt"], "notes": "keyword+semantic"}
+{"query": "birthday party cake invitations", "lang": "en", "expected": ["en/birthday_party.txt"], "notes": "keyword+semantic"}
+{"query": "car oil change brake pads", "lang": "en", "expected": ["en/car_maintenance.txt"], "notes": "keyword+semantic"}
+{"query": "book club discussion next meeting", "lang": "en", "expected": ["en/book_club.txt"], "notes": "keyword+semantic"}
+{"query": "onboarding new hire first day", "lang": "en", "expected": ["en/onboarding_notes.txt"], "notes": "keyword+semantic"}
+{"query": "quarterly revenue growth report", "lang": "en", "expected": ["pdf/report.pdf"], "notes": "keyword+semantic, PDF fixture"}
+{"query": "electrician repaired circuit breaker", "lang": "en", "expected": ["en/electrician_invoice.txt"], "notes": "semantic paraphrase"}
+{"query": "security deposit refund tenants", "lang": "en", "expected": ["en/lease_agreement.txt"], "notes": "semantic paraphrase"}
+{"query": "corn flour dough griddle cheese", "lang": "en", "expected": ["en/arepas_recipe.txt"], "notes": "semantic paraphrase"}
+{"query": "sprint roadmap follow-up Tuesday", "lang": "en", "expected": ["en/meeting_notes.txt"], "notes": "semantic paraphrase"}
+{"query": "fasting blood test insurance card", "lang": "en", "expected": ["en/doctor_appointment.txt"], "notes": "semantic paraphrase"}
+{"query": "tire rotation next scheduled service", "lang": "en", "expected": ["en/car_maintenance.txt"], "notes": "semantic paraphrase"}
+{"query": "mystery novel vote next month", "lang": "en", "expected": ["en/book_club.txt"], "notes": "semantic paraphrase"}
+{"query": "factura electricista total a pagar", "lang": "es", "expected": ["pdf/factura_electricista.pdf"], "notes": "keyword+semantic, PDF fixture"}
+{"query": "receta de arepas instrucciones", "lang": "es", "expected": ["es/receta_arepas.txt"], "notes": "keyword+semantic"}
+{"query": "reunion de equipo tareas pendientes", "lang": "es", "expected": ["es/notas_reunion.txt"], "notes": "keyword+semantic"}
+{"query": "itinerario de vuelo y hotel", "lang": "es", "expected": ["es/itinerario_viaje.txt"], "notes": "keyword+semantic"}
+{"query": "cita medica chequeo anual", "lang": "es", "expected": ["es/cita_medica.txt"], "notes": "keyword+semantic"}
+{"query": "contrato de alquiler fecha de pago", "lang": "es", "expected": ["es/contrato_alquiler.txt"], "notes": "keyword+semantic"}
+{"query": "lista de compras huevos leche", "lang": "es", "expected": ["es/lista_compras.txt"], "notes": "keyword+semantic"}
+{"query": "error del vigilante de archivos", "lang": "es", "expected": ["es/reporte_error.txt"], "notes": "keyword+semantic"}
+{"query": "fiesta de cumpleanos pastel invitaciones", "lang": "es", "expected": ["es/fiesta_cumpleanos.txt"], "notes": "keyword+semantic"}
+{"query": "cambio de aceite pastillas de freno", "lang": "es", "expected": ["es/mantenimiento_auto.txt"], "notes": "keyword+semantic"}
+{"query": "club de lectura proxima reunion", "lang": "es", "expected": ["es/club_lectura.txt"], "notes": "keyword+semantic"}
+{"query": "incorporacion nuevo empleado primer dia", "lang": "es", "expected": ["es/notas_incorporacion.txt"], "notes": "keyword+semantic"}
+{"query": "informe trimestral crecimiento de ingresos", "lang": "es", "expected": ["es/informe_trimestral.txt"], "notes": "keyword+semantic"}
+{"query": "reparacion del panel electrico", "lang": "es", "expected": ["pdf/factura_electricista.pdf"], "notes": "semantic paraphrase, PDF fixture"}
+{"query": "deposito de garantia reembolsable", "lang": "es", "expected": ["es/contrato_alquiler.txt"], "notes": "semantic paraphrase"}
+{"query": "masa de maiz budare queso", "lang": "es", "expected": ["es/receta_arepas.txt"], "notes": "semantic paraphrase"}
+{"query": "hoja de ruta reunion de seguimiento", "lang": "es", "expected": ["es/notas_reunion.txt"], "notes": "semantic paraphrase"}
+{"query": "ayuno analisis de sangre seguro", "lang": "es", "expected": ["es/cita_medica.txt"], "notes": "semantic paraphrase"}
+{"query": "rotacion de llantas proximo servicio", "lang": "es", "expected": ["es/mantenimiento_auto.txt"], "notes": "semantic paraphrase"}
+{"query": "novela de misterio votacion", "lang": "es", "expected": ["es/club_lectura.txt"], "notes": "semantic paraphrase"}
+{"query": "electrician invoice", "lang": "cross", "expected": ["pdf/factura_electricista.pdf"], "notes": "SPEC.md §7 M3 example"}
+{"query": "receta de arepas", "lang": "cross", "expected": ["en/arepas_recipe.txt"], "notes": "SPEC.md §7 M3 example, reverse direction"}
+{"query": "quarterly financial report", "lang": "cross", "expected": ["es/informe_trimestral.txt"], "notes": "cross-lingual"}
+{"query": "informe de ingresos trimestrales", "lang": "cross", "expected": ["pdf/report.pdf"], "notes": "cross-lingual"}
+{"query": "team meeting notes", "lang": "cross", "expected": ["es/notas_reunion.txt"], "notes": "cross-lingual"}
+{"query": "notas de la reunion de equipo", "lang": "cross", "expected": ["en/meeting_notes.txt"], "notes": "cross-lingual"}
+{"query": "travel itinerary flight hotel", "lang": "cross", "expected": ["es/itinerario_viaje.txt"], "notes": "cross-lingual"}
+{"query": "itinerario de viaje vuelo hotel", "lang": "cross", "expected": ["en/travel_itinerary.txt"], "notes": "cross-lingual"}
+{"query": "doctor appointment reminder", "lang": "cross", "expected": ["es/cita_medica.txt"], "notes": "cross-lingual"}
+{"query": "cita medica recordatorio", "lang": "cross", "expected": ["en/doctor_appointment.txt"], "notes": "cross-lingual"}
+{"query": "lease agreement rent deposit", "lang": "cross", "expected": ["es/contrato_alquiler.txt"], "notes": "cross-lingual"}
+{"query": "contrato de alquiler deposito", "lang": "cross", "expected": ["en/lease_agreement.txt"], "notes": "cross-lingual"}
+{"query": "grocery shopping list", "lang": "cross", "expected": ["es/lista_compras.txt"], "notes": "cross-lingual"}
+{"query": "lista de compras del supermercado", "lang": "cross", "expected": ["en/grocery_list.txt"], "notes": "cross-lingual"}
+{"query": "software bug report watcher", "lang": "cross", "expected": ["es/reporte_error.txt"], "notes": "cross-lingual"}
+{"query": "reporte de error de software", "lang": "cross", "expected": ["en/bug_report.txt"], "notes": "cross-lingual"}
+{"query": "birthday party planning cake", "lang": "cross", "expected": ["es/fiesta_cumpleanos.txt"], "notes": "cross-lingual"}
+{"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["en/birthday_party.txt"], "notes": "cross-lingual"}
+{"query": "car maintenance oil change", "lang": "cross", "expected": ["es/mantenimiento_auto.txt"], "notes": "cross-lingual"}
+{"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["en/book_club.txt"], "notes": "cross-lingual"}

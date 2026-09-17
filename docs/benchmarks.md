@@ -66,9 +66,34 @@ batch (one genuinely larger, two exercised via the extraction-error path)
 rather than a representative per-type rate — it is not included in the
 per-type table above.
 
+## M3 — 100k-chunk search latency (NFR-2/NFR-3)
+
+**Method:** `xtask bench-corpus` (`just bench`) builds a synthetic index —
+5,000 files × 20 chunks = 100,000 chunks, random text/vectors — directly
+via `db::files::upsert_file` (no real extraction; only the query side uses
+the real `E5Embedder`, since retrieval quality isn't what this measures —
+see `magi-cli eval` / `docs/eval.md` for that). Same reference machine as
+above, release build, fp32 model.
+
+| Metric                            |  Measured | Target (SPEC.md §2.2) | Result |
+| ---------------------------------- | ---------:| -----------------------:| ------:|
+| Cold (model load + first search)   |  3,176 ms |                ≤ 3,000 ms | **FAIL** |
+| Warm p95 (200 queries)             |    585 ms |                  ≤ 300 ms | **FAIL** |
+
+Neither target is met. Root cause and the fts/vector/hybrid latency
+breakdown by corpus size are in `docs/eval.md`'s "Latency (NFR-2/NFR-3) on
+100k synthetic chunks" section — in short, vector search scales with corpus
+size (consistent with `vec0`'s brute-force scan, no ANN index) and
+dominates at 100k chunks; the embedder itself is not the bottleneck
+(~13 ms/query in isolation). Not fixed in this slice — needs an
+ANN/partitioning strategy, tracked as an open item.
+
 ## Reproducing
 
 ```
 cargo build -p magi-cli --release
 MAGI_DATA_DIR=<fresh empty dir> ./target/release/magi-cli index <fixture-type-dir>
+
+# M3 latency benchmark (needs `just models` + `cargo xtask fetch-onnxruntime` first):
+just bench
 ```
