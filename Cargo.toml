@@ -14,6 +14,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 directories = "6.0.0"
@@ -43,6 +44,16 @@ tree-sitter-c = "0.24.2"
 tree-sitter-cpp = "0.23.4"
 tree-sitter-go = "0.25.0"
 tree-sitter-c-sharp = "0.23.5"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+sha2 = "0.11.0"
+ureq = "3.4.2"
+# default-features disabled to drop `download-binaries` (fetches ONNX
+# Runtime from a third-party CDN at build time — outside our own
+# manifest-controlled downloads) in favor of `load-dynamic`, loading the
+# copy `xtask fetch-onnxruntime` vendors and SHA-256-verifies (see
+# `xtask/src/main.rs` and ADR-0001).
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-27"] }
+ndarray = "0.17"
 
 [profile.release]
 lto = "thin"

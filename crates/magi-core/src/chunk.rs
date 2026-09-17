@@ -1,102 +1,216 @@
-//! Chunking. M2 adds a provisional character-based chunker; M3 replaces it
-//! with a token-aware chunker (see SPEC.md §7 M2, M3).
+//! Token-aware chunking (SPEC.md §7 M3). Splits body text on word
+//! boundaries, growing each chunk up to [`TARGET_MAX_TOKENS`] tokens (well
+//! under [`MAX_TOKENS`] including the embedder's `"query: "`/`"passage: "`
+//! prefix), with an [`OVERLAP_TOKENS`]-token overlap between consecutive
+//! chunks. Token counts come from the real e5 tokenizer once it's been
+//! downloaded (`embed::manager::shared_text_tokenizer`); before that
+//! (tests, first run before `just models`) they fall back to a whitespace
+//! word-count approximation. Replaces M2's provisional character-based
+//! chunker.
 
-/// Target chunk size, in `char`s (not bytes, so multi-byte UTF-8 sequences
-/// are never split mid-codepoint).
-pub const CHUNK_SIZE: usize = 1500;
-/// Overlap between consecutive chunks, in `char`s.
-pub const CHUNK_OVERLAP: usize = 200;
+/// Hard ceiling per SPEC.md §7 M3, including the embedder's query/passage
+/// prefix (2-4 tokens for e5's `"query: "` / `"passage: "`).
+pub const MAX_TOKENS: usize = 512;
+/// Tokens reserved for the prefix a `TextEmbedder` adds before embedding.
+pub const PREFIX_RESERVE_TOKENS: usize = 8;
+/// Upper end of SPEC.md §7 M3's "target 256-400 tokens" — chunks grow up
+/// to this many tokens before starting a new one.
+pub const TARGET_MAX_TOKENS: usize = 400;
+/// Tokens of overlap carried into the next chunk.
+pub const OVERLAP_TOKENS: usize = 50;
 
-/// Splits `text` into overlapping chunks of roughly [`CHUNK_SIZE`] chars,
-/// each starting [`CHUNK_OVERLAP`] chars before the previous one ended.
-/// Returns no chunks for empty or whitespace-only input.
-pub fn chunk_text(text: &str) -> Vec<String> {
+const _: () = assert!(TARGET_MAX_TOKENS + PREFIX_RESERVE_TOKENS <= MAX_TOKENS);
+
+/// Splits `text` into word units, each holding one word plus all
+/// whitespace up to the start of the next word (or the end of the text).
+/// Concatenating a contiguous run of units reproduces that span of `text`
+/// byte-for-byte — chunking never rewrites line breaks or collapses
+/// spacing the way a naive `split_whitespace().join(" ")` would.
+fn split_units_preserving_whitespace(text: &str) -> Vec<&str> {
+    let mut word_starts = Vec::new();
+    let mut prev_was_whitespace = true;
+    for (i, ch) in text.char_indices() {
+        let is_whitespace = ch.is_whitespace();
+        if !is_whitespace && prev_was_whitespace {
+            word_starts.push(i);
+        }
+        prev_was_whitespace = is_whitespace;
+    }
+    word_starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| {
+            let end = word_starts.get(i + 1).copied().unwrap_or(text.len());
+            &text[start..end]
+        })
+        .collect()
+}
+
+/// Word-level greedy chunker parameterized on a token-counting function,
+/// so the boundary logic is testable without a real tokenizer.
+///
+/// ponytail: sums each unit's own token count as a proxy for the joined
+/// chunk's real token count, rather than re-tokenizing the growing
+/// substring on every candidate word. BPE/Unigram merges essentially never
+/// cross a whitespace boundary (the space itself is part of the next
+/// token), so this is exact in practice for e5's tokenizer; upgrade to
+/// re-tokenizing the candidate substring if eval ever shows drift. A
+/// single word whose own token count exceeds `TARGET_MAX_TOKENS` (a huge
+/// URL/hash) still becomes its own one-word chunk rather than looping
+/// forever or splitting mid-token.
+fn chunk_by_token_counter(text: &str, count_tokens: impl Fn(&str) -> usize) -> Vec<String> {
     let text = text.trim();
     if text.is_empty() {
         return Vec::new();
     }
+    let units = split_units_preserving_whitespace(text);
+    let unit_tokens: Vec<usize> = units.iter().map(|u| count_tokens(u).max(1)).collect();
 
-    let byte_offsets: Vec<usize> = text
-        .char_indices()
-        .map(|(byte_offset, _)| byte_offset)
-        .collect();
-    let char_len = byte_offsets.len();
-    if char_len <= CHUNK_SIZE {
-        return vec![text.to_string()];
-    }
-
-    let step = CHUNK_SIZE - CHUNK_OVERLAP;
     let mut chunks = Vec::new();
     let mut start = 0;
-    loop {
-        let end = (start + CHUNK_SIZE).min(char_len);
-        let start_byte = byte_offsets[start];
-        let end_byte = byte_offsets.get(end).copied().unwrap_or(text.len());
-        chunks.push(text[start_byte..end_byte].to_string());
-        if end >= char_len {
+    while start < units.len() {
+        let mut end = start;
+        let mut total = 0usize;
+        while end < units.len() && (end == start || total + unit_tokens[end] <= TARGET_MAX_TOKENS) {
+            total += unit_tokens[end];
+            end += 1;
+        }
+        chunks.push(units[start..end].concat().trim().to_string());
+        if end >= units.len() {
             break;
         }
-        start += step;
+        let mut back = end;
+        let mut overlap = 0usize;
+        while back > start && overlap < OVERLAP_TOKENS {
+            back -= 1;
+            overlap += unit_tokens[back];
+        }
+        start = back.max(start + 1);
     }
     chunks
+}
+
+/// Whitespace word count as a token-count proxy when the real e5
+/// tokenizer isn't available yet. Subword tokenization usually yields
+/// somewhat more tokens than words, so this undercounts — acceptable
+/// because it only affects chunk-size precision, never correctness, and
+/// never applies once a model is downloaded.
+pub(crate) fn approx_token_count(text: &str) -> usize {
+    text.split_whitespace().count().max(1)
+}
+
+fn count_tokens(text: &str) -> usize {
+    match crate::embed::manager::shared_text_tokenizer() {
+        Some(tokenizer) => tokenizer
+            .encode(text, false)
+            .map(|encoding| encoding.len())
+            .unwrap_or_else(|_| approx_token_count(text)),
+        None => approx_token_count(text),
+    }
+}
+
+/// Splits `text` into overlapping, token-bounded chunks. Returns no chunks
+/// for empty or whitespace-only input.
+pub fn chunk_text(text: &str) -> Vec<String> {
+    chunk_by_token_counter(text, count_tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// One token per word — isolates the boundary/overlap logic from
+    /// tokenizer specifics.
+    fn word_counter(text: &str) -> usize {
+        text.split_whitespace().count().max(1)
+    }
+
     #[test]
     fn empty_text_yields_no_chunks() {
-        assert!(chunk_text("").is_empty());
-        assert!(chunk_text("   \n\t  ").is_empty());
+        assert!(chunk_by_token_counter("", word_counter).is_empty());
+        assert!(chunk_by_token_counter("   \n\t  ", word_counter).is_empty());
     }
 
     #[test]
     fn short_text_is_a_single_chunk() {
         let text = "hello world";
-        assert_eq!(chunk_text(text), vec![text.to_string()]);
+        assert_eq!(
+            chunk_by_token_counter(text, word_counter),
+            vec![text.to_string()]
+        );
     }
 
     #[test]
-    fn text_at_exact_chunk_size_is_a_single_chunk() {
-        let text = "a".repeat(CHUNK_SIZE);
-        assert_eq!(chunk_text(&text), vec![text]);
+    fn whitespace_and_line_breaks_are_preserved_within_a_chunk() {
+        let text = "Title\n\nFirst paragraph line one.\nLine two.\n\nSecond paragraph.";
+        let chunks = chunk_by_token_counter(text, word_counter);
+        assert_eq!(chunks, vec![text.to_string()]);
     }
 
     #[test]
-    fn long_text_is_split_with_overlap() {
-        let text = "a".repeat(3000);
-        let chunks = chunk_text(&text);
+    fn text_at_exact_target_is_a_single_chunk() {
+        let words = vec!["w"; TARGET_MAX_TOKENS].join(" ");
+        let chunks = chunk_by_token_counter(&words, word_counter);
+        assert_eq!(chunks.len(), 1);
+    }
 
-        // step = 1500 - 200 = 1300, so starts are 0, 1300, 2600.
-        assert_eq!(chunks.len(), 3);
-        assert_eq!(chunks[0].chars().count(), CHUNK_SIZE);
-        assert_eq!(chunks[1].chars().count(), CHUNK_SIZE);
-        assert_eq!(chunks[2].chars().count(), 3000 - 2600);
+    #[test]
+    fn long_text_is_split_with_token_overlap() {
+        // One token per word, so this is well past TARGET_MAX_TOKENS.
+        let words: Vec<String> = (0..1000).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_by_token_counter(&text, word_counter);
 
-        // The overlap region is identical content.
-        let overlap_from_first = &chunks[0][chunks[0].len() - 200..];
-        let overlap_from_second = &chunks[1][..200];
-        assert_eq!(overlap_from_first, overlap_from_second);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(word_counter(chunk) <= TARGET_MAX_TOKENS);
+        }
+        // Consecutive chunks share their overlap region verbatim.
+        let first_words: Vec<&str> = chunks[0].split_whitespace().collect();
+        let second_words: Vec<&str> = chunks[1].split_whitespace().collect();
+        let overlap_start = &first_words[first_words.len() - OVERLAP_TOKENS..];
+        let overlap_in_second = &second_words[..OVERLAP_TOKENS];
+        assert_eq!(overlap_start, overlap_in_second);
+    }
+
+    #[test]
+    fn chunking_always_makes_forward_progress() {
+        // Every "word" alone exceeds TARGET_MAX_TOKENS: each becomes its
+        // own chunk instead of looping forever or splitting mid-token.
+        let huge_counter = |_: &str| TARGET_MAX_TOKENS * 2;
+        let text = "aaaa bbbb cccc dddd";
+        let chunks = chunk_by_token_counter(text, huge_counter);
+        assert_eq!(chunks, vec!["aaaa", "bbbb", "cccc", "dddd"]);
     }
 
     #[test]
     fn unicode_chars_are_never_split_mid_codepoint() {
-        // Spanish accented text repeated well past CHUNK_SIZE in *chars*.
-        let sentence = "La canción tiene una página con ñ, á, é, í, ó, ú. ";
-        let text = sentence.repeat(100);
-        assert!(text.chars().count() > CHUNK_SIZE);
+        let sentence = "La canción tiene una página con ñ, á, é, í, ó, ú.";
+        let text = std::iter::repeat_n(sentence, 100)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let chunks = chunk_by_token_counter(&text, word_counter);
 
-        let chunks = chunk_text(&text);
         assert!(chunks.len() > 1);
         for chunk in &chunks {
-            // Round-tripping through String guarantees valid UTF-8; this
-            // just documents the invariant under test.
             assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
         }
-        // Every accented word must survive intact somewhere in some chunk.
-        let rejoined: String = chunks.join("");
+        let rejoined: String = chunks.join(" ");
         assert!(rejoined.contains("canción"));
         assert!(rejoined.contains("página"));
+    }
+
+    #[test]
+    fn public_chunk_text_falls_back_without_a_downloaded_tokenizer() {
+        // No `just models` run in the test environment, so this exercises
+        // the approx-token-count fallback path end to end.
+        let text = "The quick brown fox jumps over the lazy dog.";
+        assert_eq!(chunk_text(text), vec![text.to_string()]);
+    }
+
+    #[test]
+    fn approx_token_count_is_at_least_one_for_nonempty_text() {
+        assert_eq!(approx_token_count("word"), 1);
+        assert!(approx_token_count("several words here") >= 1);
     }
 }
