@@ -184,4 +184,11 @@ outside tests. Fixed as part of closing this out.
   better corpus exists.
 - The ≤700 MB text-pipeline RSS target (SPEC.md §7 M3) is **met**: 682.8 MB,
   down from int8's original 1,024.9 MB across the tokenizer-dedup and
-  arena-allocator fixes combined (a 342 MB, 33% reduction).
+  arena-allocator fixes combined (a 342 MB, 33% reduction). A later pass
+  found that number was measured on a corpus whose largest file yields 39
+  chunks, while `embed_passages` batched a whole file at once — so peak RSS
+  still scaled with file size. Capping the batch at 16 chunks and dropping
+  two redundant copies of each chunk's text brought `fixtures/corpus` to
+  **582.9 MB** and made a 5,716-chunk (15 MB) file peak at **593.6 MB**
+  instead of allocating a ~4.5 GB intermediate tensor. See
+  `docs/eval.md`'s "Peak RSS is now independent of file size".

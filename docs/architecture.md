@@ -49,17 +49,30 @@ ancestor or descendant of) an existing root.
 
 `embed::TextEmbedder` is the trait every text embedder implements
 (`model_id`, `dim`, `embed_passages`, `embed_query`); `embed::FakeEmbedder`
-is a deterministic, dependency-free implementation used until the real
-`intfloat/multilingual-e5-small` model lands. `index::pipeline::index_root`
+is a deterministic, dependency-free implementation used by tests and
+`MAGI_FAKE_EMBEDDER=1`. `embed_passages` takes `&[&str]`, so a caller never
+copies a file's text just to hand it over. `index::pipeline::index_root`
 takes a `&dyn TextEmbedder`, embeds each file's chunk texts, and passes the
 vectors to `db::files::upsert_file`, which writes them into `vec_text`
 (`chunk_id -> embedding`) in the same transaction as the `chunks`/FTS rows —
 and deletes the matching `vec_text` rows before deleting `chunks`, since
-`vec0` virtual tables aren't covered by `FOREIGN KEY` cascades. After each
-run, `index_root` records the embedder's `model_id()` in
-`meta.text_model_id` and warns (via `tracing`) if it differs from the
-previously recorded one — re-embedding on a model change is not yet
+`vec0` virtual tables aren't covered by `FOREIGN KEY` cascades. A
+chunk/embedding count mismatch is a typed error there, not a silently
+truncated `zip`. After each run, `index_root` records the embedder's
+`model_id()` in `meta.text_model_id` and warns (via `tracing`) if it differs
+from the previously recorded one — re-embedding on a model change is not yet
 triggered automatically (that needs M5's scheduler).
+
+`E5Embedder::embed_passages` splits its input into batches of
+`BATCH_CHUNKS` (16) before each inference call. A file's chunk count is
+unbounded — a 15 MB text file yields ~5,700 chunks — and ONNX Runtime
+materializes a `batch × seq_len × 384` f32 `last_hidden_state` for the whole
+batch, so an uncapped batch scales peak memory with file size (~4.5 GB at
+that chunk count). The cap holds that intermediate at a few MB regardless of
+file size, per SPEC.md §5.3's "small batches". Note that `BatchLongest`
+padding plus int8 kernels make a vector depend slightly on what it was
+batched with (measured worst case 0.9956 cosine against the same text
+embedded alone — the same band as int8-vs-fp32 parity).
 
 `search::hybrid_search(conn, embedder, query, limit)` runs `search::fts`
 (BM25, unchanged from M2) and `search::vector::search_vector_text` (a
@@ -67,10 +80,15 @@ triggered automatically (that needs M5's scheduler).
 `search::fuse::reciprocal_rank_fusion` (SPEC.md §5.6's
 `score = Σ w_i / (60 + rank_i)`, weight 1.0 each), then applies
 `fuse::filename_boost` and `fuse::recency_boost` as a score multiplier.
-`vec_image`/the SigLIP visual list are not wired in yet (M4). `magi-cli
-search --mode hybrid` and `index` (which now requires an embedder — set
-`MAGI_FAKE_EMBEDDER=1` until the real one exists) exercise this path from
-the CLI.
+Both searches return `search::FileHit`, which carries `path`, `file_name`,
+`mtime_ns` and the matching chunk's snippet — they already join `files`, so
+`hybrid_search` computes the boosts from the hits it has instead of issuing
+a metadata query per fused result. They also share
+`search::chunk_fetch_limit` (over-fetch factor before dedup) and
+`search::first_hit_per_file` (per-file dedup). `vec_image`/the SigLIP visual
+list are not wired in yet (M4). `magi-cli search --mode hybrid` and `index`
+(which needs an embedder — set `MAGI_FAKE_EMBEDDER=1` to skip the model)
+exercise this path from the CLI.
 
 ## Chunking
 
@@ -85,7 +103,9 @@ when the real e5 `tokenizer.json` has been downloaded, falling back to a
 whitespace word-count approximation otherwise (tests, first run before
 `just models`) — the boundary logic itself is a pure function
 (`chunk::chunk_by_token_counter`) parameterized on the counting function,
-so it's unit-tested without needing a model. `extract::text::TextExtractor`
+so it's unit-tested without needing a model. Counts are memoized per
+distinct word unit: a document has orders of magnitude fewer distinct words
+than words, and each miss is a real tokenizer call. `extract::text::TextExtractor`
 and `extract::paginated_doc` (PDF/DOCX/PPTX/XLSX) call `chunk_text`
 unchanged; `extract::code`'s tree-sitter/line-window chunker is unaffected.
 

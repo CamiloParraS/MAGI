@@ -101,35 +101,62 @@ below) — 66 MB over target, the closest measurement so far.
 synthetic content is fine here but wouldn't be for a recall eval), same
 reference machine as above.
 
-| Metric                          |   Measured | Target (SPEC.md §2.2) | Result |
-| -------------------------------- | ---------:| ----------------------:| ------:|
-| Cold (model load + first search) |  3,176 ms |               ≤ 3,000 ms | **FAIL** (6% over) |
-| Warm p95 (200 queries)            |    585 ms |                 ≤ 300 ms | **FAIL** (95% over) |
-| Warm p50 / max                   | 533 / 640 ms |                     — | — |
+**Both targets now pass.** Six consecutive clean runs, reference machine
+above, int8:
 
-**Root cause, isolated (not fixed here):** `embed_query` alone is fast
-(~13 ms/call, measured in isolation) — the embedder is not the bottleneck.
-Breaking `hybrid_search` down at smaller corpus sizes (same probe method,
-`fts`/`vector`/`hybrid` timed separately) shows both `search_fts` and
-`search_vector_text` scaling with corpus size, with the vector side
-dominating and growing faster:
+| Metric                            |        Measured | Target (SPEC.md §2.2) | Result |
+| --------------------------------- | --------------:| ----------------------:| ------:|
+| Cold (model load + first search)  | 1,234-1,303 ms |               ≤ 3,000 ms | **PASS** |
+| Warm p95 (200 queries)            |  227.5-230.8 ms |                 ≤ 300 ms | **PASS** |
+| Warm p50 / max                    | ~223 / ~235 ms |                       — | — |
+
+Per-run p95: 227.5, 228.6, 227.7, 227.8, 230.8, 229.6 ms — a 3.3 ms spread.
+
+### How the earlier FAIL was resolved, and what not to read into it
+
+The previously recorded numbers (cold 3,176 ms, warm p95 585 ms) attributed
+the failure to `vec0`'s brute-force KNN scan. That diagnosis was incomplete.
+Two things were actually wrong, one in the product and one in this harness:
+
+1. **`hybrid_search` issued a `SELECT ... FROM files WHERE id = ?` per fused
+   result** — up to 200 per query — plus two linear scans per result, to
+   recover metadata both ranked lists had already joined. Removing it (both
+   searches now return `search::FileHit`) is the product-side fix.
+2. **`bench-corpus` measured reads against an unchecked-pointed WAL.**
+   Bulk-loading 100k rows through 5,000 transactions leaves a large
+   write-ahead log that every reader consults, and SQLite's own checkpoint
+   landing inside or outside the measured window made warm p95 **bimodal for
+   identical code**: 231, 239, 423, 436, 478 ms across five runs. The harness
+   now runs `PRAGMA wal_checkpoint(TRUNCATE)` after building, before
+   measuring — a real index isn't mid-bulk-load when a query arrives. After
+   that change the same five runs land within 1.1 ms of each other.
+
+**Attribution caveat, stated rather than glossed:** the old 585 ms was
+measured with the unfixed harness, so it was itself partly WAL noise and the
+585 → 228 ms delta cannot be cleanly split between the two fixes. What is
+solid: the clean runs of the new code *before* the harness fix already sat at
+231-239 ms, so the product-side fix carries most of it, and the current code
+under a fixed harness passes both targets repeatably. Re-running the old code
+against the fixed harness would settle the split; not done.
+
+**Measurement hygiene:** a run started immediately after a `cargo` build is
+not usable — compile contention and a cold page cache put it at p95 488 ms
+while settled runs of the same binary sit at 228 ms. Let the machine idle
+before measuring.
+
+**Still true about scaling:** `embed_query` is ~13 ms/call and not the
+bottleneck; `search_vector_text` remains a brute-force scan (`vec0` has no
+ANN index in its default configuration) and still grows with corpus size:
 
 | Chunks  | fts    | vector  | hybrid (incl. embed_query) |
 | ------: | ------:| -------:| ---------------------------:|
 | 5,000   | 14 ms  | 22 ms   | 42 ms |
 | 25,000  | 43 ms  | 87 ms   | 144 ms |
-| 100,000 | ~170 ms* | ~350 ms* | 533-640 ms (measured) |
 
-(*extrapolated from the 5k/25k points; roughly linear, consistent with
-`vec0`'s documented brute-force scan — sqlite-vec's default configuration
-has no ANN index, so a KNN query touches every row.)
-
-This is a real scaling limit, not a config knob: at 100k chunks, exhaustive
-384-dim vector comparison is the dominant cost and blows the 300 ms warm
-budget. Fixing it needs either sqlite-vec's partitioning/quantization
-features or a different search-time strategy (pre-filtering, an ANN
-index) — out of scope for this slice; tracked here as an open gap rather
-than silently passed.
+100k chunks now fits inside the 300 ms budget with ~70 ms of headroom, but
+the growth is real, so a corpus several times larger will need sqlite-vec's
+partitioning/quantization or an ANN/pre-filter strategy. That is an M-later
+concern, not an M3 failure.
 
 ## RSS root-cause and fix
 
@@ -147,12 +174,45 @@ RSS for `magi-cli index fixtures/corpus`, int8: 1,024.9 MB → 767.1 MB
 target is now met**, a 342 MB (33%) reduction from the original
 measurement.
 
+## Peak RSS is now independent of file size
+
+The measurements above were all taken against `fixtures/corpus`, whose
+largest file produces **39 chunks**. `index_root` handed every chunk of a
+file to `embed_passages` in one call, and ONNX Runtime materializes a
+`batch × seq_len × 384` f32 `last_hidden_state` for the whole batch, so peak
+memory scaled with a file's chunk count — a dimension the fixture corpus
+never exercised. A 15 MB plain-text file (well inside the default
+`max_file_size_mb = 50`) indexes to **5,716 chunks**, ~146× the largest
+fixture batch; at that size the intermediate tensor alone is ~4.5 GB.
+
+`E5Embedder::embed_passages` now batches in groups of 16
+(`BATCH_CHUNKS`), `embed_passages` takes `&[&str]` instead of `&[String]`,
+and the tokenizer no longer re-copies its inputs — three copies of a file's
+text before inference became one. Re-measured the same way (Windows
+`PeakWorkingSet64`, polled every 50 ms, reference machine above), int8:
+
+| Corpus                                  | Chunks | Largest batch |   Peak RSS |
+| --------------------------------------- | -----:| ------------:| ---------:|
+| `fixtures/corpus` (37 files)             |    ~200 |            39 |  **582.9 MB** |
+| one 15 MB text file                      |   5,716 |            16 |  **593.6 MB** |
+
+`fixtures/corpus` dropped from 682.8 MB to 582.9 MB, and the 15 MB
+single-file case — previously unbounded — now peaks in the same band.
+SPEC.md §7 M3's ≤ 700 MB target holds on both, and no longer only because
+the corpus happens to be small.
+
+The 15 MB file took ~1360 s wall on the reference machine (int8,
+`with_intra_threads(1)`, one dedicated embed thread per SPEC.md §5.3), i.e.
+~4 chunks/s. That throughput is the next thing to look at, not memory.
+
 ## Not yet done
 
 - A larger, messier corpus to make the hybrid-vs-vector-only comparison
   and the quantization recall comparison above less provisional.
-- Vector search's brute-force scaling at 100k+ chunks (above) — needs an
-  ANN/partitioning strategy, not addressed here. The 100k benchmark above
-  was measured against fp32; not worth re-running against int8, since the
-  bottleneck is `vec0`'s corpus-size scaling, not per-query embed cost
-  (already isolated as ~13 ms/call, not the dominant term).
+- Vector search's brute-force scaling beyond 100k chunks (above) — 100k
+  now passes with headroom, but the growth is linear, so a much larger
+  corpus will need sqlite-vec's partitioning/quantization or an
+  ANN/pre-filter strategy.
+- Splitting the 585 → 228 ms warm-p95 improvement between the
+  `hybrid_search` fix and the harness's WAL checkpoint, by re-running the
+  pre-fix code against the fixed harness.

@@ -669,3 +669,118 @@ marked complete — the idle-unload mechanism gap above is now closed.
 hybrid-vs-vector-only recall@5 tie (needs a larger/messier eval corpus, per
 ADR-0005's own recommendation). The RSS gap and the `fetch-models` wiring gap
 are both closed.
+
+### Slice: code-quality pass before closing M3
+
+A deep code-quality review of the branch found one item that invalidated an
+M3 verification claim and several structural cleanups. All fixed here; the
+gates (`cargo fmt --check`, `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`, `cargo test --workspace`, `pnpm
+lint`/`typecheck`/`test`) are green, and the real-model `#[ignore]`d tests
+were re-run manually against the actual downloaded int8 model.
+
+- [x] **The ≤700 MB RSS evidence didn't cover the case that decides it.**
+      `index_root` passed *every* chunk of a file to `embed_passages` in one
+      call, and ONNX Runtime materializes a `batch × seq_len × 384` f32
+      `last_hidden_state` for the whole batch. Measured, not assumed: the
+      largest file in `fixtures/corpus` yields **39 chunks**, but a 15 MB
+      plain-text file — well inside the default `max_file_size_mb = 50` —
+      indexes to **5,716 chunks**, where that intermediate tensor alone is
+      ~4.5 GB. Every RSS number this project had recorded (1,024.9 → 767.1 →
+      682.8 MB) was measured with a maximum batch of 39. Fixed by capping
+      `E5Embedder::embed_passages` at `BATCH_CHUNKS = 16` per inference —
+      inside the embedder, so `magi-cli eval`, `xtask bench-corpus` and M5's
+      future embed worker all inherit it and the `TextEmbedder` contract
+      stays "one vector per input, same order" (SPEC.md §5.3's "small
+      batches"). Re-measured (Windows `PeakWorkingSet64`, polled every 50 ms,
+      same method and machine as ADR-0005): `fixtures/corpus` **682.8 →
+      582.9 MB**, and the 15 MB single-file case peaks at **593.6 MB**
+      instead of being unbounded. Peak RSS no longer scales with file size.
+      New `#[ignore]`d test `embed::e5::tests::batched_passages_match_one_at_a_time`
+      embeds more than one batch's worth and asserts every input still gets
+      its own vector in order. Its bar is cosine > 0.99, not equality, for a
+      reason worth recording: `BatchLongest` padding plus int8 kernels make a
+      vector depend slightly on what it was batched with (measured worst case
+      **0.9956** against the same text embedded alone — the same band as
+      int8-vs-fp32 parity). A mis-split or mis-ordered batch lands near 0.5,
+      so the bar still catches the failure the test exists for.
+- [x] **Three copies of a file's text before inference, now one.**
+      `index_root` cloned every chunk's text, `embed_passages` cloned them
+      again to add the `"passage: "` prefix, and `embed` cloned a third time
+      for `encode_batch(texts.to_vec(), ...)`. `TextEmbedder::embed_passages`
+      now takes `&[&str]`, and `encode_batch` gets borrowed `&str`s
+      (`tokenizers` 0.23.2 accepts `E: Into<EncodeInput>`), so only the
+      prefixed batch of 16 is ever materialized.
+- [x] **`hybrid_search` no longer re-queries the database per result.** Both
+      `search_fts` and `search_vector_text` already `JOIN files`, yet
+      `hybrid_search` issued a `SELECT ... FROM files WHERE id = ?` per fused
+      result (up to 200) to recover `path`/`file_name`/`mtime_ns`, plus two
+      linear `.iter().find()` scans per result. Both searches now return one
+      shared `search::FileHit` carrying that metadata, and the fusion loop
+      reads it from a `HashMap` built once — `FileMeta`, `file_meta()`, the
+      per-result queries, the O(n²) scans and the "file removed between the
+      two queries" branch are all gone. `FtsHit` and `VectorHit` collapsed
+      into `FileHit`; nothing outside `search/` used either. The two searches
+      also now share `search::chunk_fetch_limit` and
+      `search::first_hit_per_file` instead of carrying byte-identical
+      over-fetch and dedup loops.
+- [x] **A chunk/embedding count mismatch is an error, not silent data loss.**
+      `upsert_file` guarded the invariant with `debug_assert_eq!` and then
+      `zip`ped — in release, a mismatch silently dropped the excess chunks
+      from the index with no error and no log. Now a typed error, with
+      `db::files::tests::fewer_embeddings_than_chunks_is_an_error_not_a_silent_truncation`
+      asserting nothing is partially written.
+- [x] **Two extra `SELECT`s per chunk deleted.** `upsert_file` inserted each
+      chunk and then looked its id back up by `(file_id, ordinal)` because
+      the `chunks_ai` FTS trigger shadows `last_insert_rowid()`. SQLite is
+      3.53 (bundled), so `INSERT ... RETURNING id` does it in one statement —
+      for the 5,716-chunk file that's 5,716 fewer round trips. The file
+      upsert's follow-up `SELECT id` went the same way. Both statements are
+      also prepared once instead of re-prepared per chunk.
+- [x] **Token counts memoized per distinct word.** `chunk_by_token_counter`
+      called the real tokenizer once per *word*; a document has orders of
+      magnitude fewer distinct words than words. The counting closure and its
+      9 pure-function tests are unchanged — just a `HashMap` in front.
+- [x] **`just setup` now vendors the ONNX Runtime.** A fresh clone following
+      CLAUDE.md's documented path (`just setup` → `just models` → index) got
+      a `magi-cli index` that failed at `ort::init_from`, because `setup`
+      fetched PDFium but not the runtime.
+- [x] **Smaller correctness/legibility fixes.** `E5Embedder::embed_query`
+      returned an empty vector via `unwrap_or_default()` where
+      `search_vector_text` would have read it as "no semantic results"; it's
+      a typed error now. `index_root`'s 16 test call sites were identical
+      8-line blocks after the embedder parameter landed — one `index_fake`
+      helper removed ~110 lines and took `index/pipeline.rs` from 837 to 730.
+- [x] **NFR-2/NFR-3 both pass now — and the old FAIL was partly a harness
+      bug.** The recorded cold 3,176 ms / warm p95 585 ms failures were
+      re-measured after the `hybrid_search` fix above. Cold dropped to
+      1,234-1,303 ms (**PASS**), but warm p95 came back *bimodal for
+      identical code*: 231, 239, 423, 436, 478 ms across five runs. Root
+      cause, found by reading the harness rather than averaging the noise
+      away: `xtask bench-corpus` bulk-loads 100k rows through 5,000
+      transactions and then measures reads against the resulting large WAL,
+      so whether SQLite's own checkpoint landed inside the measured window
+      decided the run. Added `PRAGMA wal_checkpoint(TRUNCATE)` after the
+      build, before measuring — a real index isn't mid-bulk-load when a
+      query arrives. Six consecutive clean runs afterwards: warm p95 **227.5,
+      228.6, 227.7, 227.8, 230.8, 229.6 ms** (3.3 ms spread, **PASS**), cold
+      1,234-1,303 ms (**PASS**). One separate measurement-hygiene finding
+      worth writing down: a run started immediately after a `cargo` build
+      reads p95 488 ms for the same binary that reads 228 ms when the machine
+      has settled — compile contention, not the system under test. **Stated
+      rather than glossed:** the old 585 ms was itself measured with the
+      unfixed harness, so the 585 → 228 ms delta can't be cleanly split
+      between the product fix and the harness fix. The clean pre-checkpoint
+      runs of the new code already sat at 231-239 ms, so the `hybrid_search`
+      fix carries most of it; re-running the pre-fix code against the fixed
+      harness would settle the split and is listed in `docs/eval.md`'s "Not
+      yet done" rather than claimed here.
+- [x] **Re-verified, not assumed carried over**: `e5_parity`
+      (worst-case cosine unchanged at 0.9953 against the fp32 Python
+      reference), the cross-lingual smoke test (`electrician invoice` →
+      `factura_electricista.pdf`, `receta de arepas` → `arepas_recipe.txt`,
+      both top-3), and `magi-cli eval eval/queries.jsonl --corpus
+      fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
+      preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
+      green; the 5 `#[ignore]`d real-model tests were run manually against
+      the actual downloaded int8 model.
