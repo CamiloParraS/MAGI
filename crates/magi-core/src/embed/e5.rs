@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ort::ep;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
@@ -89,6 +90,15 @@ impl E5Embedder {
             // intra-op thread per logical core.
             .with_intra_threads(1)
             .map_err(|e| Error::Model(format!("setting intra-op thread count: {e}")))?
+            // The CPU arena allocator grows a pool sized for the *largest*
+            // batch seen and never shrinks it back — ADR-0005 measured
+            // ~66 MB of peak RSS attributable to it. Only `.with_memory_pattern`
+            // was tested there (a related but distinct setting); disabling the
+            // arena itself trades a small per-inference allocation cost (the
+            // embed worker isn't latency-sensitive at that scale) for not
+            // holding onto that pool for the process's lifetime.
+            .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
+            .map_err(|e| Error::Model(format!("disabling the CPU memory arena: {e}")))?
             .commit_from_file(&model_path)
             .map_err(|e| {
                 Error::Model(format!(

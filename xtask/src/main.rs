@@ -1,14 +1,16 @@
-//! Cross-platform dev tasks (fetch-pdfium, fetch-onnxruntime, bench-corpus
-//! now; fetch-models, gen-bindings land with the milestones that need them
-//! — see SPEC.md §5.1).
+//! Cross-platform dev tasks (fetch-pdfium, fetch-onnxruntime, fetch-models,
+//! bench-corpus now; gen-bindings lands with the milestone that needs it —
+//! see SPEC.md §5.1).
 
 mod bench_corpus;
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail};
+use magi_core::embed::manager::{ModelManifest, ensure_model_file, model_dir};
 use sha2::{Digest, Sha256};
 
 /// PDFium release pinned from https://github.com/bblanchon/pdfium-binaries.
@@ -281,13 +283,45 @@ fn fetch_onnxruntime() -> Result<()> {
     Ok(())
 }
 
+/// Downloads every file in every `models/manifest.toml` slot into
+/// `<data_dir>/models/<slot>/` via `embed::manager::ensure_model_file`
+/// (SHA-256-verified, resumable) — the same manifest `E5Embedder::load`
+/// reads from. Only the CLI wiring lives here; the download/verify logic
+/// itself is `magi-core`'s (already unit-tested there without a network).
+fn fetch_models() -> Result<()> {
+    let manifest = ModelManifest::load()?;
+    let cancel = AtomicBool::new(false);
+    for entry in &manifest.models {
+        let dest_dir = model_dir(&entry.slot);
+        for file in &entry.files {
+            let mut last_reported = 0u64;
+            let path = ensure_model_file(file, &dest_dir, &cancel, |done, total| {
+                // Report every 10 MB rather than every 64 KB chunk.
+                if done == total || done - last_reported >= 10 * 1024 * 1024 {
+                    println!(
+                        "  {} slot, {}: {} / {} bytes",
+                        entry.slot, file.name, done, total
+                    );
+                    last_reported = done;
+                }
+            })
+            .with_context(|| format!("fetching {} for the {} slot", file.name, entry.slot))?;
+            println!("verified: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("fetch-pdfium") => fetch_pdfium(),
         Some("fetch-onnxruntime") => fetch_onnxruntime(),
+        Some("fetch-models") => fetch_models(),
         Some("bench-corpus") => bench_corpus::bench_corpus(),
         Some(other) => bail!("unknown xtask command: {other}"),
-        None => bail!("usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|bench-corpus>"),
+        None => {
+            bail!("usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus>")
+        }
     }
 }
