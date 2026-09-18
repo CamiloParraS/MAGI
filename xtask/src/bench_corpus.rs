@@ -176,6 +176,15 @@ pub fn bench_corpus() -> Result<()> {
         build_start.elapsed().as_secs_f64()
     );
 
+    // Fold the WAL back into the main database before measuring. Bulk-loading
+    // 100k rows through 5,000 transactions leaves a large WAL that every
+    // reader has to consult, and SQLite's own checkpoint landing inside the
+    // measured window made warm p95 bimodal across runs (231-478 ms for the
+    // same code). A real index isn't mid-bulk-load when a query arrives, so
+    // checkpointing here measures steady-state search rather than
+    // write-ahead-log drain.
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+
     println!("\nloading real E5Embedder (cold: model not yet in memory)...");
     let cold_start = Instant::now();
     let embedder = E5Embedder::load()?;

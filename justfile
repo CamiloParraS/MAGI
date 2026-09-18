@@ -8,6 +8,7 @@ default:
 setup:
     cd apps/desktop; pnpm install
     cargo run -p xtask -- fetch-pdfium
+    cargo run -p xtask -- fetch-onnxruntime
 
 # Start the development server
 dev:
