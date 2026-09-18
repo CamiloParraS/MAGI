@@ -132,18 +132,56 @@ Re-verified against the real int8 model, same reference machine:
   66 MB over the 700 MB target, not zero, but the closest this project has
   gotten to it.
 
+## Update: RSS target closed (CPU memory arena)
+
+This ADR's RSS investigation tested two `ort` session settings —
+`with_intra_threads` and `with_memory_pattern` — and found neither moved
+peak RSS. A third, distinct setting wasn't tried: the CPU execution
+provider's **memory arena** allocator. ORT's arena grows a pool sized for
+the largest batch it's seen and keeps it for the session's lifetime rather
+than returning it to the OS — a different mechanism from
+`with_memory_pattern` (which controls whether ORT precomputes reusable
+memory-reuse *patterns* across repeated calls with the same input shape,
+not whether an arena is used at all).
+
+Disabled via `ep::CPU::default().with_arena_allocator(false).build()`
+passed to `Session::builder().with_execution_providers([...])` in
+`embed::e5::E5Embedder::load`. Re-measured the same way as above (Windows
+`PeakWorkingSet64`, `magi-cli index fixtures/corpus`, average of two runs,
+same reference machine):
+
+| Measurement                          | Peak RSS |
+| ------------------------------------- | --------:|
+| Before (post-tokenizer-fix, confirms table above reproduces) | 766.55 MB (767.8/765.3) |
+| After (arena disabled)                | 682.8 MB (683.8/681.8) |
+
+**SPEC.md §7 M3's ≤ 700 MB text-pipeline RSS target is now met** (682.8 MB),
+not just closer. Re-verified this is a pure allocation-strategy change, not
+a correctness regression: `e5_parity` (cosine 0.9953, unchanged),
+`real_model_embeds_plausible_vectors` (cross-lingual smoke test, unchanged),
+and `magi-cli eval` (vector-only/hybrid recall@5 0.967, unchanged) all still
+pass against the same real int8 model and tokenizer.
+
+This measurement required actually downloading the real model for the
+first time via a genuinely working fetch path — see `docs/progress.md`'s
+"`xtask fetch-models` gap found and fixed" slice: the CLI command this
+ADR's own earlier measurements implicitly assumed existed (`just models` /
+`cargo xtask fetch-models`) had never been implemented; `embed::manager`'s
+download/verify logic existed and was unit-tested, but nothing called it
+outside tests. Fixed as part of closing this out.
+
 ## Consequences
 
 - `models/manifest.toml` now ships int8 as the default; fp32's hash stays
   in a comment for rollback. Production code (`embed::e5`,
   `embed::manager`) was already changed to eliminate the
   duplicate-tokenizer waste described above — a real, free ~200-260 MB
-  reduction that applied regardless of which variant ships.
+  reduction that applied regardless of which variant ships. The CPU memory
+  arena is now also disabled for the same session, another real, free
+  reduction (~84 MB on the reference machine).
 - The eval harness (`magi-cli eval`) supports re-running this comparison
   cheaply (swap the file in `<data_dir>/models/text/`, re-run) once a
   better corpus exists.
-- The ≤700 MB text-pipeline RSS target (SPEC.md §7 M3) is **still not
-  met** — int8 is 66 MB over — but the gap is well understood (fixed
-  model/session/tokenizer load cost, not thread config or per-chunk work)
-  and small enough that it's a reasonable target for a follow-up profiling
-  pass rather than a blocker.
+- The ≤700 MB text-pipeline RSS target (SPEC.md §7 M3) is **met**: 682.8 MB,
+  down from int8's original 1,024.9 MB across the tokenizer-dedup and
+  arena-allocator fixes combined (a 342 MB, 33% reduction).

@@ -160,13 +160,19 @@ manual run, not the full eval harness below.
 `E5Embedder::load()` by default, `FakeEmbedder` under `MAGI_FAKE_EMBEDDER=1`.
 
 M3's SPEC.md §7 verification checklist is now fully evidenced (see
-`docs/progress.md`'s M3 section for the full list). Two items are real,
-recorded open gaps rather than "not yet implemented": `xtask bench-corpus`
+`docs/progress.md`'s M3 section for the full list). One item is a real,
+recorded open gap rather than "not yet implemented": `xtask bench-corpus`
 (`just bench`) measures the 100k-synthetic-chunk NFR-2/NFR-3 targets and
 both currently **fail** (cold 3,176 ms vs. ≤3,000 ms; warm p95 585 ms vs.
 ≤300 ms) — root cause is `vec_text`'s brute-force (no ANN index) scan
 scaling with corpus size, not the embedder itself, and fixing it needs a
 sqlite-vec partitioning/quantization strategy, out of scope for this
-slice (`docs/eval.md`). And the ≤700 MB RSS target is still not met — the
-shipped int8 default is 66 MB over, after the tokenizer-duplication fix
-above (ADR-0005).
+slice (`docs/eval.md`). The ≤700 MB RSS target **is met**: 682.8 MB, after
+the tokenizer-duplication fix and a CPU-memory-arena fix (ADR-0005).
+
+`cargo xtask fetch-models` (mirroring `fetch-pdfium`/`fetch-onnxruntime`)
+downloads and SHA-256-verifies each `models/manifest.toml` file into
+`<data_dir>/models/<slot>/` via `embed::manager::ensure_model_file` — the
+CLI wiring for that manifest-driven download/verify logic, which existed
+and was unit-tested since the first M3 slice but had no way to actually
+run outside tests until now.

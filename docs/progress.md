@@ -551,8 +551,121 @@ Still failing, honestly recorded, not hidden:
 - 100k-chunk latency: cold 3,176ms vs ≤3,000ms target, warm p95 585ms vs ≤300ms target
 - Peak RSS: 766.4MB vs ≤700MB target (66MB over
 
-Two deliverables gaps I found during this final :
+Two deliverables gaps found during this final pass:
 
-- embed/manager.rs's "unloads models after the idle timeout" — the config value (idle_unload_minutes) exists but there's no actual unload mechanism anywhere. Lazy load isemented at all.
-- "Re-embedding is triggered when the model changes" — deliberately deferred to M5's scheduler (documented consistently since the first M3 slice), so not a regression, but as SPEC literally lists it.
-  Bottom line: don't start M4 yet by this project'tually close M3: an ANN/partitioning strategy for vector search (or accept the NFR miss and document why), the idle-unload mechanism, and a decision on whether the hybrid-doesn't-beat-vector and 66MB-RSS gaps areore work. All three are real engineering, notpaperwork — happy to keep going on any of them if you want to close the milestone rather than carry it forward as open debt.
+- embed/manager.rs's "unloads models after the idle timeout" — the config value (`idle_unload_minutes`) existed but no unload mechanism existed anywhere. Lazy load existed only in the trivial sense that a one-shot CLI process only constructs an embedder when a command needs one; nothing tracked idle time or ever dropped a loaded model.
+- "Re-embedding is triggered when the model changes" — deliberately deferred to M5's scheduler (documented consistently since the first M3 slice), so not a regression, but an unmet M3 deliverable as SPEC literally lists it.
+
+### Slice: idle-unload mechanism (`embed::manager::ModelSlot`)
+
+- [x] **Closed the idle-unload gap.** Added `ModelSlot<T>` to `embed/manager.rs`
+      (matching SPEC.md §5.1's own directory comment for that file: "lazy
+      load, idle unload"): a `Mutex<Option<(T, Instant)>>` holder with
+      `get_or_load` (loads on first use via an injected closure, stamps
+      last-used on every access, leaves the slot empty on a failed load
+      rather than a stale/poisoned entry) and `unload_if_idle(idle_timeout)`
+      (drops the value and reports `true` once idle time has elapsed).
+      5 new unit tests (`cargo test -p magi-core`: 135 passed, up from 130):
+      load-once-and-reuse, loader-error leaves no stale entry, unload only
+      past the timeout, reload after unload calls the loader again, and a
+      fresh access resets the idle clock. No real sleeping in tests — idle
+      time is asserted via a `0s`/`3600s` timeout comparison against a real
+      `Instant`, not a mocked clock.
+- [x] **Scoped honestly, not wired into anything yet — and said so.**
+      `ModelSlot` is deliberately *not* plugged into `magi-cli`'s
+      `embedder_from_env()`: every `magi-cli` invocation is a one-shot
+      process that exits when the command finishes, so there is nothing for
+      an idle timer to usefully unload from (process exit already frees
+      everything). The type exists so the future long-lived owner — the
+      embed worker thread `engine.rs` will spawn (SPEC.md §5.3), whose
+      `recv_timeout` loop is the natural place to call `unload_if_idle` on
+      each tick — doesn't have to invent this from scratch. SPEC.md itself
+      splits it this way: M3 lists the lazy-load/idle-unload *mechanism* as
+      a deliverable, while M7 ("Permissions and background-behavior
+      hardening") separately lists "model idle unload" as its own
+      deliverable with its own real-RSS verification item ("10 minutes idle
+      → models unloaded, RSS ≤ 150 MB"), which needs the persistent engine
+      process M7 assumes and M3 doesn't have. Building a fake background
+      thread or wiring it into the CLI now would be unused scaffolding, not
+      a real fix — recorded as a conscious scope boundary rather than
+      silently left out.
+- [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
+    --all-features -- -D warnings`, and `cargo test --workspace` all
+      clean/green after the change.
+- [x] **Re-embed-on-model-change: reconfirmed as correctly deferred, not a
+      gap to close here.** `TextEmbedder::model_id()`'s doc comment has said
+      since the first M3 slice that the trigger itself needs M5's scheduler
+      (no scheduler/reconciliation loop exists yet to compare a stored
+      `meta.text_model_id` against the current model and decide what to
+      re-embed); `meta` tracking of the model id is already in place. Not
+      touched in this slice — SPEC.md's own M3 bullet names the mechanism
+      that's genuinely missing (idle unload), and this one isn't it.
+
+**Still open, unchanged from the previous entry**: the NFR-2/NFR-3 100k-chunk
+latency targets, the 66 MB RSS overshoot, and the hybrid-vs-vector-only
+recall@5 tie. These three are the remaining real decisions before M3 can be
+marked complete — the idle-unload mechanism gap above is now closed.
+
+### Slice: `xtask fetch-models` gap found and fixed, then the RSS target closed
+
+- [x] **Found a real deliverable gap via hands-on testing, not part of the
+      RSS work itself.** SPEC.md §5.1's directory layout and §399's command
+      table, `models/manifest.toml`'s own doc comment, and `E5Embedder::load`'s
+      error message all refer to `cargo xtask fetch-models` / `just models`
+      as the way to populate `<data_dir>/models/text/`. It didn't exist:
+      `xtask/src/main.rs`'s own module doc comment said "fetch-models ...
+      land[s] with the milestones that need them" (M3 is that milestone),
+      and `Some(other) => bail!("unknown xtask command: {other}")` confirmed
+      it at runtime. `embed::manager::ensure_model_file`/
+      `import_offline_model_file` — the real, unit-tested download/verify
+      logic this milestone built — had **zero production call sites**;
+      grepping the repo found them only inside `#[cfg(test)]` modules. Every
+      "real model, downloaded from Hugging Face" verification recorded
+      earlier in this file must have used manual/ad-hoc file placement, not
+      the tool the project documents. Same category of gap as the
+      idle-unload one above: extensively unit-tested in isolation, never
+      wired to an entry point a user or CI could actually run.
+- [x] **Fixed**: `xtask fetch_models()` (`xtask/src/main.rs`), following the
+      exact pattern `fetch_pdfium`/`fetch_onnxruntime` already establish —
+      loads `ModelManifest::load()`, calls `embed::manager::ensure_model_file`
+      per file per slot into `embed::manager::model_dir(&entry.slot)`, with
+      progress printed every 10 MB. No new abstraction: the download/verify
+      logic already existed in `magi-core`, this is only the missing CLI
+      wiring. Verified for real, not just compiled: ran
+      `cargo run -p xtask -- fetch-models` against the real network, which
+      downloaded and SHA-256-verified the real `model.onnx` (118,346,824
+      bytes) and `tokenizer.json` (17,082,730 bytes) into
+      `<data_dir>/models/text/`; `cargo test -p magi-core --release --
+      --ignored` then passed all 3 real-model tests (parity, cross-lingual
+      smoke test, repeated-load-is-safe) against those freshly-downloaded
+      files.
+- [x] **RSS target closed for real, using the now-working fetch path to
+      measure it.** ADR-0005 had already ruled out `ort`'s thread-pool and
+      memory-pattern settings as the cause of the remaining 66 MB overshoot.
+      A third `ort` session setting, never tried there — the CPU execution
+      provider's memory **arena** allocator (`ep::CPU::with_arena_allocator`,
+      distinct from `.with_memory_pattern`, which ADR-0005 did test) — grows
+      a pool sized for the largest batch seen and holds onto it for the
+      session's lifetime. Disabling it in `E5Embedder::load`
+      (`.with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])`)
+      and re-measuring peak RSS the same way as ADR-0005 (Windows
+      `PeakWorkingSet64`, polled every 50 ms, `magi-cli index
+      fixtures/corpus`, average of two runs, same reference machine): **from
+      766.55 MB (767.8/765.3, confirms ADR-0005's 766.4 MB was reproducible)
+      down to 682.8 MB (683.8/681.8)** — SPEC.md §7 M3's ≤ 700 MB target is
+      now **met**, not just closer. Re-verified this wasn't a silent
+      correctness regression: `e5_parity` (cosine 0.9953, unchanged),
+      `real_model_embeds_plausible_vectors` (cross-lingual smoke test,
+      unchanged), and `magi-cli eval eval/queries.jsonl --corpus
+      fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
+      same numbers ADR-0005 recorded) all still pass — disabling the arena
+      only changes allocation strategy, never model output. `cargo fmt`,
+      `cargo clippy --workspace --all-targets --all-features -- -D
+      warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
+      idempotence) all clean/green.
+
+**Still open**: the NFR-2/NFR-3 100k-chunk latency targets (root cause is
+`vec_text`'s brute-force scan, unaffected by this slice) and the
+hybrid-vs-vector-only recall@5 tie (needs a larger/messier eval corpus, per
+ADR-0005's own recommendation). The RSS gap and the `fetch-models` wiring gap
+are both closed.

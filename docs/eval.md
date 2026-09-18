@@ -133,23 +133,24 @@ than silently passed.
 
 ## RSS root-cause and fix
 
-Investigated and partly fixed — see ADR-0005's "Update: RSS root-cause
-investigation". Summary: `ort` thread-pool defaults and memory-pattern
-settings were **not** the cause (measured, no effect); a duplicated
-tokenizer load (`E5Embedder` parsing its own copy of `tokenizer.json`
-instead of reusing `chunk::count_tokens`'s shared instance) was, at ~200-260
-MB of avoidable RSS. Fixed. New peak RSS for `magi-cli index
-fixtures/corpus`: fp32 1,100.2 MB (was 1,302.5 MB), int8 767.1 MB (was
-1,024.9 MB) — still both over SPEC.md §7 M3's ≤ 700 MB target, but int8 is
-now only 67 MB over (down from 325 MB).
+Investigated and fixed — see ADR-0005's "Update: RSS root-cause
+investigation" and "Update: RSS target closed (CPU memory arena)". Two
+independent causes, both real `ort`/tokenizer configuration, neither
+per-chunk work: `ort`'s thread-pool defaults and memory-pattern settings
+were **not** the cause (measured, no effect); a duplicated tokenizer load
+(`E5Embedder` parsing its own copy of `tokenizer.json` instead of reusing
+`chunk::count_tokens`'s shared instance), at ~200-260 MB, and the CPU
+execution provider's memory arena allocator (a pool sized for the largest
+batch, held for the session's lifetime), at ~84 MB, were. Both fixed. Peak
+RSS for `magi-cli index fixtures/corpus`, int8: 1,024.9 MB → 767.1 MB
+(tokenizer fix) → **682.8 MB** (arena fix) — **SPEC.md §7 M3's ≤ 700 MB
+target is now met**, a 342 MB (33%) reduction from the original
+measurement.
 
 ## Not yet done
 
 - A larger, messier corpus to make the hybrid-vs-vector-only comparison
   and the quantization recall comparison above less provisional.
-- The remaining 66 MB over the ≤ 700 MB RSS target (int8, post-fix) — the
-  gap is understood (fixed model/session/tokenizer load cost, see
-  ADR-0005) but not closed.
 - Vector search's brute-force scaling at 100k+ chunks (above) — needs an
   ANN/partitioning strategy, not addressed here. The 100k benchmark above
   was measured against fp32; not worth re-running against int8, since the
