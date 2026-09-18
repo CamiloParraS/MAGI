@@ -834,7 +834,18 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - [ ] Parity: Rust e5 embeddings vs. reference vectors, cosine ≥ 0.99 for every fixture sentence (≥ 0.97 if the quantized model is chosen; the reference is always the fp32 model).
 - [ ] If int8 is chosen, its overall recall@5 is within 2 points of fp32 (report both).
 - [ ] Cross-lingual smoke test: the query `electrician invoice` returns the Spanish fixture `factura_electricista.pdf` in the top 3, and `receta de arepas` returns the English recipe fixture in the top 3.
-- [ ] Eval baseline recorded in `docs/eval.md`. Hybrid MUST beat FTS-only and vector-only on overall recall@5 (report all three).
+- [ ] Eval baseline recorded in `docs/eval.md` (report fts-only, vector-only
+      and hybrid, overall and per query bucket). All three MUST be measured
+      through the same ranking path — `search::rank_and_boost` with one input
+      list emptied for the baselines — so the comparison isolates fusion
+      rather than comparing two different ranking functions. Hybrid MUST
+      satisfy both:
+  - **(a) No regression:** overall recall@5 >= max(fts-only, vector-only).
+  - **(b) Each mode contributes:** on the `kw` (keyword-decisive) bucket
+        hybrid > vector-only on MRR, and on the `cross` bucket hybrid >
+        fts-only. A fusion that beats neither input on the queries that input
+        exists to answer is not doing anything. MRR is the clause-(b) metric
+        because recall@5 saturates at 1.000 on this corpus.
 - [ ] Latency benchmark on 100k synthetic chunks meets NFR-2 (warm) and NFR-3 (cold) on the reference machine (or a VM limited to 8 GB RAM and 4 vCPUs). Record the specs.
 - [ ] Peak RSS while embedding the fixture corpus is recorded; the text-only pipeline stays ≤ 700 MB.
 - [ ] Download is interrupted mid-file and resumed or restarted cleanly; a corrupted file (bad hash) is rejected and re-downloaded.
@@ -882,6 +893,13 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - Reconciliation scans: at startup, periodic, after wall-clock jumps, and on rescan/overflow.
 - Rename handling in place, and move detection by hash for cross-root moves and delete+create pairs.
 - Hash-skip for touched-but-unchanged files, stability checks for in-progress writes, temp-file ignore rules.
+- Re-embed trigger on model change: a stored `meta.text_model_id` /
+  `meta.image_model_id` that differs from the running embedder's marks the
+  affected files `pending` so hash-skip does not preserve vectors from the
+  old model. M3 delivers the `meta` tracking and logs a warning on a
+  mismatch; the trigger belongs here because M5's hash-skip is what makes a
+  stale vector survive a re-index (before it, every index run re-embeds
+  everything, so the mismatch is latent). See SPEC.md §7 M3's deliverable.
 - Cloud-placeholder and dataless skip (Windows, macOS).
 - Polling fallback for failed watchers and network drives.
 - Missing-root handling that keeps the index.
@@ -895,6 +913,9 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - [ ] 1. New file → indexed and searchable within 10 s.
 - [ ] 2. Content modified → re-embedded; old chunks, FTS rows, and vectors are gone (assert row counts).
 - [ ] 3. `touch` without a content change → embed-call counter unchanged.
+- [ ] 3b. `meta.text_model_id` changed since the last index → affected files
+      are re-embedded (embed-call counter rises) even though their content
+      hash is unchanged; with the id unchanged, hash-skip still applies.
 - [ ] 4. Rename within a root → path updated, embed counter unchanged.
 - [ ] 5. Move between two roots → path and `root_id` updated, embed counter unchanged.
 - [ ] 6. Move out of all roots → removed from all tables.

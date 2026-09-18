@@ -40,6 +40,12 @@ By `lang` (hybrid):
 | es    | 20 |   1.000 |    1.000 | 1.000 |
 | cross | 20 |   0.950 |    0.950 | 0.422 |
 
+**Measured before the ranking path was equalized** (see "Resolved" below):
+the `vector-only` row here is raw `search_vector_text` with no filename or
+recency boost, while `hybrid` is boosted, so the two columns are not
+comparable to each other. They are kept as the fp32 reference point for the
+int8 comparison, which is a like-for-like swap of the model file only.
+
 By `lang` (fts-only, for contrast — keyword search has zero cross-lingual
 signal by construction):
 
@@ -49,27 +55,93 @@ signal by construction):
 | es    | 20 |   0.700 |    0.700 | 0.675 |
 | cross | 20 |   0.000 |    0.000 | 0.000 |
 
-### Open finding: hybrid does not clearly beat vector-only here
+### Resolved: item 4's comparison was mis-specified, not hybrid
 
-SPEC.md §7 M3 requires hybrid to beat both FTS-only and vector-only on
-overall recall@5. Measured, hybrid **ties** vector-only on recall@5
-(0.983 = 0.983) and is slightly **worse** on MRR (0.807 vs. 0.818) — RRF
-fusion plus the filename/recency boosts occasionally demote a vector
-search's rank-1 hit by a position or two when FTS contributes nothing
-useful (all 20 `cross` queries: FTS can't match different-language terms
-at all, so hybrid fuses a real vector ranking with an empty FTS list).
+**The earlier version of this section was wrong about the mechanism.** It
+attributed hybrid's MRR deficit to "RRF fusion plus the filename/recency
+boosts" on the 20 `cross` queries, where FTS returns nothing. RRF's share of
+that is exactly zero, and provably so: `reciprocal_rank_fusion`
+(`crates/magi-core/src/search/fuse.rs`) adds `weight / (60 + rank)` per list,
+which is strictly decreasing in rank, so fusing one non-empty list with one
+empty list is **order-preserving**. It cannot demote anything. This is now
+pinned by a unit test
+(`fuse::tests::fusion_with_one_empty_list_preserves_the_other_order`).
 
-This is real, not fabricated, but the eval corpus is almost certainly too
-small and too cleanly separable to be a fair test of the hybrid design:
-vector-only is already close to its recall@5 ceiling (0.983 = 59/60), so
-there's very little room for anything to "beat" it, and 13 short,
-topically-distinct synthetic documents don't reproduce the ambiguity,
-exact-ID/keyword-matters cases (invoice numbers, filenames, code
-identifiers) that FTS is supposed to contribute value on in a real,
-larger, messier personal-files corpus. Not resolved — needs a bigger, more
-realistic corpus before concluding whether this is a real fusion-tuning
-gap or just an artifact of a too-easy eval set. Left as an open item
-rather than tuning RRF weights to fit 60 queries.
+The actual cause was in the harness, not the product: `magi-cli eval`'s
+`vector` arm called raw `search_vector_text` with **no boosts**, while
+`hybrid` applied `filename_boost * recency_boost`. The two modes were
+different ranking functions, so the comparison could not isolate fusion — it
+was measuring the boosts and calling the result a fusion verdict.
+
+**Fix:** `search::rank_and_boost` now owns the fuse-boost-sort tail, and all
+three eval modes call it — the baselines are hybrid's own ranking function
+with one input list emptied. `hybrid_search` is unchanged in behaviour; it
+calls the same helper. The baselines also now fetch `FTS_FETCH_LIMIT` /
+`VECTOR_FETCH_LIMIT` candidates before truncating to 10, as hybrid does,
+instead of fetching only 10.
+
+Separately, the query set could not discriminate: all 60 queries were ones
+vector-only wins. 10 `kw` (keyword-decisive) queries were added against
+fixtures that already existed — code symbols (`Calculadora sumar`,
+`struct Point origin`, `irradiacionSolar potenciaPanel`), Office cell and
+slide text (`Gadget Warehouse B`, `Quarterly Kickoff`), and exact phrases
+(`circuit breaker grounding wire`). The corpus was **not** grown: the axis
+that discriminates is query type, not document count.
+
+### Current baseline: int8, 70 queries, equalized ranking path
+
+`just eval`, reference machine above, shipped int8 model, fresh temp DB,
+`fixtures/corpus` indexed 37 files (same 2 intentional errors as above).
+
+| Mode        |  n | recall@5 | recall@10 |   MRR |
+| ----------- | -:| -------:| --------:| -----:|
+| fts-only    | 70 |   0.486 |    0.486 | 0.486 |
+| vector-only | 70 |   0.971 |    0.986 | 0.818 |
+| hybrid      | 70 |   0.971 |    0.986 | **0.825** |
+
+By bucket, MRR:
+
+| bucket |  n | fts-only | vector-only | hybrid |
+| ------ | -:| -------:| ----------:| -----:|
+| en     | 20 |    0.550 |       0.975 |  0.975 |
+| es     | 20 |    0.700 |       1.000 |  1.000 |
+| cross  | 20 |    0.000 |       0.413 |  0.413 |
+| kw     | 10 |    0.900 |       0.950 | **1.000** |
+
+**SPEC.md §7 M3 item 4 now passes, on a comparison that can fail.**
+
+- **(a) No regression:** hybrid overall recall@5 0.971 = max(0.486, 0.971). ✅
+- **(b) Each mode contributes:** `kw` MRR hybrid 1.000 > vector-only 0.950;
+  `cross` hybrid 0.413 > fts-only 0.000. ✅ Overall MRR also now shows hybrid
+  strictly ahead of both (0.825 > 0.818 > 0.486), which the old measurement
+  had inverted.
+
+The `kw` bucket is the informative half: both modes there run identical
+boosts, so hybrid's +0.050 MRR over vector-only is **fusion alone**. The
+`cross` half is near-automatic (fts-only scores 0.000 by construction) and
+should not be read as strong evidence.
+
+No RRF weight or boost constant was changed. The improvement is entirely
+from measuring the right thing.
+
+### Open finding: the filename/recency boosts look net-negative
+
+Now that baselines run boosted, the boosts can be priced. On the original 60
+queries, vector-only's int8 MRR was 0.814 unboosted (the figure recorded in
+`docs/progress.md` before this change) and is 0.796 boosted — the boosts **cost** ~0.018 MRR, and hybrid was already paying it.
+That is most of what the old section misread as a fusion problem.
+
+`filename_boost` is the acting term: `recency_boost` varies by only ~0.3%
+across these fixtures (their mtimes span 1.03 days inside a 30-day window),
+while `filename_boost` swings up to ×1.2. It is language-blind token
+overlap, so an English query can hand ×1.2 to a wrong English-named file and
+demote a correct Spanish hit — a plausible mechanism for the `cross` bucket's
+0.413 MRR against 0.900 recall@5 (right file in the top 5, wrong rank).
+
+**Not fixed here, deliberately.** The boosts help on `kw` (that is where
+filename overlap is a real signal) and the honest next step is to price them
+per bucket rather than tune a constant against 70 queries. Tracked, not
+resolved.
 
 ## Quantization: int8 vs. fp32, and peak RSS
 
@@ -111,6 +183,14 @@ above, int8:
 | Warm p50 / max                    | ~223 / ~235 ms |                       — | — |
 
 Per-run p95: 227.5, 228.6, 227.7, 227.8, 230.8, 229.6 ms — a 3.3 ms spread.
+
+**Re-verified for M3 sign-off** (same machine, current branch): cold
+**1,443.7 ms**, warm **p50 220.0 / p95 230.0 / max 300.9 ms**. Both targets
+pass. The p95 lands inside the six-run band above; cold is ~140 ms above it
+because this run started immediately after a `cargo build --release` of
+`xtask`, which is exactly the contention the measurement-hygiene note below
+warns about. Recorded as measured rather than re-run until it looked better —
+it passes with 1.5 s of headroom either way.
 
 ### How the earlier FAIL was resolved, and what not to read into it
 
@@ -196,6 +276,12 @@ text before inference became one. Re-measured the same way (Windows
 | `fixtures/corpus` (37 files)             |    ~200 |            39 |  **582.9 MB** |
 | one 15 MB text file                      |   5,716 |            16 |  **593.6 MB** |
 
+**Re-verified for M3 sign-off**: `fixtures/corpus` peaks at **581.9 MB**
+(1.0 MB under the 582.9 MB above — noise), measured the same way against an
+isolated `MAGI_DATA_DIR` holding only the int8 model. The 15 MB single-file
+case was **not** re-run: it takes ~23 minutes and nothing since has touched
+`BATCH_CHUNKS` or the embed path.
+
 `fixtures/corpus` dropped from 682.8 MB to 582.9 MB, and the 15 MB
 single-file case — previously unbounded — now peaks in the same band.
 SPEC.md §7 M3's ≤ 700 MB target holds on both, and no longer only because
@@ -207,8 +293,13 @@ The 15 MB file took ~1360 s wall on the reference machine (int8,
 
 ## Not yet done
 
-- A larger, messier corpus to make the hybrid-vs-vector-only comparison
-  and the quantization recall comparison above less provisional.
+- A larger, messier corpus. No longer the blocker for M3 item 4 — the
+  comparison discriminates now — but the `kw` bucket is still 10
+  hand-written queries over synthetic fixtures, and the quantization recall
+  comparison stays provisional until the corpus has real ambiguity and
+  near-duplicates in it.
+- Pricing the filename/recency boosts per bucket (see the open finding
+  above): they cost ~0.018 MRR on `en`/`cross` and help on `kw`.
 - Vector search's brute-force scaling beyond 100k chunks (above) — 100k
   now passes with headroom, but the growth is linear, so a much larger
   corpus will need sqlite-vec's partitioning/quantization or an
