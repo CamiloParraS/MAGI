@@ -169,4 +169,26 @@ mod tests {
         assert_eq!(ranked[0].0, 2);
         assert_eq!(ranked[1].0, 5);
     }
+
+    #[test]
+    fn fusion_with_one_empty_list_preserves_the_other_order() {
+        // The load-bearing fact behind SPEC.md §7 M3 item 4: on a query
+        // where FTS matches nothing (every cross-lingual query), RRF is a
+        // no-op on ordering, so any hybrid-vs-vector-only difference there
+        // comes from the boosts, never from fusion.
+        let ids: Vec<i64> = (1..=100).collect();
+        let fused = reciprocal_rank_fusion(&[
+            RankedList {
+                file_ids: &[],
+                weight: 1.0,
+            },
+            RankedList {
+                file_ids: &ids,
+                weight: 1.0,
+            },
+        ]);
+        let order: Vec<i64> = fused.iter().map(|(id, _)| *id).collect();
+        assert_eq!(order, ids);
+        assert!(fused.windows(2).all(|w| w[0].1 > w[1].1));
+    }
 }

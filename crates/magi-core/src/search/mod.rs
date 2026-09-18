@@ -70,29 +70,21 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Runs FTS5 and `vec_text` search, fuses them with Reciprocal Rank
-/// Fusion, applies filename/recency boosts, and returns the top `limit`
-/// files (SPEC.md §5.6).
+/// Fuses the given ranked lists with RRF, applies the filename/recency
+/// boosts (SPEC.md §5.6 steps 4-5) and returns the top `limit` files.
 ///
-/// ponytail: the two queries run sequentially against `conn` here, not on
-/// separate parallel reader connections — SPEC.md's "run in parallel" is
-/// about not blocking one query behind the other on the engine's reader
-/// pool, which doesn't exist until M6. Fusion correctness doesn't depend
-/// on query order, so this defers threading to when that pool lands.
-pub fn hybrid_search(
-    conn: &Connection,
-    embedder: &dyn TextEmbedder,
+/// Passing an empty list for one side yields that single mode's ranking
+/// under the *same* boost path as hybrid. RRF over one non-empty list is
+/// order-preserving (`weight / (60 + rank)` is strictly decreasing in
+/// rank), so a single-mode call re-ranks only by the boosts — which is
+/// what makes `magi-cli eval`'s baselines comparable to hybrid instead of
+/// comparing two different ranking functions (SPEC.md §7 M3 item 4).
+pub fn rank_and_boost(
     query: &str,
+    fts_hits: &[FileHit],
+    vector_hits: &[FileHit],
     limit: u32,
-) -> Result<Vec<SearchHit>> {
-    if query.trim().is_empty() || limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let fts_hits = fts::search_fts(conn, query, FTS_FETCH_LIMIT)?;
-    let query_embedding = embedder.embed_query(query)?;
-    let vector_hits = vector::search_vector_text(conn, &query_embedding, VECTOR_FETCH_LIMIT)?;
-
+) -> Vec<SearchHit> {
     let fts_ids: Vec<i64> = fts_hits.iter().map(|h| h.file_id).collect();
     let vector_ids: Vec<i64> = vector_hits.iter().map(|h| h.file_id).collect();
     let fused = reciprocal_rank_fusion(&[
@@ -114,10 +106,10 @@ pub fn hybrid_search(
     let now = now_unix();
 
     let mut by_id: HashMap<i64, (Option<&FileHit>, Option<&FileHit>)> = HashMap::new();
-    for hit in &fts_hits {
+    for hit in fts_hits {
         by_id.entry(hit.file_id).or_default().0 = Some(hit);
     }
-    for hit in &vector_hits {
+    for hit in vector_hits {
         by_id.entry(hit.file_id).or_default().1 = Some(hit);
     }
 
@@ -153,7 +145,33 @@ pub fn hybrid_search(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     hits.truncate(limit as usize);
-    Ok(hits)
+    hits
+}
+
+/// Runs FTS5 and `vec_text` search, fuses them with Reciprocal Rank
+/// Fusion, applies filename/recency boosts, and returns the top `limit`
+/// files (SPEC.md §5.6).
+///
+/// ponytail: the two queries run sequentially against `conn` here, not on
+/// separate parallel reader connections — SPEC.md's "run in parallel" is
+/// about not blocking one query behind the other on the engine's reader
+/// pool, which doesn't exist until M6. Fusion correctness doesn't depend
+/// on query order, so this defers threading to when that pool lands.
+pub fn hybrid_search(
+    conn: &Connection,
+    embedder: &dyn TextEmbedder,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SearchHit>> {
+    if query.trim().is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let fts_hits = fts::search_fts(conn, query, FTS_FETCH_LIMIT)?;
+    let query_embedding = embedder.embed_query(query)?;
+    let vector_hits = vector::search_vector_text(conn, &query_embedding, VECTOR_FETCH_LIMIT)?;
+
+    Ok(rank_and_boost(query, &fts_hits, &vector_hits, limit))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! `magi-cli eval`: indexes a corpus and reports recall@5, recall@10, and
 //! MRR for FTS-only, vector-only, and hybrid search against a
-//! `queries.jsonl` file, broken down by `lang` (SPEC.md §7 M3).
+//! `queries.jsonl` file, broken down by `lang` bucket (SPEC.md §7 M3).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -118,24 +118,29 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         let mut by_lang: BTreeMap<String, Accum> = BTreeMap::new();
 
         for q in &queries {
-            let hit_paths: Vec<String> = match mode {
-                "fts" => search_fts(&conn, &q.query, FETCH_LIMIT)?
-                    .into_iter()
-                    .map(|h| relative_slash_path(&h.path, &root.path))
-                    .collect(),
+            // All three modes go through `rank_and_boost`, so the
+            // baselines are the same ranking function as hybrid with one
+            // input list emptied — not a different one. Comparing raw
+            // `search_vector_text` (no boosts) against boosted hybrid is
+            // what made the old M3 item-4 numbers uninterpretable; see
+            // docs/eval.md.
+            let hits = match mode {
+                "fts" => {
+                    let fts = search_fts(&conn, &q.query, search::FTS_FETCH_LIMIT)?;
+                    search::rank_and_boost(&q.query, &fts, &[], FETCH_LIMIT)
+                }
                 "vector" => {
                     let embedding = embedder.embed_query(&q.query)?;
-                    search_vector_text(&conn, &embedding, FETCH_LIMIT)?
-                        .into_iter()
-                        .map(|h| relative_slash_path(&h.path, &root.path))
-                        .collect()
+                    let vector = search_vector_text(&conn, &embedding, search::VECTOR_FETCH_LIMIT)?;
+                    search::rank_and_boost(&q.query, &[], &vector, FETCH_LIMIT)
                 }
-                "hybrid" => search::hybrid_search(&conn, embedder.as_ref(), &q.query, FETCH_LIMIT)?
-                    .into_iter()
-                    .map(|h| relative_slash_path(&h.path, &root.path))
-                    .collect(),
+                "hybrid" => search::hybrid_search(&conn, embedder.as_ref(), &q.query, FETCH_LIMIT)?,
                 _ => unreachable!(),
             };
+            let hit_paths: Vec<String> = hits
+                .into_iter()
+                .map(|h| relative_slash_path(&h.path, &root.path))
+                .collect();
 
             let rank = first_match_rank(&hit_paths, &q.expected);
             overall.add(rank);
