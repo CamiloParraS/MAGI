@@ -64,7 +64,14 @@ fn chunk_by_token_counter(text: &str, count_tokens: impl Fn(&str) -> usize) -> V
         return Vec::new();
     }
     let units = split_units_preserving_whitespace(text);
-    let unit_tokens: Vec<usize> = units.iter().map(|u| count_tokens(u).max(1)).collect();
+    // Memoized per distinct unit: a document has far fewer distinct words
+    // than words (a 15 MB file measured ~5,700 chunks and millions of
+    // words), and `count_tokens` is a real tokenizer call.
+    let mut counted: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let unit_tokens: Vec<usize> = units
+        .iter()
+        .map(|u| *counted.entry(u).or_insert_with(|| count_tokens(u).max(1)))
+        .collect();
 
     let mut chunks = Vec::new();
     let mut start = 0;

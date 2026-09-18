@@ -6,14 +6,7 @@ use rusqlite::{Connection, params};
 
 use crate::embed::embedding_to_json;
 use crate::error::Result;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct VectorHit {
-    pub file_id: i64,
-    pub path: PathBuf,
-    pub snippet: String,
-    pub distance: f64,
-}
+use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
 /// Runs a `vec_text` KNN search and returns up to `limit` files, closest
 /// first, deduplicated so each file appears once at its best-matching
@@ -28,18 +21,18 @@ pub fn search_vector_text(
     conn: &Connection,
     query_embedding: &[f32],
     limit: u32,
-) -> Result<Vec<VectorHit>> {
+) -> Result<Vec<FileHit>> {
     if query_embedding.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let fetch_limit = (limit as i64).saturating_mul(5).max(50);
     let mut stmt = conn.prepare(
         "WITH knn_matches AS (
             SELECT chunk_id, distance
             FROM vec_text
             WHERE embedding MATCH vec_f32(?1) AND k = ?2
          )
-         SELECT f.id, f.path, substr(c.text, 1, 200), knn_matches.distance, knn_matches.chunk_id
+         SELECT f.id, f.path, f.file_name, f.mtime_ns, substr(c.text, 1, 200),
+                knn_matches.distance, knn_matches.chunk_id
          FROM knn_matches
          JOIN chunks c ON c.id = knn_matches.chunk_id
          JOIN files f ON f.id = c.file_id
@@ -48,41 +41,36 @@ pub fn search_vector_text(
     // vec0 KNN queries only permit a single-column `ORDER BY distance` in
     // the statement (sqlite-vec rejects a compound ORDER BY here, even in
     // the outer SELECT over the CTE), so the `chunk_id` tie-break has to
-    // happen in Rust instead of SQL. `chunk_id` is fetched alongside the
-    // score purely to break exact distance ties deterministically.
+    // happen in Rust instead of SQL. Distance and `chunk_id` are read
+    // purely as sort keys and don't outlive this function.
     let mut rows = stmt
         .query_map(
-            params![embedding_to_json(query_embedding), fetch_limit],
+            params![embedding_to_json(query_embedding), chunk_fetch_limit(limit)],
             |row| {
                 Ok((
-                    VectorHit {
+                    FileHit {
                         file_id: row.get(0)?,
                         path: PathBuf::from(row.get::<_, String>(1)?),
-                        snippet: row.get(2)?,
-                        distance: row.get(3)?,
+                        file_name: row.get(2)?,
+                        mtime_ns: row.get(3)?,
+                        snippet: row.get(4)?,
                     },
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             },
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    rows.sort_by(|(a, a_chunk_id), (b, b_chunk_id)| {
-        a.distance
-            .total_cmp(&b.distance)
+    rows.sort_by(|(_, a_distance, a_chunk_id), (_, b_distance, b_chunk_id)| {
+        a_distance
+            .total_cmp(b_distance)
             .then_with(|| a_chunk_id.cmp(b_chunk_id))
     });
 
-    let mut seen = std::collections::HashSet::new();
-    let mut hits = Vec::new();
-    for (hit, _chunk_id) in rows {
-        if seen.insert(hit.file_id) {
-            hits.push(hit);
-            if hits.len() == limit as usize {
-                break;
-            }
-        }
-    }
-    Ok(hits)
+    Ok(first_hit_per_file(
+        rows.into_iter().map(|(hit, _, _)| hit),
+        limit,
+    ))
 }
 
 #[cfg(test)]
@@ -120,7 +108,7 @@ mod tests {
             seen_scan_id: 1,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
-        let embeddings = FakeEmbedder.embed_passages(&[body.to_string()]).unwrap();
+        let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
         upsert_file(conn, &record, &chunks, &embeddings).unwrap();
     }
 
@@ -179,7 +167,7 @@ mod tests {
             RawChunk::body("apple cherry".to_string()),
         ];
         let embeddings = FakeEmbedder
-            .embed_passages(&chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>())
+            .embed_passages(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())
             .unwrap();
         upsert_file(&mut conn, &record, &chunks, &embeddings).unwrap();
 
@@ -204,7 +192,9 @@ mod tests {
         for _ in 0..5 {
             let hits = search_vector_text(&conn, &query, 10).unwrap();
             assert_eq!(hits.len(), 2);
-            assert_eq!(hits[0].distance, hits[1].distance, "expected an exact tie");
+            // Identical bodies produce identical vectors, so the two
+            // distances tie exactly by construction; only the `chunk_id`
+            // tie-break decides this order.
             assert_eq!(hits[0].path, PathBuf::from("/roots/a/first.txt"));
             assert_eq!(hits[1].path, PathBuf::from("/roots/a/second.txt"));
         }

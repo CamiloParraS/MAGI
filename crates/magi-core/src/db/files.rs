@@ -43,12 +43,21 @@ pub fn upsert_file(
     chunks: &[RawChunk],
     embeddings: &[Vec<f32>],
 ) -> Result<i64> {
-    debug_assert_eq!(chunks.len(), embeddings.len());
+    if chunks.len() != embeddings.len() {
+        // `zip` below would silently drop the excess, i.e. lose chunks
+        // from the index with no error anywhere.
+        return Err(crate::error::Error::Model(format!(
+            "embedder returned {} embeddings for {}'s {} chunks",
+            embeddings.len(),
+            record.path.display(),
+            chunks.len(),
+        )));
+    }
     let tx = conn.transaction()?;
     let path_str = record.path.to_string_lossy();
     let rel_path_str = record.rel_path.to_string_lossy();
 
-    tx.execute(
+    let file_id: i64 = tx.query_row(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
             lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at
@@ -66,7 +75,8 @@ pub fn upsert_file(
             skip_reason = excluded.skip_reason,
             error = excluded.error,
             seen_scan_id = excluded.seen_scan_id,
-            indexed_at = unixepoch()",
+            indexed_at = unixepoch()
+         RETURNING id",
         params![
             record.root_id,
             path_str,
@@ -82,11 +92,6 @@ pub fn upsert_file(
             record.error,
             record.seen_scan_id,
         ],
-    )?;
-
-    let file_id: i64 = tx.query_row(
-        "SELECT id FROM files WHERE path = ?1",
-        params![path_str],
         |row| row.get(0),
     )?;
 
@@ -95,33 +100,33 @@ pub fn upsert_file(
         params![file_id],
     )?;
     tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
-    for (ordinal, (chunk, embedding)) in chunks.iter().zip(embeddings).enumerate() {
-        tx.execute(
+    // Prepared once, not per chunk: a single large file can carry
+    // thousands. `RETURNING id` avoids a follow-up SELECT — and avoids
+    // `tx.last_insert_rowid()`, which the `chunks_ai` trigger's own INSERT
+    // into `chunks_fts` would shadow.
+    {
+        let mut insert_chunk = tx.prepare(
             "INSERT INTO chunks (file_id, ordinal, source, text, page, line_start, line_end)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                file_id,
-                ordinal as i64,
-                chunk.source.as_str(),
-                chunk.text,
-                chunk.page,
-                chunk.line_start,
-                chunk.line_end,
-            ],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             RETURNING id",
         )?;
-        // Not `tx.last_insert_rowid()`: the `chunks_ai` trigger's own
-        // INSERT into `chunks_fts` runs synchronously first and would
-        // shadow it. `ordinal` is unique per file, so look the row back up
-        // by it (same pattern as `file_id` above).
-        let chunk_id: i64 = tx.query_row(
-            "SELECT id FROM chunks WHERE file_id = ?1 AND ordinal = ?2",
-            params![file_id, ordinal as i64],
-            |row| row.get(0),
-        )?;
-        tx.execute(
-            "INSERT INTO vec_text (chunk_id, embedding) VALUES (?1, vec_f32(?2))",
-            params![chunk_id, embedding_to_json(embedding)],
-        )?;
+        let mut insert_vector =
+            tx.prepare("INSERT INTO vec_text (chunk_id, embedding) VALUES (?1, vec_f32(?2))")?;
+        for (ordinal, (chunk, embedding)) in chunks.iter().zip(embeddings).enumerate() {
+            let chunk_id: i64 = insert_chunk.query_row(
+                params![
+                    file_id,
+                    ordinal as i64,
+                    chunk.source.as_str(),
+                    chunk.text,
+                    chunk.page,
+                    chunk.line_start,
+                    chunk.line_end,
+                ],
+                |row| row.get(0),
+            )?;
+            insert_vector.execute(params![chunk_id, embedding_to_json(embedding)])?;
+        }
     }
 
     tx.commit()?;
@@ -181,7 +186,7 @@ mod tests {
     }
 
     fn fake_embeddings(chunks: &[RawChunk]) -> Vec<Vec<f32>> {
-        let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         FakeEmbedder.embed_passages(&texts).unwrap()
     }
 
@@ -372,5 +377,27 @@ mod tests {
             vec_rows, 2,
             "stale vectors from the first version must be gone"
         );
+    }
+
+    #[test]
+    fn fewer_embeddings_than_chunks_is_an_error_not_a_silent_truncation() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let chunks = vec![
+            RawChunk::body("one".to_string()),
+            RawChunk::body("two".to_string()),
+        ];
+
+        let err = upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            &fake_embeddings(&chunks[..1]),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, crate::error::Error::Model(_)), "got {err:?}");
+        assert_eq!(count_chunks(&conn).unwrap(), 0, "nothing partially written");
     }
 }

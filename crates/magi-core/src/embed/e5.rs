@@ -16,6 +16,12 @@ use crate::error::{Error, Result};
 const MODEL_ID: &str = "intfloat/multilingual-e5-small";
 const QUERY_PREFIX: &str = "query: ";
 const PASSAGE_PREFIX: &str = "passage: ";
+/// Chunks per inference call. A file's chunk count is unbounded (a 15 MB
+/// text file yields ~5,700 chunks), and ONNX Runtime materializes a
+/// `batch x seq_len x 384` f32 `last_hidden_state` for the whole batch —
+/// ~4.5 GB at that size. Capping the batch keeps that intermediate at a
+/// few MB regardless of file size (SPEC.md §5.3: "small batches").
+const BATCH_CHUNKS: usize = 16;
 
 /// Real `intfloat/multilingual-e5-small` embedder: `tokenizers` for
 /// encoding (with the `"query: "`/`"passage: "` prefixes SPEC.md §3
@@ -122,7 +128,7 @@ impl E5Embedder {
         }
         let encodings = self
             .tokenizer
-            .encode_batch(texts.to_vec(), true)
+            .encode_batch(texts.iter().map(String::as_str).collect(), true)
             .map_err(|e| Error::Model(format!("tokenizing: {e}")))?;
 
         let batch = encodings.len();
@@ -201,21 +207,24 @@ impl TextEmbedder for E5Embedder {
         TEXT_EMBEDDING_DIM
     }
 
-    fn embed_passages(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let prefixed: Vec<String> = texts
-            .iter()
-            .map(|t| format!("{PASSAGE_PREFIX}{t}"))
-            .collect();
-        self.embed(&prefixed)
+    fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut out = Vec::with_capacity(texts.len());
+        for batch in texts.chunks(BATCH_CHUNKS) {
+            let prefixed: Vec<String> = batch
+                .iter()
+                .map(|t| format!("{PASSAGE_PREFIX}{t}"))
+                .collect();
+            out.extend(self.embed(&prefixed)?);
+        }
+        Ok(out)
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         let prefixed = format!("{QUERY_PREFIX}{text}");
-        Ok(self
-            .embed(&[prefixed])?
+        self.embed(&[prefixed])?
             .into_iter()
             .next()
-            .unwrap_or_default())
+            .ok_or_else(|| Error::Model("embedding a query produced no vector".to_string()))
     }
 }
 
@@ -252,8 +261,8 @@ mod tests {
 
         let passages = embedder
             .embed_passages(&[
-                "Factura de electricista: reparación del panel eléctrico.".to_string(),
-                "Receta de arepas con queso.".to_string(),
+                "Factura de electricista: reparación del panel eléctrico.",
+                "Receta de arepas con queso.",
             ])
             .unwrap();
         assert_eq!(passages.len(), 2);
@@ -266,6 +275,31 @@ mod tests {
             sim_invoice > sim_recipe,
             "expected invoice ({sim_invoice}) closer than recipe ({sim_recipe})"
         );
+    }
+
+    /// More passages than `BATCH_CHUNKS`, so the batching loop runs more
+    /// than once: every input must still get its own vector, in the same
+    /// order. The bar is 0.99, not equality — `BatchLongest` padding plus
+    /// int8 kernels make a vector depend slightly on what it was batched
+    /// with (measured worst case 0.9956, the same band as int8-vs-fp32
+    /// parity). A mis-split or mis-ordered batch would land near 0.5, so
+    /// 0.99 still catches the failure this test exists for.
+    #[test]
+    #[ignore = "requires `just models` and `cargo xtask fetch-onnxruntime`"]
+    fn batched_passages_match_one_at_a_time() {
+        let embedder = E5Embedder::load().expect("load real model");
+        let texts: Vec<String> = (0..BATCH_CHUNKS + 4)
+            .map(|i| format!("chunk number {i} of the electrician invoice"))
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+
+        let batched = embedder.embed_passages(&refs).unwrap();
+        assert_eq!(batched.len(), refs.len());
+        for (i, text) in refs.iter().enumerate() {
+            let alone = embedder.embed_passages(&[text]).unwrap();
+            let c = cosine(&batched[i], &alone[0]);
+            assert!(c > 0.99, "batch position {i} diverged: cosine {c}");
+        }
     }
 
     #[test]

@@ -57,7 +57,7 @@ fn rust_e5_matches_python_reference_within_tolerance() {
         let ours = match entry.prefix.as_str() {
             "query" => embedder.embed_query(&entry.text).unwrap(),
             "passage" => embedder
-                .embed_passages(std::slice::from_ref(&entry.text))
+                .embed_passages(&[entry.text.as_str()])
                 .unwrap()
                 .into_iter()
                 .next()

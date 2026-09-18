@@ -50,7 +50,9 @@ pub trait TextEmbedder: Send + Sync {
     fn model_id(&self) -> &str;
     fn dim(&self) -> usize;
     /// Embeds chunk texts for storage. One vector per input, same order.
-    fn embed_passages(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    /// Takes `&str` so callers never have to copy a file's text just to
+    /// hand it over.
+    fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     /// Embeds a single search query.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
 }
@@ -105,7 +107,7 @@ impl TextEmbedder for FakeEmbedder {
         TEXT_EMBEDDING_DIM
     }
 
-    fn embed_passages(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|t| Self::hash_text(t)).collect())
     }
 
@@ -172,8 +174,7 @@ mod tests {
     #[test]
     fn fake_embedder_embeds_passages_in_order() {
         let e = FakeEmbedder;
-        let texts = vec!["alpha".to_string(), "beta".to_string()];
-        let out = e.embed_passages(&texts).unwrap();
+        let out = e.embed_passages(&["alpha", "beta"]).unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], e.embed_query("alpha").unwrap());
         assert_eq!(out[1], e.embed_query("beta").unwrap());

@@ -94,7 +94,7 @@ pub fn index_root(
         let mut chunks = outcome.chunks;
         chunks.push(filename_chunk(rel_path));
 
-        let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         let embeddings = embedder.embed_passages(&texts)?;
 
         let record = FileRecord {
@@ -316,6 +316,19 @@ mod tests {
         (db_dir, root_dir, conn, root.id)
     }
 
+    /// `index_root` with the defaults every test but two uses.
+    fn index_fake(conn: &mut Connection, root_id: i64, root_path: &Path) -> IndexSummary {
+        index_root(
+            conn,
+            root_id,
+            root_path,
+            &default_options(),
+            1,
+            &FakeEmbedder,
+        )
+        .unwrap()
+    }
+
     fn default_options() -> IndexRootOptions {
         IndexRootOptions {
             exclude_globs: vec![glob::Pattern::new("**/node_modules/**").unwrap()],
@@ -340,15 +353,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 2);
         assert_eq!(summary.skipped, 0);
@@ -366,15 +371,7 @@ mod tests {
         let huge = "a".repeat(2 * 1024 * 1024); // 2 MB > 1 MB cap
         fs::write(root_path.join("huge.txt"), huge).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.skipped, 1);
         let row = db::files::get_by_path(&conn, &root_path.join("huge.txt"))
@@ -390,15 +387,7 @@ mod tests {
         let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root_path.join("empty.txt"), "").unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 1);
         let hits = crate::search::fts::search_fts(&conn, "empty", 10).unwrap();
@@ -411,15 +400,7 @@ mod tests {
         let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root_path.join("archive.zip"), b"PK\x03\x04").unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 1);
         let row = db::files::get_by_path(&conn, &root_path.join("archive.zip"))
@@ -439,15 +420,7 @@ mod tests {
         fs::write(root_path.join("node_modules/pkg.js"), "ignored").unwrap();
         fs::write(root_path.join("keep.txt"), "keep me").unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 1);
         assert_eq!(db::files::count_files(&conn).unwrap(), 1);
@@ -460,15 +433,7 @@ mod tests {
         fs::write(root_path.join("a.txt"), "alpha content").unwrap();
         fs::write(root_path.join("b.txt"), "beta content").unwrap();
 
-        index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        index_fake(&mut conn, root_id, &root_path);
         let first_count = db::files::count_files(&conn).unwrap();
         index_root(
             &mut conn,
@@ -493,15 +458,7 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/corpus/pdf/report.pdf");
         fs::copy(&fixture, root_path.join("report.pdf")).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         let row = db::files::get_by_path(&conn, &root_path.join("report.pdf"))
             .unwrap()
@@ -523,15 +480,7 @@ mod tests {
             .join("../../fixtures/corpus/edge/password_protected.pdf");
         fs::copy(&fixture, root_path.join("password_protected.pdf")).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.errored, 1);
         let row = db::files::get_by_path(&conn, &root_path.join("password_protected.pdf"))
@@ -560,15 +509,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 3);
         for name in ["notes.docx", "kickoff.pptx", "inventory.xlsx"] {
@@ -614,15 +555,7 @@ mod tests {
         assert_eq!(fs::metadata(&fixture).unwrap().len(), 0);
         fs::copy(&fixture, root_path.join("empty_real.gitignore")).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 1);
         let row = db::files::get_by_path(&conn, &root_path.join("empty_real.gitignore"))
@@ -641,15 +574,7 @@ mod tests {
         fs::copy(&fixture, root_path.join("huge_real.pdf")).unwrap();
 
         // default_options() caps at 1 MB; huge_real.pdf is ~1.4 MB.
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.skipped, 1);
         let row = db::files::get_by_path(&conn, &root_path.join("huge_real.pdf"))
@@ -678,15 +603,7 @@ mod tests {
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::copy(fixture_root.join(rel), &dest).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 1);
         let row = db::files::get_by_path(&conn, &dest).unwrap().unwrap();
@@ -708,15 +625,7 @@ mod tests {
         fs::copy(code_dir.join("sample.rs"), root_path.join("sample.rs")).unwrap();
         fs::copy(code_dir.join("muestra.py"), root_path.join("muestra.py")).unwrap();
 
-        let summary = index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        let summary = index_fake(&mut conn, root_id, &root_path);
 
         assert_eq!(summary.indexed, 2);
         for name in ["sample.rs", "muestra.py"] {
@@ -747,15 +656,7 @@ mod tests {
         let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root_path.join("a.txt"), "hello there").unwrap();
 
-        index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        index_fake(&mut conn, root_id, &root_path);
 
         let chunk_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
@@ -786,7 +687,7 @@ mod tests {
             FakeEmbedder.dim()
         }
 
-        fn embed_passages(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
             FakeEmbedder.embed_passages(texts)
         }
 
@@ -801,15 +702,7 @@ mod tests {
         let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root_path.join("a.txt"), "hello there").unwrap();
 
-        index_root(
-            &mut conn,
-            root_id,
-            &root_path,
-            &default_options(),
-            1,
-            &FakeEmbedder,
-        )
-        .unwrap();
+        index_fake(&mut conn, root_id, &root_path);
         assert_eq!(
             crate::db::meta::get(&conn, "text_model_id").unwrap(),
             Some(FakeEmbedder.model_id().to_string())

@@ -5,9 +5,10 @@ pub mod fts;
 pub mod fuse;
 pub mod vector;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 
 use crate::embed::TextEmbedder;
 use crate::error::Result;
@@ -25,26 +26,41 @@ pub struct SearchHit {
     pub match_sources: Vec<&'static str>,
 }
 
-struct FileMeta {
-    path: PathBuf,
-    file_name: String,
-    mtime_ns: i64,
+/// One file's best-matching chunk from a single ranked source. Both
+/// [`fts::search_fts`] and [`vector::search_vector_text`] return these with
+/// the file's metadata already joined in, so `hybrid_search` never has to
+/// go back to the database per result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileHit {
+    pub file_id: i64,
+    pub path: PathBuf,
+    pub file_name: String,
+    pub mtime_ns: i64,
+    pub snippet: String,
 }
 
-fn file_meta(conn: &Connection, file_id: i64) -> Result<Option<FileMeta>> {
-    conn.query_row(
-        "SELECT path, file_name, mtime_ns FROM files WHERE id = ?1",
-        params![file_id],
-        |row| {
-            Ok(FileMeta {
-                path: PathBuf::from(row.get::<_, String>(0)?),
-                file_name: row.get(1)?,
-                mtime_ns: row.get(2)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(crate::error::Error::Db)
+/// How many chunk rows to read before per-file dedup: one file can
+/// contribute several matching chunks.
+pub(crate) fn chunk_fetch_limit(limit: u32) -> i64 {
+    (limit as i64).saturating_mul(5).max(50)
+}
+
+/// Keeps each file's first hit, in the given order, up to `limit` files.
+pub(crate) fn first_hit_per_file(
+    rows: impl IntoIterator<Item = FileHit>,
+    limit: u32,
+) -> Vec<FileHit> {
+    let mut seen = std::collections::HashSet::new();
+    let mut hits = Vec::new();
+    for hit in rows {
+        if seen.insert(hit.file_id) {
+            hits.push(hit);
+            if hits.len() == limit as usize {
+                break;
+            }
+        }
+    }
+    hits
 }
 
 fn now_unix() -> i64 {
@@ -97,35 +113,40 @@ pub fn hybrid_search(
         .collect();
     let now = now_unix();
 
-    let mut hits = Vec::new();
-    for (file_id, base_score) in fused {
-        let Some(meta) = file_meta(conn, file_id)? else {
-            continue; // file removed between the two queries and here
-        };
-        let boost = filename_boost(&query_tokens, &meta.file_name)
-            * recency_boost(meta.mtime_ns / 1_000_000_000, now);
-
-        let mut match_sources = Vec::new();
-        let mut snippet = String::new();
-        if let Some(h) = fts_hits.iter().find(|h| h.file_id == file_id) {
-            match_sources.push("keyword");
-            snippet = h.snippet.clone();
-        }
-        if let Some(h) = vector_hits.iter().find(|h| h.file_id == file_id) {
-            match_sources.push("semantic");
-            if snippet.is_empty() {
-                snippet = h.snippet.clone();
-            }
-        }
-
-        hits.push(SearchHit {
-            file_id,
-            path: meta.path,
-            score: base_score * boost,
-            snippet,
-            match_sources,
-        });
+    let mut by_id: HashMap<i64, (Option<&FileHit>, Option<&FileHit>)> = HashMap::new();
+    for hit in &fts_hits {
+        by_id.entry(hit.file_id).or_default().0 = Some(hit);
     }
+    for hit in &vector_hits {
+        by_id.entry(hit.file_id).or_default().1 = Some(hit);
+    }
+
+    // `fused`'s ids are the union of the two lists, so every lookup here
+    // resolves. Preferring the FTS side keeps the snippet that carries the
+    // `[...]` match highlights.
+    let mut hits: Vec<SearchHit> = fused
+        .into_iter()
+        .filter_map(|(file_id, base_score)| {
+            let (fts, vector) = by_id.get(&file_id)?;
+            let hit = fts.or(*vector)?;
+            let boost = filename_boost(&query_tokens, &hit.file_name)
+                * recency_boost(hit.mtime_ns / 1_000_000_000, now);
+            let mut match_sources = Vec::new();
+            if fts.is_some() {
+                match_sources.push("keyword");
+            }
+            if vector.is_some() {
+                match_sources.push("semantic");
+            }
+            Some(SearchHit {
+                file_id,
+                path: hit.path.clone(),
+                score: base_score * boost,
+                snippet: hit.snippet.clone(),
+                match_sources,
+            })
+        })
+        .collect();
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -171,7 +192,7 @@ mod tests {
             seen_scan_id: 1,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
-        let embeddings = FakeEmbedder.embed_passages(&[body.to_string()]).unwrap();
+        let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
         upsert_file(conn, &record, &chunks, &embeddings).unwrap();
     }
 
