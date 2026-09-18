@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 
+use crate::embed::embedding_to_json;
 use crate::error::Result;
 use crate::extract::RawChunk;
 
@@ -25,17 +26,38 @@ pub struct FileRecord<'a> {
     pub seen_scan_id: i64,
 }
 
-/// Inserts or replaces `record` and its `chunks` in one transaction: the
-/// file row is upserted keyed on its unique `path`, and any previous
-/// chunks for that file are deleted before the new ones are inserted (so
-/// re-indexing the same file is idempotent rather than accumulating
-/// duplicate chunks).
-pub fn upsert_file(conn: &mut Connection, record: &FileRecord, chunks: &[RawChunk]) -> Result<i64> {
+/// Inserts or replaces `record`, its `chunks`, and their `vec_text`
+/// embeddings in one transaction: the file row is upserted keyed on its
+/// unique `path`, and any previous chunks/vectors for that file are
+/// deleted before the new ones are inserted (idempotent re-indexing).
+/// `embeddings[i]` is the vector for `chunks[i]` — same length, same order.
+///
+/// Deletes `vec_text` rows before `chunks` (not after): the delete uses a
+/// subquery over `chunks` to find which `vec_text` rows belong to this
+/// file, so it must run while those `chunks` rows still exist (SPEC.md
+/// §5.5: "Deletions MUST explicitly delete `vec_*` rows ... in the same
+/// transaction" — virtual tables aren't covered by `FOREIGN KEY` cascades).
+pub fn upsert_file(
+    conn: &mut Connection,
+    record: &FileRecord,
+    chunks: &[RawChunk],
+    embeddings: &[Vec<f32>],
+) -> Result<i64> {
+    if chunks.len() != embeddings.len() {
+        // `zip` below would silently drop the excess, i.e. lose chunks
+        // from the index with no error anywhere.
+        return Err(crate::error::Error::Model(format!(
+            "embedder returned {} embeddings for {}'s {} chunks",
+            embeddings.len(),
+            record.path.display(),
+            chunks.len(),
+        )));
+    }
     let tx = conn.transaction()?;
     let path_str = record.path.to_string_lossy();
     let rel_path_str = record.rel_path.to_string_lossy();
 
-    tx.execute(
+    let file_id: i64 = tx.query_row(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
             lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at
@@ -53,7 +75,8 @@ pub fn upsert_file(conn: &mut Connection, record: &FileRecord, chunks: &[RawChun
             skip_reason = excluded.skip_reason,
             error = excluded.error,
             seen_scan_id = excluded.seen_scan_id,
-            indexed_at = unixepoch()",
+            indexed_at = unixepoch()
+         RETURNING id",
         params![
             record.root_id,
             path_str,
@@ -69,29 +92,41 @@ pub fn upsert_file(conn: &mut Connection, record: &FileRecord, chunks: &[RawChun
             record.error,
             record.seen_scan_id,
         ],
-    )?;
-
-    let file_id: i64 = tx.query_row(
-        "SELECT id FROM files WHERE path = ?1",
-        params![path_str],
         |row| row.get(0),
     )?;
 
+    tx.execute(
+        "DELETE FROM vec_text WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id = ?1)",
+        params![file_id],
+    )?;
     tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
-    for (ordinal, chunk) in chunks.iter().enumerate() {
-        tx.execute(
+    // Prepared once, not per chunk: a single large file can carry
+    // thousands. `RETURNING id` avoids a follow-up SELECT — and avoids
+    // `tx.last_insert_rowid()`, which the `chunks_ai` trigger's own INSERT
+    // into `chunks_fts` would shadow.
+    {
+        let mut insert_chunk = tx.prepare(
             "INSERT INTO chunks (file_id, ordinal, source, text, page, line_start, line_end)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                file_id,
-                ordinal as i64,
-                chunk.source.as_str(),
-                chunk.text,
-                chunk.page,
-                chunk.line_start,
-                chunk.line_end,
-            ],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             RETURNING id",
         )?;
+        let mut insert_vector =
+            tx.prepare("INSERT INTO vec_text (chunk_id, embedding) VALUES (?1, vec_f32(?2))")?;
+        for (ordinal, (chunk, embedding)) in chunks.iter().zip(embeddings).enumerate() {
+            let chunk_id: i64 = insert_chunk.query_row(
+                params![
+                    file_id,
+                    ordinal as i64,
+                    chunk.source.as_str(),
+                    chunk.text,
+                    chunk.page,
+                    chunk.line_start,
+                    chunk.line_end,
+                ],
+                |row| row.get(0),
+            )?;
+            insert_vector.execute(params![chunk_id, embedding_to_json(embedding)])?;
+        }
     }
 
     tx.commit()?;
@@ -139,6 +174,7 @@ pub fn count_chunks(conn: &Connection) -> Result<i64> {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::embed::{FakeEmbedder, TextEmbedder};
     use crate::extract::ChunkSource;
 
     fn open_test_db() -> (tempfile::TempDir, Connection) {
@@ -147,6 +183,11 @@ mod tests {
         let root_dir = tempfile::tempdir().unwrap();
         db::roots::add(&conn, root_dir.path()).unwrap();
         (dir, conn)
+    }
+
+    fn fake_embeddings(chunks: &[RawChunk]) -> Vec<Vec<f32>> {
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        FakeEmbedder.embed_passages(&texts).unwrap()
     }
 
     fn sample_record<'a>(path: &'a Path, rel_path: &'a Path) -> FileRecord<'a> {
@@ -174,7 +215,13 @@ mod tests {
         let rel = PathBuf::from("notes.txt");
         let chunks = vec![RawChunk::body("hello world".to_string())];
 
-        let file_id = upsert_file(&mut conn, &sample_record(&path, &rel), &chunks).unwrap();
+        let file_id = upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            &fake_embeddings(&chunks),
+        )
+        .unwrap();
 
         assert_eq!(count_files(&conn).unwrap(), 1);
         assert_eq!(count_chunks(&conn).unwrap(), 1);
@@ -199,19 +246,23 @@ mod tests {
         let path = PathBuf::from("/roots/a/notes.txt");
         let rel = PathBuf::from("notes.txt");
 
+        let first_chunks = vec![RawChunk::body("version one".to_string())];
         let first_id = upsert_file(
             &mut conn,
             &sample_record(&path, &rel),
-            &[RawChunk::body("version one".to_string())],
+            &first_chunks,
+            &fake_embeddings(&first_chunks),
         )
         .unwrap();
+        let second_chunks = vec![
+            RawChunk::body("version two".to_string()),
+            RawChunk::body("more text".to_string()),
+        ];
         let second_id = upsert_file(
             &mut conn,
             &sample_record(&path, &rel),
-            &[
-                RawChunk::body("version two".to_string()),
-                RawChunk::body("more text".to_string()),
-            ],
+            &second_chunks,
+            &fake_embeddings(&second_chunks),
         )
         .unwrap();
 
@@ -238,7 +289,7 @@ mod tests {
         record.state = "skipped";
         record.skip_reason = Some("too_large");
 
-        upsert_file(&mut conn, &record, &[]).unwrap();
+        upsert_file(&mut conn, &record, &[], &[]).unwrap();
 
         let row = get_by_path(&conn, &path).unwrap().unwrap();
         assert_eq!(row.state, "skipped");
@@ -258,11 +309,95 @@ mod tests {
             line_end: None,
         };
 
-        upsert_file(&mut conn, &sample_record(&path, &rel), &[chunk]).unwrap();
+        let chunks = [chunk];
+        upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            &fake_embeddings(&chunks),
+        )
+        .unwrap();
 
         let source: String = conn
             .query_row("SELECT source FROM chunks LIMIT 1", [], |row| row.get(0))
             .unwrap();
         assert_eq!(source, "filename");
+    }
+
+    #[test]
+    fn upsert_file_writes_one_vec_text_row_per_chunk() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let chunks = vec![
+            RawChunk::body("apple banana".to_string()),
+            RawChunk::body("cherry date".to_string()),
+        ];
+        let embeddings = fake_embeddings(&chunks);
+
+        upsert_file(&mut conn, &sample_record(&path, &rel), &chunks, &embeddings).unwrap();
+
+        let vec_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vec_text", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(vec_rows, 2);
+    }
+
+    #[test]
+    fn reindexing_replaces_vec_text_rows_without_duplicating() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+
+        let first_chunks = vec![RawChunk::body("version one".to_string())];
+        upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &first_chunks,
+            &fake_embeddings(&first_chunks),
+        )
+        .unwrap();
+
+        let second_chunks = vec![
+            RawChunk::body("version two".to_string()),
+            RawChunk::body("more text".to_string()),
+        ];
+        upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &second_chunks,
+            &fake_embeddings(&second_chunks),
+        )
+        .unwrap();
+
+        let vec_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vec_text", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            vec_rows, 2,
+            "stale vectors from the first version must be gone"
+        );
+    }
+
+    #[test]
+    fn fewer_embeddings_than_chunks_is_an_error_not_a_silent_truncation() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let chunks = vec![
+            RawChunk::body("one".to_string()),
+            RawChunk::body("two".to_string()),
+        ];
+
+        let err = upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            &fake_embeddings(&chunks[..1]),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, crate::error::Error::Model(_)), "got {err:?}");
+        assert_eq!(count_chunks(&conn).unwrap(), 0, "nothing partially written");
     }
 }

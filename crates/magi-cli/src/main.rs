@@ -1,9 +1,12 @@
 //! magi-cli: dev/test CLI (doctor, roots, index, daemon, search, eval — added
 //! milestone by milestone; see SPEC.md §7).
 
+mod eval;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
 use magi_core::index::pipeline::{IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
 use magi_core::{config, db, paths};
@@ -34,6 +37,13 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         limit: u32,
     },
+    /// Index `--corpus` and report recall@5, recall@10, and MRR for
+    /// fts/vector/hybrid search against a queries.jsonl file.
+    Eval {
+        queries: PathBuf,
+        #[arg(long)]
+        corpus: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -54,6 +64,7 @@ fn main() -> anyhow::Result<()> {
         Command::Roots { action } => roots(action)?,
         Command::Index { root } => index_cmd(root)?,
         Command::Search { query, mode, limit } => search_cmd(&query, &mode, limit)?,
+        Command::Eval { queries, corpus } => eval::eval_cmd(queries, corpus)?,
     }
     Ok(())
 }
@@ -102,10 +113,25 @@ fn roots(action: RootsAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn embedder_from_env() -> anyhow::Result<Box<dyn TextEmbedder>> {
+    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
+        Ok(Box::new(FakeEmbedder))
+    } else {
+        Ok(Box::new(E5Embedder::load().map_err(|e| {
+            anyhow::anyhow!(
+                "loading the real text embedder failed: {e}\n\
+                 run `just models` and `cargo xtask fetch-onnxruntime` first, \
+                 or set MAGI_FAKE_EMBEDDER=1 to index/search with the fake one"
+            )
+        })?))
+    }
+}
+
 fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
     let config = config::load()?;
+    let embedder = embedder_from_env()?;
 
     let root_row = match db::roots::add(&conn, &root) {
         Ok(r) => r,
@@ -124,7 +150,14 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     let options = IndexRootOptions::from_config(&config.indexing)?;
     // ponytail: fixed scan_id since reconciliation (M5) doesn't exist yet;
     // each one-shot `index` run reuses id 1.
-    let summary = index_root(&mut conn, root_row.id, &root_row.path, &options, 1)?;
+    let summary = index_root(
+        &mut conn,
+        root_row.id,
+        &root_row.path,
+        &options,
+        1,
+        embedder.as_ref(),
+    )?;
 
     println!(
         "indexed: {}  skipped: {}  errors: {}",
@@ -134,16 +167,34 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
 }
 
 fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
-    if mode != "fts" {
-        anyhow::bail!("unsupported search mode {mode:?}; only \"fts\" is implemented until M3");
-    }
     let conn = db::open(&db_path())?;
-    let hits = search_fts(&conn, query, limit)?;
-    if hits.is_empty() {
-        println!("no results");
-    }
-    for hit in hits {
-        println!("{}\t{}", hit.path.display(), hit.snippet);
+    match mode {
+        "fts" => {
+            let hits = search_fts(&conn, query, limit)?;
+            if hits.is_empty() {
+                println!("no results");
+            }
+            for hit in hits {
+                println!("{}\t{}", hit.path.display(), hit.snippet);
+            }
+        }
+        "hybrid" => {
+            let embedder = embedder_from_env()?;
+            let hits = magi_core::search::hybrid_search(&conn, embedder.as_ref(), query, limit)?;
+            if hits.is_empty() {
+                println!("no results");
+            }
+            for hit in hits {
+                println!(
+                    "{}\t{:.4}\t{:?}\t{}",
+                    hit.path.display(),
+                    hit.score,
+                    hit.match_sources,
+                    hit.snippet
+                );
+            }
+        }
+        other => anyhow::bail!("unsupported search mode {other:?}; use \"fts\" or \"hybrid\""),
     }
     Ok(())
 }

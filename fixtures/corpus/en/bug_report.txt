@@ -1,0 +1,5 @@
+Software Bug Report
+
+The file watcher stops detecting changes after the laptop resumes from sleep.
+Steps to reproduce: put the machine to sleep, wake it up, then edit a watched file.
+Expected: the change is indexed within a few seconds. Actual: nothing happens until a manual restart.

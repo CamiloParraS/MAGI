@@ -18,6 +18,16 @@ https://github.com/bblanchon/pdfium-binaries, pinned to release
 `chromium/8044`, fetched and SHA-256-verified by `cargo xtask fetch-pdfium`
 (see `xtask/src/main.rs`).
 
+ONNX Runtime is vendored the same way: official prebuilt binaries from
+https://github.com/microsoft/onnxruntime/releases, pinned to `v1.28.0`,
+fetched and SHA-256-verified by `cargo xtask fetch-onnxruntime`. `ort`'s
+default `download-binaries` feature is deliberately disabled (it fetches a
+third-party CDN mirror at build time, outside our own manifest-controlled
+downloads and this project's "no network access beyond model downloads
+listed in `models/manifest.toml`" constraint); `ort`'s `load-dynamic`
+feature is used instead, dynamically loading the vendored library at
+runtime via `ort::init_from` (mirrors `extract::pdf`'s PDFium binding).
+
 ## Consequences
 
 - No native C/C++ dependencies beyond PDFium (vendored, not system-linked)

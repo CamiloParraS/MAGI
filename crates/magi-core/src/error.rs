@@ -52,6 +52,12 @@ pub enum Error {
 
     #[error("code parse error: {0}")]
     Code(String),
+
+    #[error("invalid model manifest: {0}")]
+    ManifestParse(String),
+
+    #[error("model error: {0}")]
+    Model(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

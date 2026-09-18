@@ -8,13 +8,7 @@ use std::path::PathBuf;
 use rusqlite::{Connection, params};
 
 use crate::error::Result;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FtsHit {
-    pub file_id: i64,
-    pub path: PathBuf,
-    pub snippet: String,
-}
+use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
 /// Escapes `query` for FTS5 by wrapping each whitespace-separated term in
 /// double quotes (doubling any embedded quotes), so user input can never
@@ -30,45 +24,35 @@ pub fn sanitize_query(query: &str) -> String {
 /// Runs an FTS5 BM25 search and returns up to `limit` files, best match
 /// first, deduplicated so each file appears once (at its best-matching
 /// chunk).
-pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<FtsHit>> {
+pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<FileHit>> {
     let sanitized = sanitize_query(query);
     if sanitized.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
 
-    // Over-fetch before per-file dedup, since one file can contribute
-    // several matching chunks.
-    let fetch_limit = (limit as i64).saturating_mul(5).max(50);
     let mut stmt = conn.prepare(
-        "SELECT f.id, f.path, snippet(chunks_fts, 0, '[', ']', '...', 10)
+        "SELECT f.id, f.path, f.file_name, f.mtime_ns,
+                snippet(chunks_fts, 0, '[', ']', '...', 10)
          FROM chunks_fts
          JOIN chunks c ON c.id = chunks_fts.rowid
          JOIN files f ON f.id = c.file_id
          WHERE chunks_fts MATCH ?1
-         ORDER BY bm25(chunks_fts)
+         ORDER BY bm25(chunks_fts), c.id
          LIMIT ?2",
     )?;
     let rows = stmt
-        .query_map(params![sanitized, fetch_limit], |row| {
-            Ok(FtsHit {
+        .query_map(params![sanitized, chunk_fetch_limit(limit)], |row| {
+            Ok(FileHit {
                 file_id: row.get(0)?,
                 path: PathBuf::from(row.get::<_, String>(1)?),
-                snippet: row.get(2)?,
+                file_name: row.get(2)?,
+                mtime_ns: row.get(3)?,
+                snippet: row.get(4)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut seen = std::collections::HashSet::new();
-    let mut hits = Vec::new();
-    for hit in rows {
-        if seen.insert(hit.file_id) {
-            hits.push(hit);
-            if hits.len() == limit as usize {
-                break;
-            }
-        }
-    }
-    Ok(hits)
+    Ok(first_hit_per_file(rows, limit))
 }
 
 #[cfg(test)]
@@ -76,6 +60,7 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::db::files::{FileRecord, upsert_file};
+    use crate::embed::{FakeEmbedder, TextEmbedder};
     use crate::extract::RawChunk;
     use std::path::Path;
 
@@ -85,6 +70,11 @@ mod tests {
         let root_dir = tempfile::tempdir().unwrap();
         db::roots::add(&conn, root_dir.path()).unwrap();
         (dir, conn)
+    }
+
+    fn fake_embeddings(chunks: &[RawChunk]) -> Vec<Vec<f32>> {
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        FakeEmbedder.embed_passages(&texts).unwrap()
     }
 
     fn index_text(conn: &mut Connection, path: &str, body: &str) {
@@ -105,7 +95,8 @@ mod tests {
             error: None,
             seen_scan_id: 1,
         };
-        upsert_file(conn, &record, &[RawChunk::body(body.to_string())]).unwrap();
+        let chunks = [RawChunk::body(body.to_string())];
+        upsert_file(conn, &record, &chunks, &fake_embeddings(&chunks)).unwrap();
     }
 
     #[test]
@@ -195,17 +186,33 @@ mod tests {
             error: None,
             seen_scan_id: 1,
         };
-        upsert_file(
-            &mut conn,
-            &record,
-            &[
-                RawChunk::body("apple banana".to_string()),
-                RawChunk::body("apple cherry".to_string()),
-            ],
-        )
-        .unwrap();
+        let chunks = [
+            RawChunk::body("apple banana".to_string()),
+            RawChunk::body("apple cherry".to_string()),
+        ];
+        upsert_file(&mut conn, &record, &chunks, &fake_embeddings(&chunks)).unwrap();
 
         let hits = search_fts(&conn, "apple", 10).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    /// Two files with byte-identical body text produce an exact BM25 tie
+    /// for the same query. Without a secondary sort key, SQLite doesn't
+    /// guarantee which one comes back first; the tie-break on `c.id`
+    /// (chunk row id) makes it deterministic — the first-inserted file
+    /// (lower chunk id) must always win, and that holds across repeated
+    /// runs of the same query.
+    #[test]
+    fn tied_bm25_score_breaks_deterministically_by_chunk_id() {
+        let (_dir, mut conn) = open_test_db();
+        index_text(&mut conn, "/roots/a/first.txt", "identical body text");
+        index_text(&mut conn, "/roots/a/second.txt", "identical body text");
+
+        for _ in 0..5 {
+            let hits = search_fts(&conn, "identical body text", 10).unwrap();
+            assert_eq!(hits.len(), 2);
+            assert_eq!(hits[0].path, PathBuf::from("/roots/a/first.txt"));
+            assert_eq!(hits[1].path, PathBuf::from("/roots/a/second.txt"));
+        }
     }
 }
