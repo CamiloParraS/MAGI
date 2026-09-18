@@ -58,3 +58,13 @@
 {"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["en/birthday_party.txt"], "notes": "cross-lingual"}
 {"query": "car maintenance oil change", "lang": "cross", "expected": ["es/mantenimiento_auto.txt"], "notes": "cross-lingual"}
 {"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["en/book_club.txt"], "notes": "cross-lingual"}
+{"query": "Calculadora sumar", "lang": "kw", "expected": ["code/muestra.py"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "saludar nombre", "lang": "kw", "expected": ["code/muestra.py"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "struct Point origin", "lang": "kw", "expected": ["code/sample.rs"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "irradiacionSolar potenciaPanel", "lang": "kw", "expected": ["edge/deep_real/Tercer Semestre/Fisica/asuntosSinImportancia/solarcalculator/solarcalculator/src/main/java/com/example/solarcalculator/model/calculateRequest.java"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "Gadget Warehouse B", "lang": "kw", "expected": ["office/inventory.xlsx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "Widget 42", "lang": "kw", "expected": ["office/inventory.xlsx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "Electricista Lopez", "lang": "kw", "expected": ["office/inventory.xlsx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "Quarterly Kickoff", "lang": "kw", "expected": ["office/kickoff.pptx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "circuit breaker grounding wire", "lang": "kw", "expected": ["en/electrician_invoice.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "five day grace period", "lang": "kw", "expected": ["en/lease_agreement.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
