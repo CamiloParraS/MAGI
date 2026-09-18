@@ -1,11 +1,14 @@
 //! Model manifest, download (with progress, `.partial` files, SHA-256
-//! verification, atomic rename), offline import, and the shared tokenizer
-//! used for token-aware chunking (SPEC.md §7 M3).
+//! verification, atomic rename), offline import, the shared tokenizer used
+//! for token-aware chunking, and [`ModelSlot`] (lazy load / idle unload)
+//! (SPEC.md §7 M3).
 
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -304,6 +307,81 @@ pub fn shared_text_tokenizer() -> Option<&'static tokenizers::Tokenizer> {
         .as_ref()
 }
 
+/// Holds a model behind lazy load / idle unload (SPEC.md §7 M3: "loads
+/// models lazily and unloads them after the idle timeout"). This type is
+/// passive — nothing here polls on its own. The owning loop calls
+/// `unload_if_idle` on its own timer tick (the embed worker's
+/// `recv_timeout` loop, once the persistent engine that owns one exists —
+/// SPEC.md §5.3/§7 M5/M7); it only holds the state and the two operations
+/// that loop needs.
+pub struct ModelSlot<T> {
+    inner: Mutex<Option<(T, Instant)>>,
+}
+
+impl<T> Default for ModelSlot<T> {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
+    }
+}
+
+impl<T> ModelSlot<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.inner.lock().is_ok_and(|g| g.is_some())
+    }
+
+    /// Returns the loaded model, loading it via `load` first if it isn't
+    /// already, and marks this as the most recent use. A failed `load`
+    /// leaves the slot empty (not a stale/poisoned entry).
+    pub fn get_or_load(&self, load: impl FnOnce() -> Result<T>) -> Result<ModelGuard<'_, T>> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| Error::Model("model slot lock poisoned".to_string()))?;
+        match guard.as_mut() {
+            Some((_, last_used)) => *last_used = Instant::now(),
+            None => *guard = Some((load()?, Instant::now())),
+        }
+        Ok(ModelGuard { guard })
+    }
+
+    /// Drops the model if it's been idle at least `idle_timeout`. Returns
+    /// whether it actually unloaded something.
+    pub fn unload_if_idle(&self, idle_timeout: Duration) -> bool {
+        let Ok(mut guard) = self.inner.lock() else {
+            return false;
+        };
+        let is_idle = guard
+            .as_ref()
+            .is_some_and(|(_, last_used)| last_used.elapsed() >= idle_timeout);
+        if is_idle {
+            *guard = None;
+        }
+        is_idle
+    }
+}
+
+/// Borrowed access to a [`ModelSlot`]'s currently-loaded value.
+pub struct ModelGuard<'a, T> {
+    guard: MutexGuard<'a, Option<(T, Instant)>>,
+}
+
+impl<T> Deref for ModelGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self
+            .guard
+            .as_ref()
+            .expect("ModelGuard always wraps a loaded value")
+            .0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,5 +635,81 @@ mod tests {
             load_tokenizer_from(&path).expect("run `just models` first, or set MAGI_DATA_DIR");
         let count = tokenizer.encode("hello world", false).unwrap().len();
         assert!((1..=6).contains(&count), "got {count} tokens");
+    }
+
+    #[test]
+    fn model_slot_loads_once_and_reuses_without_reloading() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        let load_calls = Mutex::new(0u32);
+        let load = || {
+            *load_calls.lock().unwrap() += 1;
+            Ok(42)
+        };
+
+        assert!(!slot.is_loaded());
+        assert_eq!(*slot.get_or_load(load).unwrap(), 42);
+        assert!(slot.is_loaded());
+        assert_eq!(*slot.get_or_load(load).unwrap(), 42);
+        assert_eq!(
+            *load_calls.lock().unwrap(),
+            1,
+            "second get_or_load must reuse the loaded value, not reload"
+        );
+    }
+
+    #[test]
+    fn model_slot_get_or_load_propagates_loader_error_without_leaving_a_stale_entry() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        let err = slot
+            .get_or_load(|| Err(Error::Model("boom".to_string())))
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+        assert!(!slot.is_loaded());
+    }
+
+    #[test]
+    fn model_slot_unload_if_idle_only_unloads_past_the_timeout() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        slot.get_or_load(|| Ok(7)).unwrap();
+
+        assert!(
+            !slot.unload_if_idle(Duration::from_secs(3600)),
+            "just-used model isn't idle yet"
+        );
+        assert!(slot.is_loaded());
+
+        assert!(
+            slot.unload_if_idle(Duration::from_secs(0)),
+            "any elapsed time clears a 0s idle timeout"
+        );
+        assert!(!slot.is_loaded());
+    }
+
+    #[test]
+    fn model_slot_reloads_after_being_unloaded() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        let load_calls = Mutex::new(0u32);
+        let load = || {
+            *load_calls.lock().unwrap() += 1;
+            Ok(1)
+        };
+
+        slot.get_or_load(load).unwrap();
+        slot.unload_if_idle(Duration::from_secs(0));
+        slot.get_or_load(load).unwrap();
+
+        assert_eq!(*load_calls.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn model_slot_get_or_load_refreshes_last_used_so_it_is_not_idle() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        slot.get_or_load(|| Ok(1)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        // A fresh use just before the check must reset the idle clock.
+        slot.get_or_load(|| Ok(1)).unwrap();
+        assert!(!slot.unload_if_idle(Duration::from_millis(15)));
+        assert!(slot.is_loaded());
     }
 }
