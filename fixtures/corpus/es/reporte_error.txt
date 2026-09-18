@@ -1,0 +1,5 @@
+Reporte de Error de Software
+
+El vigilante de archivos deja de detectar cambios despues de que la laptop se reactiva del modo de suspension.
+Pasos para reproducir: poner la maquina en suspension, reactivarla y luego editar un archivo vigilado.
+Esperado: el cambio se indexa en pocos segundos. Actual: no ocurre nada hasta reiniciar manualmente.

@@ -1,0 +1,14 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Notas de incorporación\n\nEl nuevo empleado debe escuchar la canción de bienvenida y leer la\nprimera página del manual antes de su primer día. La oficina abre a\nlas nueve y la cocina tiene café, té y galletas.\n\nLa segunda página del manual explica los códigos de acceso al\nedificio y la contraseña del wifi para visitantes.",
+            page: None,
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "es",
+    ),
+}

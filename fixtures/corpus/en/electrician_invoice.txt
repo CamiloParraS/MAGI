@@ -1,0 +1,6 @@
+Electrician Invoice
+
+Service: repair of the electrical panel at the main residence.
+Parts replaced: circuit breaker, two outlets, and grounding wire.
+Labor: three hours at the standard hourly rate.
+Total due: 150 euros. Payment accepted by bank transfer within 30 days.

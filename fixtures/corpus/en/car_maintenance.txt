@@ -1,0 +1,5 @@
+Car Maintenance Record
+
+Oil change and tire rotation completed at ninety thousand kilometers.
+The mechanic recommended replacing the brake pads within the next two months.
+Next scheduled service is due in six months or ten thousand kilometers, whichever comes first.

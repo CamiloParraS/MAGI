@@ -1,0 +1,5 @@
+Notas de la Reunion de Equipo
+
+El equipo de ingenieria reviso el progreso del sistema de indexado de busqueda.
+Tareas pendientes: corregir el error de rebote del vigilante de archivos, actualizar la hoja de ruta y agendar una reunion de seguimiento el proximo martes.
+Todos coincidieron en que el sprint actual terminara a tiempo el viernes.

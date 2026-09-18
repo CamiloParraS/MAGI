@@ -1,0 +1,14 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Onboarding notes\n\nNew hires should read the welcome packet before their first day. The\noffice opens at nine and the kitchen has coffee, tea, and snacks. Ask\nyour manager for a desk assignment and a laptop on day one.\n\nPage two of the packet lists the building access codes and the guest\nwifi password.",
+            page: None,
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "en",
+    ),
+}

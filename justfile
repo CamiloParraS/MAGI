@@ -7,7 +7,8 @@ default:
 # Set up development environment and dependencies
 setup:
     cd apps/desktop; pnpm install
-    cargo xtask fetch-pdfium
+    cargo run -p xtask -- fetch-pdfium
+    cargo run -p xtask -- fetch-onnxruntime
 
 # Start the development server
 dev:
@@ -34,11 +35,15 @@ bindings:
 
 # Download required models into the dev data directory
 models:
-    cargo xtask fetch-models
+    cargo run -p xtask -- fetch-models
 
 # Run evaluations using the CLI against test fixtures
 eval:
     cargo run -p magi-cli --release -- eval eval/queries.jsonl --corpus fixtures/corpus
+
+# Run the 100k-synthetic-chunk NFR-2/NFR-3 search-latency benchmark
+bench:
+    cargo run -p xtask --release -- bench-corpus
 
 # Build the production desktop application
 build:

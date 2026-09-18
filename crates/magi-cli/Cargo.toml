@@ -7,3 +7,7 @@ license.workspace = true
 [dependencies]
 magi-core = { path = "../magi-core" }
 anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }

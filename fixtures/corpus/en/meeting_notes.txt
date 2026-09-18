@@ -1,0 +1,5 @@
+Team Meeting Notes
+
+The engineering team reviewed progress on the search indexing pipeline.
+Action items: fix the watcher debounce bug, update the roadmap, and schedule a follow-up next Tuesday.
+Everyone agreed the current sprint is on track to finish by Friday.

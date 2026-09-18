@@ -1,0 +1,16 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Factura de electricista\r\nServicio: reparacion del panel electrico\r\nTotal: 150 euros",
+            page: Some(
+                1,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "es",
+    ),
+}

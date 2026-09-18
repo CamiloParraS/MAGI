@@ -1,0 +1,25 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Quarterly Kickoff\nWelcome to the quarterly planning session.",
+            page: Some(
+                1,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+        RawChunk {
+            source: Body,
+            text: "Presupuesto\nEl presupuesto total es de cinco mil euros.",
+            page: Some(
+                2,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "ca",
+    ),
+}

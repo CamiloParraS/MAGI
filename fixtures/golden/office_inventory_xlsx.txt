@@ -1,0 +1,25 @@
+ExtractedDoc {
+    chunks: [
+        RawChunk {
+            source: Body,
+            text: "Item Quantity Location\nWidget 42 Warehouse A\nGadget 7 Warehouse B",
+            page: Some(
+                1,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+        RawChunk {
+            source: Body,
+            text: "Cliente Total\nElectricista Lopez 150",
+            page: Some(
+                2,
+            ),
+            line_start: None,
+            line_end: None,
+        },
+    ],
+    lang: Some(
+        "en",
+    ),
+}

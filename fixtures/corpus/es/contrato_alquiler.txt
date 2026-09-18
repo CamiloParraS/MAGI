@@ -1,0 +1,5 @@
+Resumen del Contrato de Alquiler
+
+El alquiler mensual vence el primer dia de cada mes, con cinco dias de gracia.
+El deposito de garantia cubre dos meses de renta y es reembolsable al mudarse.
+Los inquilinos son responsables de los servicios publicos; el propietario cubre el mantenimiento del edificio.
