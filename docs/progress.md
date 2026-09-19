@@ -850,3 +850,53 @@ were re-run manually against the actual downloaded int8 model.
       preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
       green; the 5 `#[ignore]`d real-model tests were run manually against
       the actual downloaded int8 model.
+
+### Pre-M4 review pass
+
+A full-repo review before starting M4. Three blocking findings were fixed in
+`crates/magi-core` (embedding-failure isolation, code-chunk re-splitting,
+`indexing.file_types` wiring); the smaller items below were closed in the
+same pass. `just check` green afterwards: 142 unit + 9 golden + 1 idempotence
+tests, `cargo fmt --check` and `cargo clippy --workspace --all-targets
+--all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+
+- [x] **Golden re-blessed after the code-chunk fix.** Routing code chunks
+      through `chunk::chunk_text` trims each piece, so three comment chunks in
+      `fixtures/golden/code_sample_rs.txt` lost a trailing `\n` — the only
+      drift in the file, and it matches what every other extractor already
+      produced. No eval query targets a code file (verified: 0 of 70), so the
+      M3 recall baseline in `docs/eval.md` is unaffected and was not re-run.
+- [x] **`indexing.file_types` names are validated.** An unknown name (a typo
+      like `"pdfs"`) used to silently stop indexing that kind's content.
+      `Config::validate` now rejects it as `Error::UnknownFileType`, checked
+      against `discovery::ALL_KINDS` rather than a second hand-written list.
+      Two tests: `unknown_file_type_is_rejected`,
+      `every_default_file_type_is_a_real_kind`.
+- [x] **`justfile` is cross-platform again.** It hard-coded
+      `set shell := ["powershell.exe", "-Command"]` and `cd x; y` bodies, so
+      every recipe failed on macOS/Linux — invisible in CI, which runs the raw
+      commands rather than `just`. Now `set windows-shell` plus per-recipe
+      `[working-directory:]` attributes, with `check`/`test` split into
+      `-rust`/`-frontend` halves so no recipe needs to change directory
+      mid-body. M4's HEIC spike needs all three OSes, hence fixing it now.
+- [x] **`just bindings` no longer references a nonexistent test target.** It
+      ran `cargo test --test generate_bindings`; there is no such target, no
+      `ts_rs` dependency and no `apps/desktop/src/bindings/`. The recipe (still
+      required by SPEC.md §5.2) now says bindings land with the M6 IPC
+      contract; CLAUDE.md and AGENTS.md updated to match.
+- [x] **Two `.unwrap()`s on a mutex removed** (`discovery/walk.rs`), per
+      CLAUDE.md's no-`unwrap` rule: `unwrap_or_else(|poisoned|
+      poisoned.into_inner())` — nothing in that closure breaks an invariant
+      when a walk panics.
+- [x] **Crate-wide `#![allow(dead_code)]` deleted** (`lib.rs`). An M0 stub
+      leftover: removing it produces zero warnings with or without
+      `--all-targets`. It was why an unused config field (`file_types`) looked
+      identical to a deliberately-unwired stub for three milestones.
+
+Open items from the same review, deliberately **not** fixed here because they
+belong to a later milestone's spec text: timed-out extraction threads are
+never reclaimed (`index/pipeline.rs` — matters for M4's HEIC/bomb RSS budgets),
+`discovery::walk` materializes every entry before indexing begins (M5's
+scheduler wants a stream), per-OS default exclusions from SPEC.md §5.2 are
+unimplemented (`%WINDIR%`, `~/Library`, `/proc`), and `config::save_to` does
+not `fsync` before rename.
