@@ -27,6 +27,9 @@ pub struct IndexRootOptions {
     pub include_hidden: bool,
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
+    /// Kinds (`Kind::as_str`) that get content extraction; others are
+    /// indexed by filename only.
+    pub file_types: Vec<String>,
 }
 
 impl IndexRootOptions {
@@ -48,6 +51,7 @@ impl IndexRootOptions {
             include_hidden: config.include_hidden,
             follow_symlinks: config.follow_symlinks,
             max_file_size_mb: config.max_file_size_mb,
+            file_types: config.file_types.clone(),
         })
     }
 }
@@ -89,13 +93,27 @@ pub fn index_root(
             .unwrap_or_default();
         let ext = entry.path.extension().and_then(|e| e.to_str());
 
-        let outcome = process_entry(&entry.path, entry.size, max_size_bytes);
-
-        let mut chunks = outcome.chunks;
+        let mut outcome =
+            process_entry(&entry.path, entry.size, max_size_bytes, &options.file_types);
+        let mut chunks = std::mem::take(&mut outcome.chunks);
         chunks.push(filename_chunk(rel_path));
 
         let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let embeddings = embedder.embed_passages(&texts)?;
+        let embeddings = match embedder.embed_passages(&texts) {
+            Ok(e) => e,
+            Err(e) => {
+                // One bad file must not abort the run: keep only the
+                // filename chunk (still searchable by name) and mark error.
+                tracing::warn!(path = %entry.path.display(), error = %e, "embedding failed");
+                outcome.state = "error";
+                outcome.error = Some(e.to_string());
+                chunks.drain(..chunks.len() - 1);
+                let texts = [chunks[0].text.as_str()];
+                // If even the filename chunk fails, the embedder itself is
+                // broken: propagate rather than error every remaining file.
+                embedder.embed_passages(&texts)?
+            }
+        };
 
         let record = FileRecord {
             root_id,
@@ -207,7 +225,12 @@ fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
+fn process_entry(
+    path: &Path,
+    size: u64,
+    max_size_bytes: u64,
+    file_types: &[String],
+) -> FileOutcome {
     if size > max_size_bytes {
         return FileOutcome {
             kind: discovery::classify(path, &[]),
@@ -231,7 +254,8 @@ fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
 
     // No extractor for this kind yet: skip reading the rest of the file,
     // since the bytes would just be discarded (see `has_extractor`).
-    if !has_extractor(kind) {
+    // Also filename-only when the user disabled this kind in `file_types`.
+    if !has_extractor(kind) || !file_types.iter().any(|t| t == kind.as_str()) {
         return indexed_no_chunks(kind);
     }
 
@@ -335,6 +359,9 @@ mod tests {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size_mb: 1,
+            file_types: ["text", "code", "pdf", "office", "image"]
+                .map(String::from)
+                .to_vec(),
         }
     }
 
@@ -694,6 +721,73 @@ mod tests {
         fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
             FakeEmbedder.embed_query(text)
         }
+    }
+
+    /// Fails any batch containing a content chunk (more than one text);
+    /// filename-only batches succeed.
+    struct FlakyEmbedder;
+
+    impl TextEmbedder for FlakyEmbedder {
+        fn model_id(&self) -> &str {
+            FakeEmbedder.model_id()
+        }
+
+        fn dim(&self) -> usize {
+            FakeEmbedder.dim()
+        }
+
+        fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            if texts.len() > 1 {
+                return Err(Error::Model("boom".into()));
+            }
+            FakeEmbedder.embed_passages(texts)
+        }
+
+        fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+            FakeEmbedder.embed_query(text)
+        }
+    }
+
+    #[test]
+    fn disabled_file_type_is_indexed_by_filename_only() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root_path.join("a.txt"), "zebrafish").unwrap();
+
+        let mut options = default_options();
+        options.file_types.retain(|t| t != "text");
+        let summary =
+            index_root(&mut conn, root_id, &root_path, &options, 1, &FakeEmbedder).unwrap();
+
+        assert_eq!(summary.indexed, 1);
+        let fts = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
+        assert_eq!(fts("zebrafish"), 0);
+        assert_eq!(fts("a"), 1);
+    }
+
+    #[test]
+    fn embedding_failure_marks_file_errored_and_run_continues() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root_path.join("a.txt"), "hello there").unwrap();
+        fs::write(root_path.join("b.bin"), [0u8; 4]).unwrap(); // filename-only: embeds fine
+
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &default_options(),
+            1,
+            &FlakyEmbedder,
+        )
+        .unwrap();
+
+        assert_eq!(summary.errored, 1);
+        assert_eq!(summary.indexed, 1);
+        let row = db::files::get_by_path(&conn, &root_path.join("a.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "error");
     }
 
     #[test]

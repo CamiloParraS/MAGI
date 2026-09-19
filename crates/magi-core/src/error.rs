@@ -23,6 +23,9 @@ pub enum Error {
     #[error("invalid exclude glob {glob:?}: {reason}")]
     InvalidGlob { glob: String, reason: String },
 
+    #[error("unknown file type {name:?} in indexing.file_types (expected one of {expected})")]
+    UnknownFileType { name: String, expected: String },
+
     #[error("root path does not exist: {}", .0.display())]
     RootNotFound(PathBuf),
 

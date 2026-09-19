@@ -5,5 +5,5 @@
 pub mod classify;
 pub mod walk;
 
-pub use classify::{Kind, classify};
+pub use classify::{ALL_KINDS, Kind, classify};
 pub use walk::{WalkEntry, WalkOptions, walk};

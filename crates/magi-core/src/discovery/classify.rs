@@ -15,6 +15,18 @@ pub enum Kind {
     Other,
 }
 
+/// Every [`Kind`], so `config::Config::validate` can check
+/// `indexing.file_types` names against the same list `files.kind` uses
+/// instead of a second hand-written copy.
+pub const ALL_KINDS: &[Kind] = &[
+    Kind::Text,
+    Kind::Code,
+    Kind::Pdf,
+    Kind::Office,
+    Kind::Image,
+    Kind::Other,
+];
+
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {

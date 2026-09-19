@@ -118,13 +118,33 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Rejects bad exclude globs and roots that don't exist on disk.
+    /// Rejects bad exclude globs, unknown `file_types` names, and roots
+    /// that don't exist on disk.
     pub fn validate(&self) -> Result<()> {
         for glob in &self.indexing.exclude_globs {
             glob::Pattern::new(glob).map_err(|e| Error::InvalidGlob {
                 glob: glob.clone(),
                 reason: e.to_string(),
             })?;
+        }
+        // A typo here would silently stop indexing that kind's content
+        // (`index::pipeline::process_entry` matches on these names), so it
+        // is rejected at load time rather than diagnosed later as
+        // "search stopped finding my PDFs".
+        for name in &self.indexing.file_types {
+            if !crate::discovery::ALL_KINDS
+                .iter()
+                .any(|k| k.as_str() == name)
+            {
+                return Err(Error::UnknownFileType {
+                    name: name.clone(),
+                    expected: crate::discovery::ALL_KINDS
+                        .iter()
+                        .map(|k| k.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
         }
         for root in &self.roots {
             if !root.path.exists() {
@@ -218,6 +238,21 @@ mod tests {
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded, Config::default());
         assert!(path.exists());
+    }
+
+    #[test]
+    fn unknown_file_type_is_rejected() {
+        let mut config = Config::default();
+        config.indexing.file_types.push("pdfs".into());
+        assert!(matches!(
+            config.validate(),
+            Err(Error::UnknownFileType { .. })
+        ));
+    }
+
+    #[test]
+    fn every_default_file_type_is_a_real_kind() {
+        assert!(Config::default().validate().is_ok());
     }
 
     #[test]
