@@ -1,7 +1,5 @@
 //! magi-core: all business logic for magi. No Tauri dependency — see SPEC.md §5.1.
 
-#![allow(dead_code)]
-
 pub mod chunk;
 pub mod config;
 pub mod db;
