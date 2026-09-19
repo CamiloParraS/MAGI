@@ -39,10 +39,21 @@ impl Extractor for CodeExtractor {
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase);
-        let chunks = match ext.as_deref().and_then(language_for_extension) {
+        let raw = match ext.as_deref().and_then(language_for_extension) {
             Some(language) => symbol_chunks(&source, language)?,
             None => line_window_chunks(&source),
         };
+        // Symbols/windows can exceed the embedder's token limit; re-split so
+        // no tail is truncated out of vector search. Pieces keep the parent's
+        // line range (a bounding range, not exact).
+        let chunks = raw
+            .into_iter()
+            .flat_map(|c| {
+                crate::chunk::chunk_text(&c.text)
+                    .into_iter()
+                    .map(move |text| RawChunk { text, ..c.clone() })
+            })
+            .collect();
         let lang = super::lang::detect_lang(&source);
         Ok(ExtractedDoc { chunks, lang })
     }
@@ -182,6 +193,29 @@ struct Point {
         assert_eq!(doc.chunks[0].source, ChunkSource::Body);
         assert_eq!(doc.chunks[0].line_start, Some(1));
         assert!(doc.chunks[0].text.contains("puts"));
+    }
+
+    #[test]
+    fn oversized_symbol_is_split_below_token_limit() {
+        let body = (0..1500)
+            .map(|i| format!("x{i}"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let source = format!("fn big() -> i32 {{ {body} }}\n");
+        let doc = CodeExtractor
+            .extract(Path::new("big.rs"), source.as_bytes())
+            .unwrap();
+
+        assert!(doc.chunks.len() > 1);
+        assert!(doc.chunks.iter().all(|c| c.line_start == Some(1)));
+        // Word count is a lower bound on token count, so this holds whether
+        // `chunk_text` used the real tokenizer or the word-count fallback.
+        assert!(
+            doc.chunks
+                .iter()
+                .all(|c| c.text.split_whitespace().count() <= crate::chunk::TARGET_MAX_TOKENS),
+            "a piece is still over the chunker's target"
+        );
     }
 
     #[test]

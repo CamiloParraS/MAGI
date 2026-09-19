@@ -2,7 +2,7 @@ ExtractedDoc {
     chunks: [
         RawChunk {
             source: CodeSymbol,
-            text: "//! Sample Rust fixture for code-extraction tests (see SPEC.md §7 M2).\n",
+            text: "//! Sample Rust fixture for code-extraction tests (see SPEC.md §7 M2).",
             page: None,
             line_start: Some(
                 1,
@@ -13,7 +13,7 @@ ExtractedDoc {
         },
         RawChunk {
             source: CodeSymbol,
-            text: "/// Adds two numbers together.\n",
+            text: "/// Adds two numbers together.",
             page: None,
             line_start: Some(
                 3,
@@ -35,7 +35,7 @@ ExtractedDoc {
         },
         RawChunk {
             source: CodeSymbol,
-            text: "/// Represents a point in 2D space.\n",
+            text: "/// Represents a point in 2D space.",
             page: None,
             line_start: Some(
                 8,
