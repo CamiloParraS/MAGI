@@ -12,7 +12,7 @@ the spec wins until the spec is updated.
 | `just dev`       | Run the Tauri app in dev mode |
 | `just check`     | fmt, clippy, `cargo test`, frontend lint/typecheck/test — run before committing |
 | `just test`      | Rust + frontend tests only (no network, fake embedder) |
-| `just bindings`  | Regenerate ts-rs bindings, fails on unexpected diff |
+| `just bindings`  | No-op until M6 (`dto.rs` exports no IPC types yet)  |
 | `just models`    | Download ML models into the dev data directory |
 | `just eval`      | Run search-quality evaluation against `eval/queries.jsonl` |
 | `just build`     | Production build of the desktop app |
