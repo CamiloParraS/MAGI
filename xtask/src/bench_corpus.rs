@@ -165,8 +165,10 @@ pub fn bench_corpus() -> Result<()> {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
-        upsert_file(&mut conn, &record, &chunks, &embeddings)?;
+        upsert_file(&mut conn, &record, &chunks, &embeddings, None)?;
         if i > 0 && i % 1000 == 0 {
             println!("  ... {i}/{FILE_COUNT} files");
         }

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use magi_core::config::IndexingConfig;
 use magi_core::embed::FakeEmbedder;
-use magi_core::index::pipeline::{IndexRootOptions, index_root};
+use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::{db, paths};
 
 fn corpus_dir() -> PathBuf {
@@ -19,18 +19,35 @@ fn corpus_dir() -> PathBuf {
 #[test]
 fn indexing_fixture_corpus_twice_is_idempotent() {
     let db_dir = tempfile::tempdir().unwrap();
+    // Thumbnails go to the cache dir; keep them out of the real one.
+    // SAFETY: the only test in this binary, so nothing races the environment.
+    unsafe { std::env::set_var("MAGI_DATA_DIR", db_dir.path()) };
     let mut conn = db::open(&db_dir.path().join("magi.db")).unwrap();
     let root_path = corpus_dir();
     let root = db::roots::add(&conn, &root_path).unwrap();
     let options = IndexRootOptions::from_config(&IndexingConfig::default()).unwrap();
 
-    let first_summary =
-        index_root(&mut conn, root.id, &root_path, &options, 1, &FakeEmbedder).unwrap();
+    let first_summary = index_root(
+        &mut conn,
+        root.id,
+        &root_path,
+        &options,
+        1,
+        &IndexContext::new(&FakeEmbedder),
+    )
+    .unwrap();
     let first_files = db::files::count_files(&conn).unwrap();
     let first_chunks = db::files::count_chunks(&conn).unwrap();
 
-    let second_summary =
-        index_root(&mut conn, root.id, &root_path, &options, 2, &FakeEmbedder).unwrap();
+    let second_summary = index_root(
+        &mut conn,
+        root.id,
+        &root_path,
+        &options,
+        2,
+        &IndexContext::new(&FakeEmbedder),
+    )
+    .unwrap();
     let second_files = db::files::count_files(&conn).unwrap();
     let second_chunks = db::files::count_chunks(&conn).unwrap();
 

@@ -106,10 +106,12 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
     }
 
     #[test]
@@ -161,6 +163,8 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![
             RawChunk::body("apple banana".to_string()),
@@ -169,7 +173,7 @@ mod tests {
         let embeddings = FakeEmbedder
             .embed_passages(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())
             .unwrap();
-        upsert_file(&mut conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(&mut conn, &record, &chunks, &embeddings, None).unwrap();
 
         let query = FakeEmbedder.embed_query("apple").unwrap();
         let hits = search_vector_text(&conn, &query, 10).unwrap();

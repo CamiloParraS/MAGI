@@ -208,10 +208,12 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
     }
 
     #[test]

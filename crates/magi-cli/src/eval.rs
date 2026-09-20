@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use magi_core::index::pipeline::{IndexRootOptions, index_root};
+use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
 use magi_core::search::vector::search_vector_text;
 use magi_core::{config, db, search};
@@ -105,7 +105,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &root.path,
         &options,
         1,
-        embedder.as_ref(),
+        &IndexContext::new(embedder.as_ref()),
     )?;
     println!(
         "indexed corpus: indexed={} skipped={} errors={}",

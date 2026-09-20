@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
-use magi_core::index::pipeline::{IndexRootOptions, index_root};
+use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
 use magi_core::{config, db, paths};
 
@@ -156,7 +156,7 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &root_row.path,
         &options,
         1,
-        embedder.as_ref(),
+        &IndexContext::new(embedder.as_ref()),
     )?;
 
     println!(

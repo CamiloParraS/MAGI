@@ -2,7 +2,8 @@
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -17,6 +18,7 @@ use crate::extract::office::OfficeExtractor;
 use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
+use crate::ocr::{NoOcr, OcrEngine};
 
 pub const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -27,6 +29,7 @@ pub struct IndexRootOptions {
     pub include_hidden: bool,
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
+    pub max_image_megapixels: u32,
     /// Kinds (`Kind::as_str`) that get content extraction; others are
     /// indexed by filename only.
     pub file_types: Vec<String>,
@@ -51,6 +54,7 @@ impl IndexRootOptions {
             include_hidden: config.include_hidden,
             follow_symlinks: config.follow_symlinks,
             max_file_size_mb: config.max_file_size_mb,
+            max_image_megapixels: config.max_image_megapixels,
             file_types: config.file_types.clone(),
         })
     }
@@ -72,8 +76,9 @@ pub fn index_root(
     root_path: &Path,
     options: &IndexRootOptions,
     scan_id: i64,
-    embedder: &dyn TextEmbedder,
+    ctx: &IndexContext,
 ) -> Result<IndexSummary> {
+    let embedder = ctx.embedder;
     let walk_options = WalkOptions {
         exclude_globs: options.exclude_globs.clone(),
         include_hidden: options.include_hidden,
@@ -93,8 +98,8 @@ pub fn index_root(
             .unwrap_or_default();
         let ext = entry.path.extension().and_then(|e| e.to_str());
 
-        let mut outcome =
-            process_entry(&entry.path, entry.size, max_size_bytes, &options.file_types);
+        let mut outcome = process_entry(&entry.path, entry.size, max_size_bytes, options, ctx);
+        let thumb_key = write_thumbnail(&entry.path, &outcome);
         let mut chunks = std::mem::take(&mut outcome.chunks);
         chunks.push(filename_chunk(rel_path));
 
@@ -129,8 +134,11 @@ pub fn index_root(
             skip_reason: outcome.skip_reason,
             error: outcome.error.as_deref(),
             seen_scan_id: scan_id,
+            content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
+            thumb_key: thumb_key.as_deref(),
         };
-        upsert_file(conn, &record, &chunks, &embeddings)?;
+        // ponytail: no visual embedder until SigLIP lands (M4 slice 3).
+        upsert_file(conn, &record, &chunks, &embeddings, None)?;
 
         match outcome.state {
             "indexed" => summary.indexed += 1,
@@ -152,6 +160,24 @@ pub fn index_root(
     Ok(summary)
 }
 
+/// Content-hash-keyed, so an unchanged or duplicate image is not rewritten.
+/// A failed write costs the file its thumbnail, never its index entry.
+fn write_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
+    let (hash, image) = outcome
+        .content_hash
+        .as_ref()
+        .zip(outcome.thumbnail.as_ref())?;
+    let key = crate::thumbs::thumb_key(hash);
+    let thumb_path = crate::thumbs::thumb_path(&key);
+    if !thumb_path.exists()
+        && let Err(e) = crate::thumbs::write_thumbnail(&thumb_path, image)
+    {
+        tracing::warn!(path = %path.display(), error = %e, "thumbnail not written");
+        return None;
+    }
+    Some(key)
+}
+
 struct FileOutcome {
     kind: Kind,
     state: &'static str,
@@ -159,6 +185,8 @@ struct FileOutcome {
     error: Option<String>,
     chunks: Vec<RawChunk>,
     lang: Option<String>,
+    content_hash: Option<[u8; 32]>,
+    thumbnail: Option<image::RgbImage>,
 }
 
 fn indexed_no_chunks(kind: Kind) -> FileOutcome {
@@ -169,6 +197,8 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
         error: None,
         chunks: Vec::new(),
         lang: None,
+        content_hash: None,
+        thumbnail: None,
     }
 }
 
@@ -180,6 +210,8 @@ fn errored(kind: Kind, message: String) -> FileOutcome {
         error: Some(message),
         chunks: Vec::new(),
         lang: None,
+        content_hash: None,
+        thumbnail: None,
     }
 }
 
@@ -193,9 +225,8 @@ enum Dispatch {
     Pdf,
     Office,
     Code,
-    /// Image extraction (OCR/QR/embeddings) lands in M4; until then it
-    /// falls back to filename-only indexing, same as an unsupported
-    /// (`Other`) file.
+    Image,
+    /// No extractor: filename-only indexing.
     None,
 }
 
@@ -205,7 +236,8 @@ fn dispatch_for(kind: Kind) -> Dispatch {
         Kind::Pdf => Dispatch::Pdf,
         Kind::Office => Dispatch::Office,
         Kind::Code => Dispatch::Code,
-        Kind::Image | Kind::Other => Dispatch::None,
+        Kind::Image => Dispatch::Image,
+        Kind::Other => Dispatch::None,
     }
 }
 
@@ -229,8 +261,10 @@ fn process_entry(
     path: &Path,
     size: u64,
     max_size_bytes: u64,
-    file_types: &[String],
+    options: &IndexRootOptions,
+    ctx: &IndexContext,
 ) -> FileOutcome {
+    let file_types = &options.file_types;
     if size > max_size_bytes {
         return FileOutcome {
             kind: discovery::classify(path, &[]),
@@ -239,6 +273,8 @@ fn process_entry(
             error: None,
             chunks: Vec::new(),
             lang: None,
+            content_hash: None,
+            thumbnail: None,
         };
     }
 
@@ -264,52 +300,159 @@ fn process_entry(
         Err(e) => return errored(kind, e.to_string()),
     };
 
-    match extract_with_isolation(kind, path.to_path_buf(), bytes) {
-        Ok(doc) => FileOutcome {
+    let content_hash = *blake3::hash(&bytes).as_bytes();
+    let job = ExtractJob {
+        kind,
+        path: path.to_path_buf(),
+        bytes,
+        ocr: Arc::clone(&ctx.ocr),
+        max_megapixels: options.max_image_megapixels,
+    };
+    let mut outcome = match extract_with_isolation(job) {
+        Ok(extracted) => FileOutcome {
             kind,
             state: "indexed",
             skip_reason: None,
             error: None,
-            chunks: doc.chunks,
-            lang: doc.lang,
+            chunks: extracted.doc.chunks,
+            lang: extracted.doc.lang,
+            content_hash: None,
+            thumbnail: extracted.thumbnail,
         },
         Err(e) => errored(kind, e.to_string()),
+    };
+    outcome.content_hash = Some(content_hash);
+    outcome
+}
+
+/// An [`ExtractedDoc`] plus the thumbnail derived from the same read.
+#[derive(Default)]
+struct Extracted {
+    doc: ExtractedDoc,
+    thumbnail: Option<image::RgbImage>,
+}
+
+/// Owned inputs for the extraction thread.
+struct ExtractJob {
+    kind: Kind,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    ocr: Arc<dyn OcrEngine>,
+    max_megapixels: u32,
+}
+
+fn extract_for_kind(job: &ExtractJob) -> Result<Extracted> {
+    let (path, bytes) = (job.path.as_path(), job.bytes.as_slice());
+    let plain = |doc| Extracted {
+        doc,
+        thumbnail: None,
+    };
+    match dispatch_for(job.kind) {
+        Dispatch::Text => TextExtractor.extract(path, bytes).map(plain),
+        Dispatch::Pdf => {
+            let mut extracted = plain(PdfExtractor.extract(path, bytes)?);
+            // A PDF we can read but not render is still searchable.
+            match crate::extract::pdf::first_page_thumbnail(bytes) {
+                Ok(thumbnail) => extracted.thumbnail = Some(thumbnail),
+                Err(e) => tracing::warn!(path = %path.display(), error = %e, "no PDF thumbnail"),
+            }
+            Ok(extracted)
+        }
+        Dispatch::Office => OfficeExtractor.extract(path, bytes).map(plain),
+        Dispatch::Code => CodeExtractor.extract(path, bytes).map(plain),
+        Dispatch::Image => {
+            crate::extract::image::extract_image(path, bytes, job.max_megapixels, &*job.ocr).map(
+                |artifacts| Extracted {
+                    doc: artifacts.doc,
+                    thumbnail: Some(artifacts.thumbnail),
+                },
+            )
+        }
+        Dispatch::None => Ok(Extracted::default()),
     }
 }
 
-fn extract_for_kind(kind: Kind, path: &Path, bytes: &[u8]) -> Result<ExtractedDoc> {
-    match dispatch_for(kind) {
-        Dispatch::Text => TextExtractor.extract(path, bytes),
-        Dispatch::Pdf => PdfExtractor.extract(path, bytes),
-        Dispatch::Office => OfficeExtractor.extract(path, bytes),
-        Dispatch::Code => CodeExtractor.extract(path, bytes),
-        Dispatch::None => Ok(ExtractedDoc::default()),
+/// Timed-out extraction threads, kept so they can be joined once they
+/// finish instead of being forgotten. Rust can't kill a thread; the best
+/// available is to notice when a stuck one ends and to stop starting new
+/// work while too many are still alive.
+///
+/// ponytail: a thread that never finishes holds its slot until restart;
+/// past [`MAX_STUCK_THREADS`] of those, extraction is refused. Real
+/// reclamation needs a subprocess per extraction.
+struct StuckThreads(Mutex<Vec<JoinHandle<()>>>);
+
+static STUCK: StuckThreads = StuckThreads(Mutex::new(Vec::new()));
+
+impl StuckThreads {
+    /// Joins the ones that have finished; returns how many still run.
+    fn reap(&self) -> usize {
+        let mut threads = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let (finished, running): (Vec<_>, Vec<_>) =
+            threads.drain(..).partition(|t| t.is_finished());
+        for thread in finished {
+            let _ = thread.join();
+        }
+        *threads = running;
+        threads.len()
+    }
+
+    fn add(&self, thread: JoinHandle<()>) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(thread);
     }
 }
 
 /// Runs extraction on a worker thread so a hang can be treated as a
 /// timeout, and contains panics so one bad file never kills the engine
 /// (see SPEC.md §7 M2 "Extraction isolation").
-fn extract_with_isolation(kind: Kind, path: PathBuf, bytes: Vec<u8>) -> Result<ExtractedDoc> {
+fn extract_with_isolation(job: ExtractJob) -> Result<Extracted> {
+    let path = job.path.clone();
+    run_isolated(&STUCK, EXTRACTION_TIMEOUT, path, move || {
+        extract_for_kind(&job)
+    })
+}
+
+fn run_isolated<T: Send + 'static>(
+    stuck: &StuckThreads,
+    timeout: Duration,
+    path: PathBuf,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let stuck_now = stuck.reap();
+    if stuck_now >= MAX_STUCK_THREADS {
+        return Err(Error::ExtractionBacklog {
+            path,
+            stuck: stuck_now,
+        });
+    }
+
     let (tx, rx) = mpsc::channel();
-    let thread_path = path.clone();
-    std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            extract_for_kind(kind, &thread_path, &bytes)
-        }));
+    let thread = std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(work));
         let _ = tx.send(result);
     });
 
-    match rx.recv_timeout(EXTRACTION_TIMEOUT) {
-        Ok(Ok(doc_result)) => doc_result,
-        Ok(Err(panic_payload)) => Err(Error::ExtractionPanicked {
-            path,
-            message: panic_message(&panic_payload),
-        }),
-        Err(_timed_out) => Err(Error::ExtractionTimeout {
-            path,
-            seconds: EXTRACTION_TIMEOUT.as_secs(),
-        }),
+    match rx.recv_timeout(timeout) {
+        Ok(result) => {
+            let _ = thread.join();
+            match result {
+                Ok(work_result) => work_result,
+                Err(panic_payload) => Err(Error::ExtractionPanicked {
+                    path,
+                    message: panic_message(&panic_payload),
+                }),
+            }
+        }
+        Err(_timed_out) => {
+            stuck.add(thread);
+            Err(Error::ExtractionTimeout {
+                path,
+                seconds: timeout.as_secs(),
+            })
+        }
     }
 }
 
@@ -348,7 +491,7 @@ mod tests {
             root_path,
             &default_options(),
             1,
-            &FakeEmbedder,
+            &IndexContext::new(&FakeEmbedder),
         )
         .unwrap()
     }
@@ -359,6 +502,7 @@ mod tests {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size_mb: 1,
+            max_image_megapixels: 64,
             file_types: ["text", "code", "pdf", "office", "image"]
                 .map(String::from)
                 .to_vec(),
@@ -468,7 +612,7 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &FakeEmbedder,
+            &IndexContext::new(&FakeEmbedder),
         )
         .unwrap();
         let second_count = db::files::count_files(&conn).unwrap();
@@ -756,8 +900,15 @@ mod tests {
 
         let mut options = default_options();
         options.file_types.retain(|t| t != "text");
-        let summary =
-            index_root(&mut conn, root_id, &root_path, &options, 1, &FakeEmbedder).unwrap();
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &options,
+            1,
+            &IndexContext::new(&FakeEmbedder),
+        )
+        .unwrap();
 
         assert_eq!(summary.indexed, 1);
         let fts = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
@@ -778,7 +929,7 @@ mod tests {
             &root_path,
             &default_options(),
             1,
-            &FlakyEmbedder,
+            &IndexContext::new(&FlakyEmbedder),
         )
         .unwrap();
 
@@ -813,12 +964,47 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &OtherFakeEmbedder,
+            &IndexContext::new(&OtherFakeEmbedder),
         )
         .unwrap();
         assert_eq!(
             crate::db::meta::get(&conn, "text_model_id").unwrap(),
             Some(OtherFakeEmbedder.model_id().to_string())
         );
+    }
+
+    #[test]
+    fn timed_out_thread_is_reaped_once_it_finishes_and_new_work_is_refused_while_they_pile_up() {
+        let stuck = StuckThreads(Mutex::new(Vec::new()));
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let path = PathBuf::from("hang.bin");
+        let hang = |release: Arc<std::sync::atomic::AtomicBool>| {
+            move || -> Result<()> {
+                while !release.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(())
+            }
+        };
+
+        for _ in 0..MAX_STUCK_THREADS {
+            let err = run_isolated(
+                &stuck,
+                Duration::from_millis(20),
+                path.clone(),
+                hang(release.clone()),
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::ExtractionTimeout { .. }), "{err:?}");
+        }
+        let err =
+            run_isolated(&stuck, Duration::from_secs(5), path.clone(), || Ok(())).unwrap_err();
+        assert!(matches!(err, Error::ExtractionBacklog { .. }), "{err:?}");
+
+        release.store(true, std::sync::atomic::Ordering::Relaxed);
+        while stuck.reap() > 0 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        run_isolated(&stuck, Duration::from_secs(5), path, || Ok(())).unwrap();
     }
 }

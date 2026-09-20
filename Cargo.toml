@@ -74,5 +74,8 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+[profile.dev.package.magi-core]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 2
