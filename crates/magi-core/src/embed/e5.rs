@@ -56,6 +56,22 @@ fn onnxruntime_library_path() -> PathBuf {
         .join(crate::platform::onnxruntime_library_filename())
 }
 
+/// Dynamically loads the vendored ONNX Runtime. Process-wide and idempotent
+/// (`ort::init_from` no-ops after the first successful call), so every
+/// model that needs a session calls this first.
+pub(crate) fn init_onnxruntime() -> Result<()> {
+    let ort_lib = onnxruntime_library_path();
+    ort::init_from(&ort_lib)
+        .map_err(|e| {
+            Error::Model(format!(
+                "loading ONNX Runtime from {} (set MAGI_ONNXRUNTIME_PATH or run `cargo xtask fetch-onnxruntime`): {e}",
+                ort_lib.display()
+            ))
+        })?
+        .commit();
+    Ok(())
+}
+
 impl E5Embedder {
     /// Loads the model + tokenizer from `embed::manager::model_dir("text")`
     /// (populated by `ensure_model_file`/`import_offline_model_file`).
@@ -63,15 +79,7 @@ impl E5Embedder {
     /// idempotent (`ort::init_from` no-ops after the first successful
     /// call), so constructing more than one `E5Embedder` is safe.
     pub fn load() -> Result<Self> {
-        let ort_lib = onnxruntime_library_path();
-        ort::init_from(&ort_lib)
-            .map_err(|e| {
-                Error::Model(format!(
-                    "loading ONNX Runtime from {} (set MAGI_ONNXRUNTIME_PATH or run `cargo xtask fetch-onnxruntime`): {e}",
-                    ort_lib.display()
-                ))
-            })?
-            .commit();
+        init_onnxruntime()?;
 
         let dir = crate::embed::manager::model_dir("text");
         let model_path = dir.join("model.onnx");

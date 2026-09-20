@@ -1,9 +1,11 @@
 //! The OCR seam (SPEC.md §7 M4).
 //!
-//! The engine itself — `ocrs` or PaddleOCR-ONNX — is chosen by the M4 OCR
+//! The engine is PaddleOCR-ONNX (`paddle`, ADR-0006), chosen by the M4 OCR
 //! spike and ADR-0006. Everything upstream of that decision codes against
 //! this trait, so the losing candidate is never implemented and the winner
 //! drops in without touching the pipeline.
+
+pub mod paddle;
 
 /// Recognizes text in an already-decoded, upright image.
 ///

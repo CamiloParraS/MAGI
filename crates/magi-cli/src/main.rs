@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
+use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
 use magi_core::{config, db, paths};
 
@@ -127,6 +128,22 @@ fn embedder_from_env() -> anyhow::Result<Box<dyn TextEmbedder>> {
     }
 }
 
+/// Real OCR unless the fake embedder is on (tests stay deterministic and
+/// model-free). Missing OCR models are not fatal: images just get no
+/// recognized text.
+fn ocr_from_env() -> std::sync::Arc<dyn OcrEngine> {
+    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
+        return std::sync::Arc::new(NoOcr);
+    }
+    match PaddleOcr::load() {
+        Ok(ocr) => std::sync::Arc::new(ocr),
+        Err(e) => {
+            eprintln!("warning: OCR unavailable ({e}); images will be indexed without text");
+            std::sync::Arc::new(NoOcr)
+        }
+    }
+}
+
 fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
@@ -156,7 +173,10 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &root_row.path,
         &options,
         1,
-        &IndexContext::new(embedder.as_ref()),
+        &IndexContext {
+            embedder: embedder.as_ref(),
+            ocr: ocr_from_env(),
+        },
     )?;
 
     println!(

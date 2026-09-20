@@ -34,6 +34,21 @@ files = [
 # sha256 = ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665,
 # size = 470268510 (same revision as above).
 
+# OCR (ADR-0006): PaddleOCR PP-OCRv5 mobile detection + Latin recognition,
+# official PaddlePaddle ONNX exports, Apache-2.0. `rec.yml` carries the
+# recognizer's character dictionary. Hashes computed locally from the
+# downloaded files; the two .onnx ones equal Hugging Face's LFS sha256.
+[[model]]
+slot = "ocr"
+id = "PaddlePaddle/PP-OCRv5_mobile_det + latin_PP-OCRv5_mobile_rec"
+revision = "det e6f4fa85f00e168c862bc462aebca69eef9b3d3d, rec 89d3a50e2c27e2e7cceeab0e944c25c807d5db4f"
+license = "Apache-2.0"
+files = [
+  { name = "det.onnx", url = "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/e6f4fa85f00e168c862bc462aebca69eef9b3d3d/inference.onnx", sha256 = "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d", size = 4826518 },
+  { name = "rec.onnx", url = "https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.onnx", sha256 = "7888113072263cb471b93f66dd5e2ad70548dc526fa1ace760d0d973dd121498", size = 8042023 },
+  { name = "rec.yml", url = "https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.yml", sha256 = "0bbe984570f597af3638e50bdf2e8276f3ab26a61966096538b3b0d1849f5c84", size = 6817 },
+]
+
 # [[model]]
 # slot = "image"
 # id = "google/siglip2-base-patch16-<res>"   # chosen in M4, recorded in an ADR

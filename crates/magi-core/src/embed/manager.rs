@@ -36,6 +36,8 @@ pub struct ModelEntry {
     pub id: String,
     pub revision: String,
     pub license: String,
+    /// Embedding width; 0 for slots that aren't embedders (OCR).
+    #[serde(default)]
     pub dim: usize,
     #[serde(default)]
     pub max_tokens: Option<usize>,

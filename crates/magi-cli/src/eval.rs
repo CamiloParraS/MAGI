@@ -105,7 +105,10 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &root.path,
         &options,
         1,
-        &IndexContext::new(embedder.as_ref()),
+        &IndexContext {
+            embedder: embedder.as_ref(),
+            ocr: crate::ocr_from_env(),
+        },
     )?;
     println!(
         "indexed corpus: indexed={} skipped={} errors={}",

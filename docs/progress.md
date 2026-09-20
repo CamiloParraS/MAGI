@@ -1169,3 +1169,30 @@ deletion on re-index, and reclaiming timed-out extraction threads.
       rather than left to the eval run.
 - [x] `just check` green: 159 unit + 9 golden + 1 idempotence tests, fmt and
       clippy clean, frontend lint/typecheck/test pass.
+
+### Slice 3 - OCR engine (ADR-0006)
+
+- [x] **OCR spike decided: PaddleOCR PP-OCRv5 mobile det + Latin rec** over
+      `ocrs`, whose alphabet has no accented characters (ADR-0006). Official
+      `PaddlePaddle` ONNX exports, Apache-2.0, pinned by revision and SHA-256
+      in `models/manifest.toml` (`ocr` slot, ~12.9 MB).
+- [x] **`ocr::paddle::PaddleOcr`** implements `OcrEngine` over `ort`: DB
+      post-processing with rotated boxes, straightened crops, CTC decode with
+      the dictionary read from `rec.yml`. No new dependencies.
+      `E5Embedder`'s ONNX Runtime init is now `init_onnxruntime()`, shared.
+- [x] **CER (SPEC.md §7 M4, <= 10%):** EN screenshot 0.031, ES screenshot
+      0.000, phone photo 0.022 (JPEG) / 0.013 (HEIC). Accents and `¿ « » —`
+      recognized. **Known gap: `¡` is not in the model's dictionary.**
+- [x] `magi-cli` index/eval use the real engine unless `MAGI_FAKE_EMBEDDER=1`;
+      missing OCR models degrade to `NoOcr` with a warning.
+- [x] **Peak RSS measured:** OCR adds ~310 MB (885 MB with OCR vs. 576 MB
+      for the same image pipeline without it; 7 fixtures incl. 12 MP HEICs).
+      The 1.5 GB NFR-11 check with all models is still owed (needs SigLIP).
+- [x] **Receipt and phone-photo CER:** receipt 0.773, 12 MP portrait 0.401,
+      landscape 0.463 - the Python reference pipeline gets 0.784 / 0.339 /
+      0.451, so this is the model's limit on hard photos, not a port bug. Not
+      SPEC-required (only the two screenshots are).
+- [ ] The engine is not yet wired into the Tauri app / `Engine` (only the CLI);
+      `Engine` does not run `index_root` until M5.
+- [x] `cargo clippy --workspace --all-targets -D warnings` clean; workspace
+      tests pass (166 unit + integration; 5 ignored need real models).
