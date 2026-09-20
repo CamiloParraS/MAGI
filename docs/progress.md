@@ -911,15 +911,15 @@ recorded in the new `fixtures/README.md`:
 
 - [x] **Personal data kept out of the repo.** `receipt_es.jpg` photographs a
       real receipt carrying a full name, national ID number, phone, email and
-      address, and `iphone_12mp_portrait/landscape.heic` photograph a card
+      address, and `phone_12mp_portrait/landscape.heic` photograph a card
       addressed to the repo owner by name. All three, plus their transcribed
       OCR ground truth (`fixtures/golden/ocr/personal.md`), are git-ignored.
-      **CI loses nothing measurable:** `iphone_text_es.heic` (3000 × 4000) and
+      **CI loses nothing measurable:** `phone_text_es.heic` (3000 × 4000) and
       `shelf_christmas.heic` (4000 × 3000) are 12 MP iPhone HEICs in both
       orientations, and SPEC.md §7 M4 only requires OCR CER on the English and
       Spanish *screenshot* fixtures, which are committed. Redaction, not Git
       LFS, is the answer if one of these ever has to ship.
-- [x] **`iphone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
+- [x] **`phone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
       export (5492 × 3672, 16-bit) behind the name — both decoders reject it at
       the container (`NoFtypBox` / `BoxTooLarge`). Renamed and git-ignored.
       **SPEC.md §7 M4's "48 MP HEIC in < 3 s with RSS Δ < 400 MB" is therefore
@@ -1137,3 +1137,35 @@ Still open in Slice 2: the `blake3` dependency and content hashing, the
 `index::pipeline` (with the `IndexContext` refactor alongside it), PDF
 first-page thumbnails through the existing `pdfium-render` path, `vec_image`
 deletion on re-index, and reclaiming timed-out extraction threads.
+
+### Slice 2 (part 3) — decisions closed, then the OCR seam and `extract_image`
+
+- [x] **`edge/huge_real.pdf` reviewed and kept** (2026-09-20). The names its
+      metadata and slides carry are example names, not sensitive. It is
+      allowlisted by name in `scrub_metadata.py` with that reason recorded
+      inline — a gate that always reports the same known finding is a gate
+      people learn to ignore, so the exemption is explicit and nothing else
+      is exempt. The gate is now clean over every tracked fixture.
+- [x] **SPEC.md §7 M4 no longer names a vendor** (2026-09-20). It asked for
+      self-shot *iPhone* HEICs; what the decoder actually has to cope with is
+      the container — a tile grid, an aux HDR gain map, a rotation transform
+      — not who made the phone. The fixtures were renamed `iphone_*` →
+      `phone_*` to stop the filenames claiming something untrue, and SPEC.md
+      §5.2's `max_image_megapixels` comment, ADR-0003 and
+      `fixtures/README.md` follow. The 48 MP gap is unaffected: it is about
+      resolution, not brand.
+- [x] **`ocr::OcrEngine` + `NoOcr`.** The seam ADR-0006's winner drops into,
+      so the losing candidate is never written and the pipeline does not
+      change when the real engine lands. `NoOcr` is also the permanent
+      fallback for when the OCR models are absent: the image still gets its
+      QR payloads, thumbnail and filename chunk.
+- [x] **`extract::image::extract_image`.** One decode, everything derived
+      from it, and the full-resolution buffer dropped before returning
+      (SPEC.md §5.3). Barcode detection runs at full resolution because the
+      scale ladder needs the detail; OCR gets a copy capped at 2048 px on the
+      long side (SPEC.md §5.3); the thumbnail comes out at 256 px. QR chunks
+      are written as `QR code / código QR: {payload}` so **both** of SPEC.md
+      §7 M4's required queries match the same chunk — asserted in the test
+      rather than left to the eval run.
+- [x] `just check` green: 159 unit + 9 golden + 1 idempotence tests, fmt and
+      clippy clean, frontend lint/typecheck/test pass.

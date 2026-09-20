@@ -415,7 +415,7 @@ max_file_size_mb = 50
 file_types = ["text", "code", "pdf", "office", "image"]
 pause_on_battery = true
 worker_threads = 0                 # 0 = auto (see §5.3 memory-aware concurrency)
-max_image_megapixels = 64          # iPhone 48 MP HEIC must pass; larger images are skipped
+max_image_megapixels = 64          # a 48 MP phone HEIC must pass; larger images are skipped
 reconcile_interval_hours = 6
 
 [models]
@@ -865,7 +865,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 **Verification**
 
 - [ ] SigLIP parity vs. reference vectors (cosine ≥ 0.99 fp32; ≥ 0.97 for the quantized variant) for both towers; the quantized variant's image-query recall@5 is within 3 points of fp32.
-- [ ] **HEIC:** self-shot iPhone fixtures (12 MP and 48 MP, portrait and landscape, one with text for OCR, one with a QR code) decode correctly on Windows, macOS, and Linux CI. Orientation is correct in thumbnails (golden thumbnail comparison). OCR and QR work on the HEIC fixtures exactly as on their JPEG equivalents.
+- [ ] **HEIC:** self-shot phone-camera fixtures (12 MP and 48 MP, portrait and landscape, one with text for OCR, one with a QR code) decode correctly on Windows, macOS, and Linux CI. **Any phone that shoots HEIC will do** (answered 2026-09-20): what the decoder has to cope with is the container — a tile grid, an aux HDR gain map, a rotation transform — not the vendor. Orientation is correct in thumbnails (golden thumbnail comparison). OCR and QR work on the HEIC fixtures exactly as on their JPEG equivalents.
 - [ ] Decoding a 48 MP HEIC keeps the RSS delta < 400 MB and completes in < 3 s on the reference machine.
 - [ ] Peak RSS while indexing the full fixture corpus with all models loaded ≤ 1.5 GB (NFR-11).
 - [ ] OCR: CER ≤ 10% on the Spanish and English screenshot fixtures (record the actual values). Accented characters (á, é, í, ó, ú, ñ, ¿, ¡) appear in the output.
@@ -1055,7 +1055,7 @@ Rules:
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------- |
 | Q1     | Final product name (replaces `magi`)                                                                                                                           | M8     | Keep `magi`                                                     |
 | ~~Q2~~ | Frontend framework                                                                                                                                             | —      | **Answered 2026-09-10:** React + TypeScript                     |
-| ~~Q3~~ | HEIC/HEIF (iPhone photos) in v1?                                                                                                                               | —      | **Answered 2026-09-10:** Yes, required (M4)                     |
+| ~~Q3~~ | HEIC/HEIF (phone photos) in v1?                                                                                                                               | —      | **Answered 2026-09-10:** Yes, required (M4)                     |
 | ~~Q4~~ | Minimum target hardware                                                                                                                                        | —      | **Answered 2026-09-10:** 8 GB RAM laptop (§1 reference machine) |
 | Q5     | Is macOS Intel (x86_64) support required?                                                                                                                      | M8     | Best-effort                                                     |
 | Q6     | License for the repository (MIT assumed)                                                                                                                       | M0     | MIT                                                             |

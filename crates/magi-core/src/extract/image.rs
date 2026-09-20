@@ -14,12 +14,23 @@ use std::path::Path;
 
 use image::{ImageDecoder, ImageReader, Limits};
 
-use super::heic;
+use super::{ChunkSource, ExtractedDoc, RawChunk, heic, lang};
 use crate::error::{Error, Result};
+use crate::ocr::OcrEngine;
 
 /// Extra allocation a decoder may need beyond the output buffer: progressive
 /// JPEG coefficient planes, PNG filter rows, and so on.
 const DECODE_SLACK_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Long edge an image is downscaled to before OCR, per SPEC.md §5.3. Text
+/// stops getting more legible well before a 12 MP photo's full resolution,
+/// and the recognizer's cost scales with pixels.
+const OCR_LONG_SIDE: u32 = 2048;
+
+/// Prefixed to every decoded barcode payload so that SPEC.md §7 M4's two
+/// required queries — `qr code` and `código QR` — both match the chunk,
+/// whichever language the user searches in.
+const QR_CHUNK_PREFIX: &str = "QR code / código QR: ";
 
 /// Megapixels, rounded up, so the limit reads the way a user states it: a
 /// 64 MP ceiling rejects anything over 64 million pixels.
@@ -89,6 +100,80 @@ pub fn decode_bounded(path: &Path, bytes: &[u8], max_megapixels: u32) -> Result<
     Ok(decoded.into_rgb8())
 }
 
+/// Everything derived from one image, with the full-resolution buffer
+/// already dropped (SPEC.md §5.3).
+pub struct ImageArtifacts {
+    /// `ocr` and `qr` chunks, plus the language detected from the OCR text.
+    pub doc: ExtractedDoc,
+    /// Already downscaled to [`crate::thumbs::THUMB_LONG_SIDE`].
+    pub thumbnail: image::RgbImage,
+}
+
+/// Decodes `bytes` once and derives everything from that single buffer:
+/// barcode payloads, recognized text, and the thumbnail.
+///
+/// The full-resolution image is dropped before this returns. Barcode
+/// detection runs on it first, since [`crate::qr::decode_barcodes`] needs
+/// the detail; OCR gets a copy capped at [`OCR_LONG_SIDE`].
+pub fn extract_image(
+    path: &Path,
+    bytes: &[u8],
+    max_megapixels: u32,
+    ocr: &dyn OcrEngine,
+) -> Result<ImageArtifacts> {
+    let full = decode_bounded(path, bytes, max_megapixels)?;
+
+    let mut chunks = Vec::new();
+    for payload in crate::qr::decode_barcodes(&full) {
+        chunks.push(RawChunk {
+            source: ChunkSource::Qr,
+            text: format!("{QR_CHUNK_PREFIX}{payload}"),
+            page: None,
+            line_start: None,
+            line_end: None,
+        });
+    }
+
+    let text = ocr.recognize(&downscaled(&full, OCR_LONG_SIDE))?;
+    let trimmed = text.trim();
+    for piece in crate::chunk::chunk_text(trimmed) {
+        chunks.push(RawChunk {
+            source: ChunkSource::Ocr,
+            text: piece,
+            page: None,
+            line_start: None,
+            line_end: None,
+        });
+    }
+
+    let thumbnail = downscaled(&full, crate::thumbs::THUMB_LONG_SIDE);
+    drop(full);
+
+    Ok(ImageArtifacts {
+        doc: ExtractedDoc {
+            chunks,
+            lang: lang::detect_lang(trimmed),
+        },
+        thumbnail,
+    })
+}
+
+/// A copy with its long edge at most `long_side`. Never upscales; an image
+/// already small enough is copied as-is.
+fn downscaled(image: &image::RgbImage, long_side: u32) -> image::RgbImage {
+    let longest = image.width().max(image.height());
+    if longest <= long_side {
+        return image.clone();
+    }
+    let scale = f64::from(long_side) / f64::from(longest);
+    image::imageops::resize(
+        image,
+        ((f64::from(image.width()) * scale).round() as u32).max(1),
+        ((f64::from(image.height()) * scale).round() as u32).max(1),
+        image::imageops::FilterType::Lanczos3,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -122,7 +207,7 @@ mod tests {
 
     #[test]
     fn heic_is_routed_through_the_heic_decoder() {
-        let (path, bytes) = corpus("images/iphone_qr.heic");
+        let (path, bytes) = corpus("images/phone_qr.heic");
         assert_eq!(probe_dimensions(&path, &bytes).unwrap(), (1834, 1546));
         let image = decode_bounded(&path, &bytes, 64).unwrap();
         assert_eq!((image.width(), image.height()), (1834, 1546));
@@ -154,6 +239,43 @@ mod tests {
             decode_bounded(&path, &bytes, 64),
             Err(Error::Image(_))
         ));
+    }
+
+    #[test]
+    fn a_photographed_qr_becomes_a_chunk_both_required_queries_can_match() {
+        let (path, bytes) = corpus("images/phone_qr.heic");
+        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr).unwrap();
+
+        let qr: Vec<&str> = artifacts
+            .doc
+            .chunks
+            .iter()
+            .filter(|c| c.source == ChunkSource::Qr)
+            .map(|c| c.text.as_str())
+            .collect();
+        assert_eq!(qr, ["QR code / código QR: https://www.cntindigena.org/"]);
+        // SPEC.md §7 M4 requires both `qr code` and `código QR` to hit.
+        assert!(qr[0].to_lowercase().contains("qr code"));
+        assert!(qr[0].to_lowercase().contains("código qr"));
+
+        // The thumbnail is already small: the full-resolution buffer must
+        // not escape this function.
+        assert_eq!(
+            artifacts
+                .thumbnail
+                .width()
+                .max(artifacts.thumbnail.height()),
+            crate::thumbs::THUMB_LONG_SIDE
+        );
+    }
+
+    #[test]
+    fn without_an_ocr_engine_an_image_still_yields_its_thumbnail() {
+        let (path, bytes) = corpus("images/mountain_sunset.jpg");
+        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr).unwrap();
+        assert!(artifacts.doc.chunks.is_empty());
+        assert!(artifacts.doc.lang.is_none());
+        assert_eq!(artifacts.thumbnail.height(), 171); // 1920x1280 -> 256x171
     }
 
     #[test]

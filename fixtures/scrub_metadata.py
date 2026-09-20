@@ -70,6 +70,16 @@ BINARY_FIXTURES = {
 # A generated PDF's author field. reportlab writes this when none is given.
 ANONYMOUS_AUTHORS = {b"", b"anonymous", b"Anonymous", b"unknown"}
 
+# Fixtures reviewed by a human and kept as they are. A gate that always
+# reports the same known finding is a gate people learn to ignore, so each
+# exemption carries its reason and nothing else is exempt.
+REVIEWED = {
+    # A PowerPoint export whose metadata names its author and whose slides
+    # use example names. Reviewed 2026-09-20: nothing sensitive. Committed
+    # since M2. See fixtures/README.md.
+    "huge_real.pdf",
+}
+
 
 def scrub_jpeg(data: bytes) -> bytes:
     """Rebuild the marker stream without the metadata segments.
@@ -345,7 +355,7 @@ def check(path: Path):
     # Only binary fixtures carry this kind of metadata. A .txt fixture, this
     # script and the README would all false-positive on the very words it
     # looks for.
-    if path.suffix.lower() not in BINARY_FIXTURES:
+    if path.suffix.lower() not in BINARY_FIXTURES or path.name in REVIEWED:
         return []
     data = path.read_bytes()
     for pattern in STRUCTURAL:

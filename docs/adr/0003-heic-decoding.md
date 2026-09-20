@@ -33,27 +33,28 @@ container without decoding):
 
 | Fixture                        | Pixels      | MP   | Bit depth | Chroma | Grid                |
 | ------------------------------ | ----------- | ---- | --------- | ------ | ------------------- |
-| `iphone_12mp_landscape.heic` ¹ | 4000 × 3000 | 12.0 | 8         | 4:2:0  | 6 × 8 tiles of 512² |
-| `iphone_12mp_portrait.heic` ¹  | 3000 × 4000 | 12.0 | 8         | 4:2:0  | yes                 |
-| `iphone_text_es.heic`          | 3000 × 4000 | 12.0 | 8         | 4:2:0  | yes                 |
-| `iphone_qr.heic`               | 1834 × 1546 | 2.8  | 8         | 4:2:0  | yes                 |
+| `phone_12mp_landscape.heic` ¹ | 4000 × 3000 | 12.0 | 8         | 4:2:0  | 6 × 8 tiles of 512² |
+| `phone_12mp_portrait.heic` ¹  | 3000 × 4000 | 12.0 | 8         | 4:2:0  | yes                 |
+| `phone_text_es.heic`          | 3000 × 4000 | 12.0 | 8         | 4:2:0  | yes                 |
+| `phone_qr.heic`               | 1834 × 1546 | 2.8  | 8         | 4:2:0  | yes                 |
 | `shelf_christmas.heic`         | 4000 × 3000 | 12.0 | 8         | 4:2:0  | yes                 |
 
 ¹ Local-only, not committed (`fixtures/README.md`): these two photograph a
-card naming the repo owner. `iphone_text_es.heic` and `shelf_christmas.heic`
+card naming the repo owner. `phone_text_es.heic` and `shelf_christmas.heic`
 cover the same 12 MP portrait and landscape cases in CI.
 
 Every fixture is a **tile grid**, not a single coded image — a decoder that
 does not compose grids decodes nothing useful here.
 
-Note that despite their names these were shot on a Samsung Galaxy, not an
-iPhone, which SPEC.md §7 M4 asks for; `fixtures/README.md` tracks that gap.
+These were shot on a Samsung Galaxy. SPEC.md §7 M4 originally asked for
+iPhone fixtures; as of 2026-09-20 it asks for phone-camera HEIC without
+naming a vendor, since what the decoder has to cope with is the container.
 All of them have since been stripped of EXIF, XMP and Samsung's `sefd`
 trailer, with the decoded pixels verified byte-identical before and after on
 both backends.
 
 **The 48 MP fixture does not exist yet.** The file that previously carried
-the name `iphone_48mp_landscape.heic` is a 121 MB Netpbm P6 export
+the name `phone_48mp_landscape.heic` is a 121 MB Netpbm P6 export
 (5492 × 3672, 16-bit), not a HEIC; both decoders reject it at the container
 (`NoFtypBox` / `BoxTooLarge`). SPEC.md §7 M4's "48 MP HEIC decodes in < 3 s
 with an RSS delta < 400 MB" therefore **cannot be verified yet**. See
@@ -70,15 +71,15 @@ before the decision is final.
 
 | Fixture                           | Backend      | Decode | Peak WS      |
 | --------------------------------- | ------------ | ------ | ------------ |
-| `iphone_12mp_landscape` (12.0 MP) | `heic-rs`    | 135 ms | 45 MB        |
+| `phone_12mp_landscape` (12.0 MP) | `heic-rs`    | 135 ms | 45 MB        |
 |                                   | `libheif-rs` | 233 ms | 56 MB        |
-| `iphone_text_es` (12.0 MP)        | `heic-rs`    | 184 ms | **116 MB**   |
+| `phone_text_es` (12.0 MP)        | `heic-rs`    | 184 ms | **116 MB**   |
 |                                   | `libheif-rs` | 235 ms | 45 MB        |
 | `shelf_christmas` (12.0 MP)       | `heic-rs`    | 100 ms | 48 MB        |
 |                                   | `libheif-rs` | 220 ms | 54 MB        |
-| `iphone_qr` (2.8 MP)              | `heic-rs`    | 35 ms  | 17 MB        |
+| `phone_qr` (2.8 MP)              | `heic-rs`    | 35 ms  | 17 MB        |
 |                                   | `libheif-rs` | 56 ms  | 10 MB        |
-| `iphone_12mp_portrait` (12.0 MP)  | `heic-rs`    | 231 ms | not captured |
+| `phone_12mp_portrait` (12.0 MP)  | `heic-rs`    | 231 ms | not captured |
 |                                   | `libheif-rs` | 273 ms | not captured |
 
 Both backends return identical dimensions on all five fixtures, including the

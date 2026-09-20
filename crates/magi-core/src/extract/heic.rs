@@ -97,8 +97,8 @@ mod tests {
     /// The two committed iPhone fixtures cover both orientations at 12 MP.
     const COMMITTED: &[(&str, u32, u32)] = &[
         ("shelf_christmas.heic", 4000, 3000),
-        ("iphone_text_es.heic", 3000, 4000),
-        ("iphone_qr.heic", 1834, 1546),
+        ("phone_text_es.heic", 3000, 4000),
+        ("phone_qr.heic", 1834, 1546),
     ];
 
     #[test]

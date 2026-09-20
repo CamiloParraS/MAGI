@@ -29,8 +29,8 @@ superpowers/
 # Fixtures kept local-only (see fixtures/README.md): personal data, or too
 # large for git. Tests that need them skip when they are absent.
 fixtures/corpus/images/receipt_es.jpg
-fixtures/corpus/images/iphone_12mp_portrait.heic
-fixtures/corpus/images/iphone_12mp_landscape.heic
+fixtures/corpus/images/phone_12mp_portrait.heic
+fixtures/corpus/images/phone_12mp_landscape.heic
 fixtures/corpus/images/mustang_landscape.arw
 fixtures/corpus/images/NOT_A_HEIC_*
 fixtures/golden/ocr/personal.md

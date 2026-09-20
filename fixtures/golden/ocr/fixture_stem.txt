@@ -1,14 +1,14 @@
 # Images, what OCR detects + description
 
-## iphone_12mp_portrait
+## phone_12mp_portrait
 
 Ground truth in `personal.md` (git-ignored).
 
-## iphone_12mp_landscape
+## phone_12mp_landscape
 
 Ground truth in `personal.md` (git-ignored).
 
-## iphone_text_es
+## phone_text_es
 
 ### Description
 
@@ -28,7 +28,7 @@ toque de canela mientras leo un buen libro es, sin
 duda, una de las actividades más me placenteras de la
 vida.
 
-## iphone_qr
+## phone_qr
 
 URL: https://www.cntindigena.org/
 

@@ -106,8 +106,8 @@ mod tests {
 
     #[test]
     fn a_photographed_qr_code_decodes_the_same_from_heic_and_jpeg() {
-        let from_heic = decode_fixture("images/iphone_qr.heic");
-        let from_jpeg = decode_fixture("images/iphone_qr.jpg");
+        let from_heic = decode_fixture("images/phone_qr.heic");
+        let from_jpeg = decode_fixture("images/phone_qr.jpg");
         assert_eq!(from_heic, vec!["https://www.cntindigena.org/".to_string()]);
         assert_eq!(from_heic, from_jpeg);
     }
