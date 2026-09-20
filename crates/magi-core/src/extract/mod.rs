@@ -5,6 +5,7 @@
 pub mod code;
 pub mod filename;
 pub mod heic;
+pub mod image;
 pub mod lang;
 pub mod office;
 pub mod pdf;

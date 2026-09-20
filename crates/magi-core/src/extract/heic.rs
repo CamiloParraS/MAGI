@@ -30,6 +30,14 @@ pub fn is_heic(path: &Path, bytes: &[u8]) -> bool {
             .is_some_and(|e| HEIC_EXTENSIONS.iter().any(|k| k.eq_ignore_ascii_case(e)))
 }
 
+/// Reads the primary image's display dimensions from the container,
+/// decoding nothing. Rotation is already applied, so these are the
+/// dimensions [`decode_heic`] will return.
+pub fn probe_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    let info = heic_rs::probe(bytes).map_err(|e| Error::Heic(e.to_string()))?;
+    Ok((info.width, info.height))
+}
+
 /// Decodes the primary image to RGB8, with the container's rotation and
 /// mirror transforms applied.
 ///
@@ -40,11 +48,11 @@ pub fn is_heic(path: &Path, bytes: &[u8]) -> bool {
 pub fn decode_heic(bytes: &[u8], max_megapixels: u32) -> Result<image::RgbImage> {
     let max_pixels = u64::from(max_megapixels) * 1_000_000;
 
-    let info = heic_rs::probe(bytes).map_err(|e| Error::Heic(e.to_string()))?;
-    let pixels = u64::from(info.width) * u64::from(info.height);
-    if pixels > max_pixels {
+    let (width, height) = probe_dimensions(bytes)?;
+    let declared = super::image::megapixels(width, height);
+    if declared > max_megapixels {
         return Err(Error::ImageTooLarge {
-            megapixels: (pixels / 1_000_000) as u32,
+            megapixels: declared,
             limit: max_megapixels,
         });
     }

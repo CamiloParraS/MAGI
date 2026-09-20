@@ -19,6 +19,7 @@ container stays correct.
 remains. Run it before committing a new image fixture.
 """
 
+import re
 import struct
 import sys
 from pathlib import Path
@@ -50,11 +51,24 @@ SMELLS = [
     (b"iPhone", "device model"),
     (b"Google", "software vendor"),
     (b"sefd", "Samsung extended data"),
+    (b"dc:creator", "document author"),
+    (b"xmpMM:DocumentID", "document UUID"),
 ]
 
 # Byte strings that legitimately contain a smell: they name a format, not a
 # device. Blanked before scanning so they do not raise a false alarm.
 STRUCTURAL = [b"urn:com:samsung:", b"urn:com:apple:"]
+
+# Only binary fixtures carry the metadata this checks for. Anything else --
+# a .txt fixture, this script, the README -- would false-positive on the very
+# words it is looking for.
+BINARY_FIXTURES = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp",
+    ".heic", ".heif", ".pdf", ".docx", ".xlsx", ".pptx",
+}
+
+# A generated PDF's author field. reportlab writes this when none is given.
+ANONYMOUS_AUTHORS = {b"", b"anonymous", b"Anonymous", b"unknown"}
 
 
 def scrub_jpeg(data: bytes) -> bytes:
@@ -271,12 +285,19 @@ def _drop_trailing_sefd(data: bytes) -> bytes:
     return data[:box_start]
 
 
+# EXIF tags a fixture may legitimately carry. Orientation is the only one a
+# test depends on (`edge/rotated_exif.jpg` is tagged on purpose). Everything
+# else — including the sub-IFD pointers that lead to the camera and GPS
+# blocks — is reported.
+ALLOWED_EXIF_TAGS = {0x0112}  # Orientation
+
+
 def _has_populated_exif(data: bytes) -> bool:
-    """True if an EXIF block holds at least one tag.
+    """True if an EXIF block holds a tag outside `ALLOWED_EXIF_TAGS`.
 
     `Exif\\0\\0` also occurs structurally in HEIF, as an `infe` item type, and
-    a scrubbed file keeps an empty one. Only a block followed by a TIFF
-    header with a non-empty IFD is real metadata.
+    a scrubbed file keeps an empty one, so the mere presence of the header
+    proves nothing — the IFD has to be read.
     """
     i = data.find(b"Exif\x00\x00")
     while i >= 0:
@@ -285,19 +306,56 @@ def _has_populated_exif(data: bytes) -> bool:
             endian = "little" if tiff[0] == ord("I") else "big"
             offset = int.from_bytes(tiff[4:8], endian)
             if 0 < offset + 2 <= len(tiff):
-                if int.from_bytes(tiff[offset : offset + 2], endian) > 0:
-                    return True
+                count = int.from_bytes(tiff[offset : offset + 2], endian)
+                for n in range(count):
+                    entry = offset + 2 + n * 12
+                    if entry + 2 > len(tiff):
+                        break
+                    tag = int.from_bytes(tiff[entry : entry + 2], endian)
+                    if tag not in ALLOWED_EXIF_TAGS:
+                        return True
         i = data.find(b"Exif\x00\x00", i + 1)
     return False
 
 
+def _named_author(data: bytes):
+    """The PDF `/Author` value, when it names someone.
+
+    An encrypted PDF stores ciphertext there, which is neither readable nor a
+    name; a generated one usually says "anonymous".
+    """
+    marker = b"/Author"
+    i = data.find(marker)
+    while i >= 0:
+        open_paren = data.find(b"(", i, i + 16)
+        close_paren = data.find(b")", open_paren + 1) if open_paren > 0 else -1
+        if 0 < open_paren < close_paren:
+            value = data[open_paren + 1 : close_paren].strip()
+            # An encrypted PDF's ciphertext is written as backslash-octal
+            # escapes, which are printable but are not a name.
+            escaped = re.search(rb"\\[0-7]{3}", value) is not None
+            printable = all(32 <= b < 127 for b in value)
+            if printable and not escaped and value not in ANONYMOUS_AUTHORS:
+                return value.decode("latin1")
+        i = data.find(marker, i + 1)
+    return None
+
+
 def check(path: Path):
+    # Only binary fixtures carry this kind of metadata. A .txt fixture, this
+    # script and the README would all false-positive on the very words it
+    # looks for.
+    if path.suffix.lower() not in BINARY_FIXTURES:
+        return []
     data = path.read_bytes()
     for pattern in STRUCTURAL:
         data = data.replace(pattern, b"\x00" * len(pattern))
     found = [why for needle, why in SMELLS if needle in data]
     if _has_populated_exif(data):
         found.append("EXIF tags")
+    author = _named_author(data)
+    if author is not None:
+        found.append(f"document author {author!r}")
     return found
 
 
