@@ -44,6 +44,9 @@ pub enum Error {
     #[error("extraction of {} timed out after {seconds}s", .path.display())]
     ExtractionTimeout { path: PathBuf, seconds: u64 },
 
+    #[error("extraction of {} refused: {stuck} timed-out extractions are still running", .path.display())]
+    ExtractionBacklog { path: PathBuf, stuck: usize },
+
     #[error("extraction of {} panicked: {message}", .path.display())]
     ExtractionPanicked { path: PathBuf, message: String },
 

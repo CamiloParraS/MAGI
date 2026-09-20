@@ -68,6 +68,28 @@ impl Extractor for PdfExtractor {
     }
 }
 
+/// First page rendered to fit [`crate::thumbs::THUMB_LONG_SIDE`], for the
+/// thumbnail cache.
+pub fn first_page_thumbnail(bytes: &[u8]) -> Result<image::RgbImage> {
+    let pdfium = shared_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| Error::Pdf(e.to_string()))?;
+    let page = document
+        .pages()
+        .first()
+        .map_err(|e| Error::Pdf(e.to_string()))?;
+    let side = crate::thumbs::THUMB_LONG_SIDE as i32;
+    let config = PdfRenderConfig::new()
+        .set_maximum_width(side)
+        .set_maximum_height(side);
+    let rendered = page
+        .render_with_config(&config)
+        .map_err(|e| Error::Pdf(e.to_string()))?;
+    let image = rendered.as_image().map_err(|e| Error::Pdf(e.to_string()))?;
+    Ok(image.into_rgb8())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +142,14 @@ mod tests {
         let bytes = fixture("edge/password_protected.pdf");
         let result = PdfExtractor.extract(Path::new("password_protected.pdf"), &bytes);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn first_page_renders_within_the_thumbnail_size() {
+        let thumb = first_page_thumbnail(&fixture("pdf/report.pdf")).unwrap();
+        assert_eq!(
+            thumb.width().max(thumb.height()),
+            crate::thumbs::THUMB_LONG_SIDE
+        );
     }
 }

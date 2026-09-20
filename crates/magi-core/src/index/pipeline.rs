@@ -22,6 +22,29 @@ use crate::ocr::{NoOcr, OcrEngine};
 
 pub const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Timed-out extraction threads that may still be running before new
+/// extractions are refused. A hung thread can't be killed, and each one
+/// pins its file's bytes and any decoded image, so this caps that memory.
+const MAX_STUCK_THREADS: usize = 4;
+
+/// What an indexing run needs beyond the walk options: the models.
+pub struct IndexContext<'a> {
+    pub embedder: &'a dyn TextEmbedder,
+    /// `Arc` because extraction runs on a detached thread that must own it.
+    pub ocr: Arc<dyn OcrEngine>,
+}
+
+impl<'a> IndexContext<'a> {
+    /// A context with no OCR engine; images still get QR payloads and a
+    /// thumbnail.
+    pub fn new(embedder: &'a dyn TextEmbedder) -> Self {
+        Self {
+            embedder,
+            ocr: Arc::new(NoOcr),
+        }
+    }
+}
+
 const SNIFF_HEADER_LEN: usize = 8192;
 
 pub struct IndexRootOptions {
