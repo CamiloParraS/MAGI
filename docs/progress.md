@@ -900,3 +900,102 @@ never reclaimed (`index/pipeline.rs` — matters for M4's HEIC/bomb RSS budgets)
 scheduler wants a stream), per-OS default exclusions from SPEC.md §5.2 are
 unimplemented (`%WINDIR%`, `~/Library`, `/proc`), and `config::save_to` does
 not `fsync` before rename.
+
+## M4 — Images: OCR, QR codes, visual embeddings, thumbnails
+
+### Slice 0 — fixture corpus, and what is not committed
+
+The image fixtures were shot by hand (SPEC.md §7 M4 requires self-shot iPhone
+photos). Three problems surfaced when they were about to be committed, all
+recorded in the new `fixtures/README.md`:
+
+- [x] **Personal data kept out of the repo.** `receipt_es.jpg` photographs a
+      real receipt carrying a full name, national ID number, phone, email and
+      address, and `iphone_12mp_portrait/landscape.heic` photograph a card
+      addressed to the repo owner by name. All three, plus their transcribed
+      OCR ground truth (`fixtures/golden/ocr/personal.md`), are git-ignored.
+      **CI loses nothing measurable:** `iphone_text_es.heic` (3000 × 4000) and
+      `shelf_christmas.heic` (4000 × 3000) are 12 MP iPhone HEICs in both
+      orientations, and SPEC.md §7 M4 only requires OCR CER on the English and
+      Spanish *screenshot* fixtures, which are committed. Redaction, not Git
+      LFS, is the answer if one of these ever has to ship.
+- [x] **`iphone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
+      export (5492 × 3672, 16-bit) behind the name — both decoders reject it at
+      the container (`NoFtypBox` / `BoxTooLarge`). Renamed and git-ignored.
+      **SPEC.md §7 M4's "48 MP HEIC in < 3 s with RSS Δ < 400 MB" is therefore
+      still unverifiable**; it needs a real 48 MP shot (iPhone 14 Pro or later,
+      Resolution Control on).
+- [x] **Identifying metadata stripped, losslessly.** Every camera fixture
+      carried GPS coordinates (down to the neighbourhood), device make, model
+      and firmware build, and capture timestamps; the Samsung HEICs also
+      carried a proprietary `sefd` trailer with the network's mobile country
+      code and an on-device file path from the photo editor. New
+      `fixtures/scrub_metadata.py` removes all of it without re-encoding a
+      pixel — JPEG metadata segments dropped from the marker stream (and the
+      file truncated at the primary image's EOI, because a phone JPEG appends
+      a *second* complete JPEG after it, MPF-style, carrying its own EXIF and
+      XMP), HEIF metadata item payloads overwritten in place with a valid
+      empty replacement of the same length so no `iloc` offset moves, and the
+      `sefd` box truncated. **Nothing that a test needs was lost:** HEIC
+      orientation is the container's `irot` transform, not EXIF, and no
+      committed JPEG had a non-trivial EXIF `Orientation`. Verified after the
+      scrub: identical dimensions and container rotation, and byte-identical
+      decoded pixels from both `heic-rs` and `libheif-rs` on all five HEICs,
+      plus identical decoded pixels on all nine JPEGs. `--check` mode reports
+      identifying strings (not metadata structure) and is the gate to run
+      before committing a new image fixture.
+- [x] **The "iPhone" fixtures are not iPhone photos.** EXIF named a Samsung
+      Galaxy S24 FE, and a Galaxy A32 for `shelf_christmas.heic`. SPEC.md §7
+      M4 asks for self-shot *iPhone* HEICs. The filenames were kept so a real
+      iPhone shot can replace a file in place; structurally these are close
+      (tile grid, HEVC, aux HDR gain map) but Apple's Live Photo `.MOV`
+      sibling and 10-bit variants stay untested. Either supply iPhone shots
+      or amend SPEC.md §7 M4 — tracked in `fixtures/README.md`.
+- [x] **Housekeeping:** two byte-identical duplicate screenshots removed,
+      filenames normalized to the stems the M4 plan and the golden file use
+      (`screenshot_en.png`, `truncated.jpg`, `shelf_christmas.heic`, …), and
+      `*.ARW binary` dropped from `.gitattributes` since RAW is not a
+      supported kind (`discovery::classify` has no `arw`).
+
+### Slice 1 — HEIC decode spike → ADR-0003
+
+- [x] **A third option beat both the spec's.** The spike compared
+      `libheif-rs` 3.0.0 (Option A) against `heic-rs` 0.1.1, a pure-Rust
+      decoder first published 2026-09-12 and therefore absent from the spec.
+      Both produce identical dimensions on all five HEIC fixtures — including
+      the portrait ones, so both apply the container rotation — and their
+      4 × 4 mean-RGB fingerprints agree to within a few units per channel.
+      `heic-rs` is 1.3–2.3× faster and needs no native library, no LGPL
+      notice, no M8 bundling, and no per-OS CI install. Chosen; `libheif-rs`
+      is the documented fallback. SPEC.md §3, §4.3, §7 M4 and §9 Q8 updated.
+- [x] **Windows measurements** (release build, peak working set polled every
+      50 ms, one process per decode, ADR-0005's method; single run per cell):
+      12 MP decodes in 100–231 ms at 45–48 MB peak with `heic-rs`, versus
+      220–273 ms at 45–56 MB with `libheif-rs`. Full table in ADR-0003.
+- [x] **The Linux blocker that decided it.** `libheif-rs` 3.0.0 requires
+      libheif ≥ 1.17.0; Ubuntu 22.04 ships `libheif-dev 1.12.0-2build1`. On
+      the pinned `ubuntu-22.04` runner, Option A means either building libheif
+      from source in `xtask` or moving to `ubuntu-24.04` and raising the
+      AppImage's glibc floor — a spec change. Option C has neither problem.
+- [x] **`crates/magi-core/src/extract/heic.rs`** implements `is_heic` and
+      `decode_heic` (primary item only, rotation applied, rejected from the
+      header when over `max_megapixels`). Three tests, green: all committed
+      HEIC fixtures decode to the right size and are not uniform; a 1 MP
+      ceiling rejects a 12 MP photo as `ImageTooLarge`; non-HEIF bytes fail as
+      `Heic`. Local-only fixtures are skipped, never failed.
+- [x] `just check` green: 145 unit + 9 golden + 1 idempotence tests,
+      `cargo fmt --check` and `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+
+Open, carried into Slice 2:
+
+- **No CI run on the three runners yet** — SPEC.md §7 M4 requires one before
+  M4 is signed off. With `heic-rs` there is nothing to install, so this is the
+  existing `cargo test --workspace` on the existing matrix.
+- **`embedded_thumbnail` was not written.** `heic-rs` decodes the primary item
+  only and exposes no way to select the `thmb` item, so the function could
+  only ever return `Ok(None)`. Slice 2 downscales the thumbnail from the
+  decode OCR and embedding already need. ADR-0003 records the trade.
+- **`rxing` 0.9.3 does not compile** against the `png` version it resolves to
+  today (six `E0599`s in its own `image` feature). Found while trying to
+  verify the QR fixture payloads; Slice 2 owns pinning or patching it.

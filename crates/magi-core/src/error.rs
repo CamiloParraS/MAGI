@@ -50,6 +50,12 @@ pub enum Error {
     #[error("PDF error: {0}")]
     Pdf(String),
 
+    #[error("HEIC error: {0}")]
+    Heic(String),
+
+    #[error("image is {megapixels} MP, over the {limit} MP limit")]
+    ImageTooLarge { megapixels: u32, limit: u32 },
+
     #[error("Office document error: {0}")]
     Office(String),
 
