@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
+use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
@@ -144,6 +145,17 @@ fn ocr_from_env() -> std::sync::Arc<dyn OcrEngine> {
     }
 }
 
+/// The fake one under `MAGI_FAKE_EMBEDDER=1`; otherwise SigLIP, which loads
+/// nothing until the first image or query (and degrades if its models are
+/// missing).
+fn image_embedder_from_env() -> std::sync::Arc<dyn ImageEmbedder> {
+    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
+        std::sync::Arc::new(FakeImageEmbedder)
+    } else {
+        std::sync::Arc::new(SigLipEmbedder::new())
+    }
+}
+
 fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
@@ -176,6 +188,7 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &IndexContext {
             embedder: embedder.as_ref(),
             ocr: ocr_from_env(),
+            image_embedder: Some(image_embedder_from_env()),
         },
     )?;
 
@@ -200,7 +213,13 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
         }
         "hybrid" => {
             let embedder = embedder_from_env()?;
-            let hits = magi_core::search::hybrid_search(&conn, embedder.as_ref(), query, limit)?;
+            let hits = magi_core::search::hybrid_search(
+                &conn,
+                embedder.as_ref(),
+                Some(image_embedder_from_env().as_ref()),
+                query,
+                limit,
+            )?;
             if hits.is_empty() {
                 println!("no results");
             }

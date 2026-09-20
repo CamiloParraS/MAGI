@@ -15,6 +15,7 @@ use std::path::Path;
 use image::{ImageDecoder, ImageReader, Limits};
 
 use super::{ChunkSource, ExtractedDoc, RawChunk, heic, lang};
+use crate::embed::ImageEmbedder;
 use crate::error::{Error, Result};
 use crate::ocr::OcrEngine;
 
@@ -107,19 +108,24 @@ pub struct ImageArtifacts {
     pub doc: ExtractedDoc,
     /// Already downscaled to [`crate::thumbs::THUMB_LONG_SIDE`].
     pub thumbnail: image::RgbImage,
+    /// The visual embedding, or `None` without an embedder or when embedding
+    /// failed (the image is still searchable by its text and filename).
+    pub image_embedding: Option<Vec<f32>>,
 }
 
 /// Decodes `bytes` once and derives everything from that single buffer:
-/// barcode payloads, recognized text, and the thumbnail.
+/// barcode payloads, the visual embedding, recognized text, and the thumbnail.
 ///
 /// The full-resolution image is dropped before OCR runs. Barcode
-/// detection runs on it first, since [`crate::qr::decode_barcodes`] needs
-/// the detail; OCR gets a copy capped at [`OCR_LONG_SIDE`].
+/// detection and the embedding run on it first ([`crate::qr::decode_barcodes`]
+/// needs the detail, and the embedder resizes straight to its own input);
+/// OCR gets a copy capped at [`OCR_LONG_SIDE`].
 pub fn extract_image(
     path: &Path,
     bytes: &[u8],
     max_megapixels: u32,
     ocr: &dyn OcrEngine,
+    embedder: Option<&dyn ImageEmbedder>,
 ) -> Result<ImageArtifacts> {
     let full = decode_bounded(path, bytes, max_megapixels)?;
 
@@ -133,6 +139,15 @@ pub fn extract_image(
             line_end: None,
         });
     }
+
+    // A failed embedding costs the file its visual match, never its entry.
+    let image_embedding = embedder.and_then(|e| match e.embed_image(&full) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "image embedding failed");
+            None
+        }
+    });
 
     // One Lanczos pass over the full-resolution pixels (~0.55 s at 48 MP);
     // the thumbnail comes from that copy, and the full buffer is dropped
@@ -159,6 +174,7 @@ pub fn extract_image(
             lang: lang::detect_lang(trimmed),
         },
         thumbnail,
+        image_embedding,
     })
 }
 
@@ -248,7 +264,7 @@ mod tests {
     #[test]
     fn a_photographed_qr_becomes_a_chunk_both_required_queries_can_match() {
         let (path, bytes) = corpus("images/phone_qr.heic");
-        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr).unwrap();
+        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr, None).unwrap();
 
         let qr: Vec<&str> = artifacts
             .doc
@@ -276,7 +292,7 @@ mod tests {
     #[test]
     fn without_an_ocr_engine_an_image_still_yields_its_thumbnail() {
         let (path, bytes) = corpus("images/mountain_sunset.jpg");
-        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr).unwrap();
+        let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr, None).unwrap();
         assert!(artifacts.doc.chunks.is_empty());
         assert!(artifacts.doc.lang.is_none());
         assert_eq!(artifacts.thumbnail.height(), 171); // 1920x1280 -> 256x171

@@ -98,6 +98,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
     let root = db::roots::add(&conn, &corpus_dir)?;
 
     let embedder = crate::embedder_from_env()?;
+    let image_embedder = crate::image_embedder_from_env();
     let options = IndexRootOptions::from_config(&config::IndexingConfig::default())?;
     let summary = index_root(
         &mut conn,
@@ -108,6 +109,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &IndexContext {
             embedder: embedder.as_ref(),
             ocr: crate::ocr_from_env(),
+            image_embedder: Some(image_embedder.clone()),
         },
     )?;
     println!(
@@ -130,14 +132,20 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
             let hits = match mode {
                 "fts" => {
                     let fts = search_fts(&conn, &q.query, search::FTS_FETCH_LIMIT)?;
-                    search::rank_and_boost(&q.query, &fts, &[], FETCH_LIMIT)
+                    search::rank_and_boost(&q.query, &fts, &[], &[], FETCH_LIMIT)
                 }
                 "vector" => {
                     let embedding = embedder.embed_query(&q.query)?;
                     let vector = search_vector_text(&conn, &embedding, search::VECTOR_FETCH_LIMIT)?;
-                    search::rank_and_boost(&q.query, &[], &vector, FETCH_LIMIT)
+                    search::rank_and_boost(&q.query, &[], &vector, &[], FETCH_LIMIT)
                 }
-                "hybrid" => search::hybrid_search(&conn, embedder.as_ref(), &q.query, FETCH_LIMIT)?,
+                "hybrid" => search::hybrid_search(
+                    &conn,
+                    embedder.as_ref(),
+                    Some(image_embedder.as_ref()),
+                    &q.query,
+                    FETCH_LIMIT,
+                )?,
                 _ => unreachable!(),
             };
             let hit_paths: Vec<String> = hits

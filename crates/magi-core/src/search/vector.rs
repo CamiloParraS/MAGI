@@ -1,4 +1,4 @@
-//! Vector KNN search over `vec_text` / `vec_image`. Implemented in M3/M4.
+//! Vector KNN search over `vec_text` / `vec_image` (SPEC.md §5.6).
 
 use std::path::PathBuf;
 
@@ -71,6 +71,51 @@ pub fn search_vector_text(
         rows.into_iter().map(|(hit, _, _)| hit),
         limit,
     ))
+}
+
+/// Runs a `vec_image` KNN search (SPEC.md §5.6 step 2c). An image has one
+/// vector per file, so there is no chunk dedup; the snippet is the file name
+/// since a visual match has no matching text to show.
+pub fn search_vector_image(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: u32,
+) -> Result<Vec<FileHit>> {
+    if query_embedding.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "WITH knn_matches AS (
+            SELECT file_id, distance
+            FROM vec_image
+            WHERE embedding MATCH vec_f32(?1) AND k = ?2
+         )
+         SELECT f.id, f.path, f.file_name, f.mtime_ns, f.file_name, knn_matches.distance
+         FROM knn_matches
+         JOIN files f ON f.id = knn_matches.file_id
+         ORDER BY knn_matches.distance",
+    )?;
+    let mut rows = stmt
+        .query_map(params![embedding_to_json(query_embedding), limit], |row| {
+            Ok((
+                FileHit {
+                    file_id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    file_name: row.get(2)?,
+                    mtime_ns: row.get(3)?,
+                    snippet: row.get(4)?,
+                },
+                row.get::<_, f64>(5)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    // Ties broken by file id, in Rust, for the same reason as the text search.
+    rows.sort_by(|(a, a_distance), (b, b_distance)| {
+        a_distance
+            .total_cmp(b_distance)
+            .then_with(|| a.file_id.cmp(&b.file_id))
+    });
+    Ok(rows.into_iter().map(|(hit, _)| hit).collect())
 }
 
 #[cfg(test)]
