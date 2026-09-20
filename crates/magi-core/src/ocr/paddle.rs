@@ -7,13 +7,11 @@ use std::sync::Mutex;
 use image::RgbImage;
 use image::imageops;
 use ndarray::{Axis, Ix3, Ix4};
-use ort::ep;
 use ort::session::Session;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 
 use super::OcrEngine;
-use crate::embed::e5::init_onnxruntime;
+use crate::embed::e5::{build_session, init_onnxruntime};
 use crate::error::{Error, Result};
 
 const ENGINE_ID: &str = "paddle-ppocrv5-latin";
@@ -36,27 +34,6 @@ pub struct PaddleOcr {
     classes: Vec<String>,
 }
 
-fn session(path: &std::path::Path) -> Result<Session> {
-    let model = |what: &str, e: &dyn std::fmt::Display| Error::Model(format!("{what}: {e}"));
-    Session::builder()
-        .map_err(|e| model("creating session builder", &e))?
-        .with_optimization_level(GraphOptimizationLevel::Level1)
-        .map_err(|e| model("setting optimization level", &e))?
-        .with_intra_threads(2)
-        .map_err(|e| model("setting intra-op thread count", &e))?
-        // Same reasoning as `E5Embedder::load`: don't keep the arena pool
-        // sized for the largest image ever seen.
-        .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
-        .map_err(|e| model("disabling the CPU memory arena", &e))?
-        .commit_from_file(path)
-        .map_err(|e| {
-            Error::Model(format!(
-                "loading model {} (run `just models` first): {e}",
-                path.display()
-            ))
-        })
-}
-
 impl PaddleOcr {
     /// Loads `det.onnx`, `rec.onnx` and `rec.yml` from
     /// `embed::manager::model_dir("ocr")`.
@@ -72,8 +49,8 @@ impl PaddleOcr {
         classes.extend(parse_dict(&yml));
         classes.push(" ".to_string());
         Ok(Self {
-            det: Mutex::new(session(&dir.join("det.onnx"))?),
-            rec: Mutex::new(session(&dir.join("rec.onnx"))?),
+            det: Mutex::new(build_session(&dir.join("det.onnx"), 2)?),
+            rec: Mutex::new(build_session(&dir.join("rec.onnx"), 2)?),
             classes,
         })
     }

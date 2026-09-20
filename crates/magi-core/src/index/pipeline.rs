@@ -10,7 +10,7 @@ use rusqlite::Connection;
 
 use crate::db::files::{FileRecord, upsert_file};
 use crate::discovery::{self, Kind, WalkOptions};
-use crate::embed::TextEmbedder;
+use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::extract::code::CodeExtractor;
 use crate::extract::filename::filename_chunk;
@@ -32,15 +32,18 @@ pub struct IndexContext<'a> {
     pub embedder: &'a dyn TextEmbedder,
     /// `Arc` because extraction runs on a detached thread that must own it.
     pub ocr: Arc<dyn OcrEngine>,
+    /// `None` leaves `vec_image` empty: images are still found by their text.
+    pub image_embedder: Option<Arc<dyn ImageEmbedder>>,
 }
 
 impl<'a> IndexContext<'a> {
-    /// A context with no OCR engine; images still get QR payloads and a
-    /// thumbnail.
+    /// A context with no OCR engine and no image embedder; images still get
+    /// QR payloads and a thumbnail.
     pub fn new(embedder: &'a dyn TextEmbedder) -> Self {
         Self {
             embedder,
             ocr: Arc::new(NoOcr),
+            image_embedder: None,
         }
     }
 }
@@ -160,8 +163,13 @@ pub fn index_root(
             content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
             thumb_key: thumb_key.as_deref(),
         };
-        // ponytail: no visual embedder until SigLIP lands (M4 slice 3).
-        upsert_file(conn, &record, &chunks, &embeddings, None)?;
+        upsert_file(
+            conn,
+            &record,
+            &chunks,
+            &embeddings,
+            outcome.image_embedding.as_deref(),
+        )?;
 
         match outcome.state {
             "indexed" => summary.indexed += 1,
@@ -180,6 +188,9 @@ pub fn index_root(
         );
     }
     crate::db::meta::set(conn, "text_model_id", embedder.model_id())?;
+    if let Some(image_embedder) = &ctx.image_embedder {
+        crate::db::meta::set(conn, "image_model_id", image_embedder.model_id())?;
+    }
     Ok(summary)
 }
 
@@ -210,6 +221,7 @@ struct FileOutcome {
     lang: Option<String>,
     content_hash: Option<[u8; 32]>,
     thumbnail: Option<image::RgbImage>,
+    image_embedding: Option<Vec<f32>>,
 }
 
 fn indexed_no_chunks(kind: Kind) -> FileOutcome {
@@ -222,6 +234,7 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
         lang: None,
         content_hash: None,
         thumbnail: None,
+        image_embedding: None,
     }
 }
 
@@ -235,6 +248,7 @@ fn errored(kind: Kind, message: String) -> FileOutcome {
         lang: None,
         content_hash: None,
         thumbnail: None,
+        image_embedding: None,
     }
 }
 
@@ -298,6 +312,7 @@ fn process_entry(
             lang: None,
             content_hash: None,
             thumbnail: None,
+            image_embedding: None,
         };
     }
 
@@ -329,6 +344,7 @@ fn process_entry(
         path: path.to_path_buf(),
         bytes,
         ocr: Arc::clone(&ctx.ocr),
+        image_embedder: ctx.image_embedder.clone(),
         max_megapixels: options.max_image_megapixels,
     };
     let mut outcome = match extract_with_isolation(job) {
@@ -341,6 +357,7 @@ fn process_entry(
             lang: extracted.doc.lang,
             content_hash: None,
             thumbnail: extracted.thumbnail,
+            image_embedding: extracted.image_embedding,
         },
         Err(e) => errored(kind, e.to_string()),
     };
@@ -353,6 +370,7 @@ fn process_entry(
 struct Extracted {
     doc: ExtractedDoc,
     thumbnail: Option<image::RgbImage>,
+    image_embedding: Option<Vec<f32>>,
 }
 
 /// Owned inputs for the extraction thread.
@@ -361,6 +379,7 @@ struct ExtractJob {
     path: PathBuf,
     bytes: Vec<u8>,
     ocr: Arc<dyn OcrEngine>,
+    image_embedder: Option<Arc<dyn ImageEmbedder>>,
     max_megapixels: u32,
 }
 
@@ -368,7 +387,7 @@ fn extract_for_kind(job: &ExtractJob) -> Result<Extracted> {
     let (path, bytes) = (job.path.as_path(), job.bytes.as_slice());
     let plain = |doc| Extracted {
         doc,
-        thumbnail: None,
+        ..Default::default()
     };
     match dispatch_for(job.kind) {
         Dispatch::Text => TextExtractor.extract(path, bytes).map(plain),
@@ -383,14 +402,18 @@ fn extract_for_kind(job: &ExtractJob) -> Result<Extracted> {
         }
         Dispatch::Office => OfficeExtractor.extract(path, bytes).map(plain),
         Dispatch::Code => CodeExtractor.extract(path, bytes).map(plain),
-        Dispatch::Image => {
-            crate::extract::image::extract_image(path, bytes, job.max_megapixels, &*job.ocr).map(
-                |artifacts| Extracted {
-                    doc: artifacts.doc,
-                    thumbnail: Some(artifacts.thumbnail),
-                },
-            )
-        }
+        Dispatch::Image => crate::extract::image::extract_image(
+            path,
+            bytes,
+            job.max_megapixels,
+            &*job.ocr,
+            job.image_embedder.as_deref(),
+        )
+        .map(|artifacts| Extracted {
+            doc: artifacts.doc,
+            thumbnail: Some(artifacts.thumbnail),
+            image_embedding: artifacts.image_embedding,
+        }),
         Dispatch::None => Ok(Extracted::default()),
     }
 }

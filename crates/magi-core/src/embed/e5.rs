@@ -72,6 +72,29 @@ pub(crate) fn init_onnxruntime() -> Result<()> {
     Ok(())
 }
 
+/// Builds a CPU session with the settings every model here shares: light
+/// graph optimization, `threads` intra-op threads, and the CPU memory arena
+/// off, so the pool is not sized for the largest input ever seen and kept
+/// for the life of the process (ADR-0005 measured ~66 MB from it).
+pub(crate) fn build_session(path: &std::path::Path, threads: usize) -> Result<Session> {
+    let model = |what: &str, e: &dyn std::fmt::Display| Error::Model(format!("{what}: {e}"));
+    Session::builder()
+        .map_err(|e| model("creating session builder", &e))?
+        .with_optimization_level(GraphOptimizationLevel::Level1)
+        .map_err(|e| model("setting optimization level", &e))?
+        .with_intra_threads(threads)
+        .map_err(|e| model("setting intra-op thread count", &e))?
+        .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
+        .map_err(|e| model("disabling the CPU memory arena", &e))?
+        .commit_from_file(path)
+        .map_err(|e| {
+            Error::Model(format!(
+                "loading model {} (run `just models` first): {e}",
+                path.display()
+            ))
+        })
+}
+
 impl E5Embedder {
     /// Loads the model + tokenizer from `embed::manager::model_dir("text")`
     /// (populated by `ensure_model_file`/`import_offline_model_file`).

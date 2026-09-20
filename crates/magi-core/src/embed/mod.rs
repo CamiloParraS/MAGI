@@ -6,6 +6,7 @@ pub mod manager;
 pub mod siglip;
 
 pub use e5::E5Embedder;
+pub use siglip::SigLipEmbedder;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -14,6 +15,9 @@ use crate::error::Result;
 
 /// Dimensionality of `multilingual-e5-small` embeddings (SPEC.md §3).
 pub const TEXT_EMBEDDING_DIM: usize = 384;
+
+/// Dimensionality of SigLIP 2 base embeddings (SPEC.md section 3).
+pub const IMAGE_EMBEDDING_DIM: usize = 768;
 
 /// Serializes an embedding as the JSON array text `vec_f32()` parses
 /// (sqlite-vec's documented insertion format — see
@@ -57,6 +61,21 @@ pub trait TextEmbedder: Send + Sync {
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
 }
 
+/// Encodes images for `vec_image` and search queries into the same space
+/// (SPEC.md section 5.6 step 2c). Both towers are lazy: an indexing run only
+/// ever loads the image tower and a search only the text tower.
+pub trait ImageEmbedder: Send + Sync {
+    /// Stored in `meta.image_model_id`; includes the quantization so a
+    /// variant change re-embeds, like a text model change does.
+    fn model_id(&self) -> &str;
+    fn dim(&self) -> usize;
+    /// Embeds an upright decoded image. The caller may pass any size; the
+    /// implementation resizes to the model's input.
+    fn embed_image(&self, image: &image::RgbImage) -> Result<Vec<f32>>;
+    /// Embeds a search query with the text tower.
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
+}
+
 fn l2_normalize(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
@@ -80,21 +99,64 @@ fn hash_token(token: &str) -> u64 {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FakeEmbedder;
 
+/// Feature-hashes whitespace tokens into a unit vector of length `dim`.
+fn hash_text(text: &str, dim: usize) -> Vec<f32> {
+    let mut v = vec![0f32; dim];
+    for token in text.to_lowercase().split_whitespace() {
+        let h = hash_token(token);
+        let idx = (h % dim as u64) as usize;
+        let sign = if (h >> 32).is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        v[idx] += sign;
+    }
+    l2_normalize(&mut v);
+    v
+}
+
 impl FakeEmbedder {
     fn hash_text(text: &str) -> Vec<f32> {
-        let mut v = vec![0f32; TEXT_EMBEDDING_DIM];
-        for token in text.to_lowercase().split_whitespace() {
-            let h = hash_token(token);
-            let idx = (h % TEXT_EMBEDDING_DIM as u64) as usize;
-            let sign = if (h >> 32).is_multiple_of(2) {
-                1.0
-            } else {
-                -1.0
-            };
-            v[idx] += sign;
+        hash_text(text, TEXT_EMBEDDING_DIM)
+    }
+}
+
+/// Deterministic image embedder for tests: a 4x4 grid of coarse colours
+/// hashed into the vector, so identical images match and different ones
+/// don't. Queries are hashed text, so a query is *not* close to any image;
+/// tests that need image-query ranking must plant vectors directly.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FakeImageEmbedder;
+
+impl ImageEmbedder for FakeImageEmbedder {
+    fn model_id(&self) -> &str {
+        "fake-image-v1"
+    }
+
+    fn dim(&self) -> usize {
+        IMAGE_EMBEDDING_DIM
+    }
+
+    fn embed_image(&self, image: &image::RgbImage) -> Result<Vec<f32>> {
+        let (w, h) = image.dimensions();
+        let mut cells = String::new();
+        for gy in 0..4 {
+            for gx in 0..4 {
+                let px = image.get_pixel((gx * w / 4).min(w - 1), (gy * h / 4).min(h - 1));
+                cells.push_str(&format!(
+                    "{gx}{gy}{}{}{} ",
+                    px[0] / 64,
+                    px[1] / 64,
+                    px[2] / 64
+                ));
+            }
         }
-        l2_normalize(&mut v);
-        v
+        Ok(hash_text(&cells, IMAGE_EMBEDDING_DIM))
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(hash_text(text, IMAGE_EMBEDDING_DIM))
     }
 }
 
