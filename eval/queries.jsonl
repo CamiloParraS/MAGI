@@ -68,3 +68,30 @@
 {"query": "Quarterly Kickoff", "lang": "kw", "expected": ["office/kickoff.pptx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "circuit breaker grounding wire", "lang": "kw", "expected": ["en/electrician_invoice.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "five day grace period", "lang": "kw", "expected": ["en/lease_agreement.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "a dog on the beach", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query"}
+{"query": "dog on the beach", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query"}
+{"query": "perro en la playa", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query (Spanish)"}
+{"query": "a golden retriever lying on sand", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual"}
+{"query": "a dog with a tennis ball", "lang": "img", "expected": ["images/dog_on_beach2.jpg"], "notes": "visual"}
+{"query": "a cat on the beach", "lang": "img", "expected": ["images/cat_on_beach.jpg"], "notes": "visual"}
+{"query": "gato en la playa", "lang": "img", "expected": ["images/cat_on_beach.jpg"], "notes": "visual (Spanish)"}
+{"query": "a yellow sports car", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "un coche deportivo amarillo", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual (Spanish)"}
+{"query": "a car parked in a parking lot", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "a photo of a mustang", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "mountain sunset", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual"}
+{"query": "atardecer en las montañas", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual (Spanish)"}
+{"query": "a hiking trail along a grassy ridge", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual"}
+{"query": "mountain sunrise", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual"}
+{"query": "amanecer en la montaña", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual (Spanish)"}
+{"query": "snowy mountain peaks at dawn", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual"}
+{"query": "christmas decorations on a shelf", "lang": "img", "expected": ["images/shelf_christmas.heic"], "notes": "visual, HEIC"}
+{"query": "decoración navideña en un estante", "lang": "img", "expected": ["images/shelf_christmas.heic"], "notes": "visual (Spanish), HEIC"}
+{"query": "an anime character with pink hair", "lang": "img", "expected": ["images/screenshot_en.png"], "notes": "visual"}
+{"query": "Dororong meme mascot", "lang": "img", "expected": ["images/screenshot_en.png"], "notes": "OCR text"}
+{"query": "letras con tilde vocales acento", "lang": "img", "expected": ["images/screenshot_es.png"], "notes": "OCR text (Spanish)"}
+{"query": "pingüino vergüenza diéresis", "lang": "img", "expected": ["images/screenshot_es.png"], "notes": "OCR text, accented"}
+{"query": "qr code", "lang": "img", "expected": ["images/phone_qr.jpg", "images/phone_qr.heic", "qr/qr_url.png", "qr/qr_text_es.png"], "notes": "QR chunk, SPEC M4 query: any QR fixture"}
+{"query": "código QR", "lang": "img", "expected": ["images/phone_qr.jpg", "images/phone_qr.heic", "qr/qr_url.png", "qr/qr_text_es.png"], "notes": "QR chunk, SPEC M4 query (Spanish): any QR fixture"}
+{"query": "código QR de prueba", "lang": "img", "expected": ["qr/qr_text_es.png"], "notes": "QR payload"}
+{"query": "example.com magi-test", "lang": "img", "expected": ["qr/qr_url.png"], "notes": "QR payload"}

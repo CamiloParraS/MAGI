@@ -73,13 +73,19 @@ pub fn search_vector_text(
     ))
 }
 
-/// Runs a `vec_image` KNN search (SPEC.md §5.6 step 2c). An image has one
-/// vector per file, so there is no chunk dedup; the snippet is the file name
-/// since a visual match has no matching text to show.
+/// Runs a `vec_image` KNN search (SPEC.md §5.6 step 2c) and keeps only images
+/// whose cosine similarity to the query is at least `min_cosine`. An image has
+/// one vector per file, so there is no chunk dedup; the snippet is the file
+/// name since a visual match has no matching text to show.
+///
+/// The cosine floor matters: a KNN always returns its `k` nearest rows, so
+/// without it every text query would pull the whole photo library into the
+/// fused ranking. `vec_image` uses L2 on unit vectors, so `cos = 1 - d^2 / 2`.
 pub fn search_vector_image(
     conn: &Connection,
     query_embedding: &[f32],
     limit: u32,
+    min_cosine: f32,
 ) -> Result<Vec<FileHit>> {
     if query_embedding.is_empty() || limit == 0 {
         return Ok(Vec::new());
@@ -109,6 +115,7 @@ pub fn search_vector_image(
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.retain(|(_, distance)| 1.0 - distance * distance / 2.0 >= f64::from(min_cosine));
     // Ties broken by file id, in Rust, for the same reason as the text search.
     rows.sort_by(|(a, a_distance), (b, b_distance)| {
         a_distance

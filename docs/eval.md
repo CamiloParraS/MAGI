@@ -291,6 +291,70 @@ The 15 MB file took ~1360 s wall on the reference machine (int8,
 `with_intra_threads(1)`, one dedicated embed thread per SPEC.md §5.3), i.e.
 ~4 chunks/s. That throughput is the next thing to look at, not memory.
 
+## M4: image queries and the visual list (SigLIP 2, ADR-0007)
+
+**Method:** `magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`, all
+real models (int8 e5, PaddleOCR, SigLIP 2 q4f16), fresh temp DB, release
+build. The set is now 97 queries: the earlier 70 plus 27 in a new `img`
+bucket. `fixtures/corpus` indexed 57 files (5 errors are the intentionally
+broken fixtures, 1 skipped). A new `visual` mode runs `vec_image` alone.
+
+The `img` bucket: 20 visual queries (dogs, cat, car, mountains at sunrise and
+sunset, Christmas shelf, anime screenshot; English and Spanish, including the
+SPEC.md M4 pair `dog on the beach` / `perro en la playa`), 3 OCR-text queries
+(one with accents), and 4 QR queries (including SPEC.md's `qr code` /
+`código QR`, where any of the four QR fixtures is a correct hit).
+
+| Mode | n | recall@5 | recall@10 | MRR |
+| --- | -: | -: | -: | -: |
+| fts-only | 97 | 0.443 | 0.443 | 0.443 |
+| vector-only (text) | 97 | 0.979 | 0.990 | 0.801 |
+| visual-only | 97 | 0.247 | 0.247 | 0.247 |
+| **hybrid** | 97 | **0.990** | **0.990** | **0.840** |
+
+Hybrid by bucket:
+
+| bucket | n | recall@5 | MRR |
+| --- | -: | -: | -: |
+| en | 20 | 1.000 | 0.975 |
+| es | 20 | 1.000 | 0.925 |
+| cross | 20 | 0.950 | 0.401 |
+| kw | 10 | 1.000 | 0.950 |
+| **img** | 27 | **1.000** | **0.963** |
+
+On the `img` bucket alone: fts-only 0.333, visual-only 0.889 (0.963 before the
+cosine floor below), text-vector-only 0.963, hybrid 1.000. Every image query
+lands in the top 5, including SPEC.md's four required ones: `qr code` /
+`código QR` return a QR fixture and `dog on the beach` / `perro en la playa`
+return a dog photo, all inside the top 3. The visual list earns its place:
+without it the text-only modes miss images whose only signal is what they
+look like.
+
+**A finding worth keeping: the visual list needs a similarity floor.** The
+first hybrid run scored 0.000 on `cross` and 0.55 / 0.70 on `en` / `es`, the
+same as keyword-only. A KNN always returns its nearest rows, so every text
+query (`car maintenance oil change`) got the whole photo library as visual
+hits, and each image, present in both the text-vector and visual lists,
+outscored the real document, which sat in one. The fix is a cosine floor on
+the visual list, `IMAGE_MIN_COSINE = 0.10`, chosen from measurement: over the
+70 text queries the best cosine against any fixture image never exceeded
+0.117, while genuine visual matches have a median of 0.139 and the weakest
+non-OCR one is ~0.105 (SigLIP's own sigmoid probability is too conservative to
+gate on: median 0.25 for true matches). The floor costs the three OCR-text
+queries their visual match (visual-only 0.963 -> 0.889), which the OCR chunks
+already answer. The threshold belongs to the model: recalibrate it with any
+image-model change, and it is only as good as this small fixture set (15
+images), so a real photo library needs re-measuring.
+
+`es` MRR is 0.925 against 1.000 before the visual list existed: a leaked
+image occasionally takes rank 2 ahead of the expected document. Recall@5 is
+unaffected.
+
+**Peak RSS, the whole fixture corpus with all models loaded (NFR-11):
+1340 MB** (limit 1.5 GB). One process polled at 50 ms through indexing 57
+files (e5 + PaddleOCR + SigLIP vision) and all 97 x 4 queries (which loads
+the SigLIP text tower, the last +190 MB step). Wall time 64 s.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

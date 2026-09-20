@@ -18,6 +18,12 @@ pub const FTS_FETCH_LIMIT: u32 = 100;
 pub const VECTOR_FETCH_LIMIT: u32 = 100;
 /// SPEC.md §5.6 step 2c: the visual list is shorter than the text ones.
 pub const IMAGE_FETCH_LIMIT: u32 = 50;
+/// Least query-image cosine that counts as a visual match for SigLIP 2
+/// (ADR-0007). Measured on the fixture eval: text-only queries never exceed
+/// 0.117 against any image, genuine visual matches have a median of 0.139 and
+/// the weakest non-OCR one is ~0.105. Tied to the model: recalibrate when the
+/// image model changes.
+pub const IMAGE_MIN_COSINE: f32 = 0.10;
 /// SPEC.md §5.6 step 4: the visual list counts for less than text.
 const IMAGE_WEIGHT: f64 = 0.8;
 
@@ -193,7 +199,9 @@ pub fn hybrid_search(
     // A missing or broken visual model degrades to text-only search rather
     // than failing the query.
     let image_hits = match image_embedder.map(|e| e.embed_query(query)) {
-        Some(Ok(embedding)) => vector::search_vector_image(conn, &embedding, IMAGE_FETCH_LIMIT)?,
+        Some(Ok(embedding)) => {
+            vector::search_vector_image(conn, &embedding, IMAGE_FETCH_LIMIT, IMAGE_MIN_COSINE)?
+        }
         Some(Err(e)) => {
             tracing::warn!(error = %e, "visual search unavailable");
             Vec::new()
@@ -292,6 +300,22 @@ mod tests {
         .unwrap();
         let photo = hits.iter().find(|h| h.path == path).expect("photo found");
         assert!(photo.match_sources.contains(&"visual"));
+        // An unrelated query is below the cosine floor: the photo is not
+        // dragged into every search.
+        let unrelated = hybrid_search(
+            &conn,
+            &FakeEmbedder,
+            Some(&FakeImageEmbedder),
+            "quarterly tax filing",
+            10,
+        )
+        .unwrap();
+        assert!(
+            !unrelated
+                .iter()
+                .any(|h| h.match_sources.contains(&"visual")),
+            "{unrelated:?}"
+        );
         // Without the image embedder the same query cannot reach it.
         let text_only = hybrid_search(&conn, &FakeEmbedder, None, "dog on the beach", 10).unwrap();
         assert!(

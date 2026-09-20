@@ -1196,3 +1196,36 @@ deletion on re-index, and reclaiming timed-out extraction threads.
       `Engine` does not run `index_root` until M5.
 - [x] `cargo clippy --workspace --all-targets -D warnings` clean; workspace
       tests pass (166 unit + integration; 5 ignored need real models).
+
+### Slice 4 - SigLIP 2 and the visual list (ADR-0007)
+
+- [x] **Variant chosen (ADR-0007): 256 px, q4f16 for both towers.** int8 is
+      rejected (image cosine 0.64 min, recall@1 0.96 -> 0.76); fp16 is exact
+      but its text tower costs 719 MB. q4f16 matches fp32's retrieval at
+      80 MB (vision) / 447 MB (text). Sources pinned by revision and SHA-256
+      in the manifest's `image` slot.
+- [ ] **SPEC gate missed by 0.001, needs a human call:** q4f16 image parity is
+      0.969 mean / 0.952 min against SPEC.md §7 M4's 0.97. Retrieval is
+      identical to fp32. Either accept it (amend the gate to compare
+      retrieval) or move the vision tower to fp16 (+290 MB while indexing).
+      It is a manifest edit either way.
+- [x] **Parity in Rust vs. the PyTorch reference (q4f16):** text cosine
+      0.994-0.998 on 25 EN/ES queries; image 0.954-0.984, mean 0.968.
+      `tools/siglip_reference.py` regenerates the reference vectors.
+- [x] `SigLipEmbedder` (per-tower lazy `ModelSlot`s), `vec_image` written by
+      the pipeline, `search_vector_image` fused as a third RRF list (weight
+      0.8) behind a cosine floor of 0.10.
+- [x] **Eval extended to 97 queries, 27 image queries (>= 20 required):**
+      hybrid recall@5 = 1.000 on `img`, MRR 0.963; overall hybrid recall@5
+      0.990. Recorded in docs/eval.md, which also records the floor finding.
+- [x] **The four SPEC.md §7 M4 search queries:** `qr code`, `código QR`,
+      `dog on the beach`, `perro en la playa` each return a matching fixture
+      in the top 3.
+- [x] **Peak RSS with all models loaded, whole fixture corpus: 1340 MB**
+      (limit 1.5 GB).
+- [x] `cargo clippy --workspace --all-targets -D warnings` clean; workspace
+      tests pass.
+
+Still open in M4: thumbnails through the scoped asset protocol; the 48 MP
+HEIC budget (no valid 48 MP fixture); the bomb-rejection RSS delta (< 200 MB)
+and a green three-OS CI run; the parity-gate call above.

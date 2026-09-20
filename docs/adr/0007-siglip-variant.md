@@ -88,3 +88,15 @@ edit, not a code change: every variant has identical inputs and outputs.
   tokenizer, EOS appended, no BOS, padded with id 0 to exactly 64 tokens.
 - The image embedding is the vision model's `pooler_output`; the text
   embedding is the text model's `pooler_output`. Both are L2-normalized.
+
+## Follow-up: the visual list needs a cosine floor (2026-09-20)
+
+Fusing `vec_image` into hybrid search exposed that a KNN always returns its
+nearest rows: with no floor, every text query dragged the photo library into
+the results and recall on text queries collapsed to keyword-only (docs/eval.md,
+"M4: image queries"). `search::IMAGE_MIN_COSINE = 0.10` fixes it, chosen from
+measurement: text queries never exceed 0.117 against any fixture image, true
+visual matches have a median of 0.139 (weakest non-OCR ~0.105). Measured with
+fp32 vectors; q4f16 cosines move by ~0.01, well inside that margin. **The
+number belongs to this model and this small fixture set.** Recalibrate on any
+model change and on a real photo library.

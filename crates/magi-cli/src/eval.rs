@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
-use magi_core::search::vector::search_vector_text;
+use magi_core::search::vector::{search_vector_image, search_vector_text};
 use magi_core::{config, db, search};
 use serde::Deserialize;
 
@@ -117,7 +117,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         summary.indexed, summary.skipped, summary.errored
     );
 
-    for mode in ["fts", "vector", "hybrid"] {
+    for mode in ["fts", "vector", "visual", "hybrid"] {
         println!("\n=== {mode} ===");
         let mut overall = Accum::default();
         let mut by_lang: BTreeMap<String, Accum> = BTreeMap::new();
@@ -138,6 +138,16 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                     let embedding = embedder.embed_query(&q.query)?;
                     let vector = search_vector_text(&conn, &embedding, search::VECTOR_FETCH_LIMIT)?;
                     search::rank_and_boost(&q.query, &[], &vector, &[], FETCH_LIMIT)
+                }
+                "visual" => {
+                    let embedding = image_embedder.embed_query(&q.query)?;
+                    let visual = search_vector_image(
+                        &conn,
+                        &embedding,
+                        search::IMAGE_FETCH_LIMIT,
+                        search::IMAGE_MIN_COSINE,
+                    )?;
+                    search::rank_and_boost(&q.query, &[], &[], &visual, FETCH_LIMIT)
                 }
                 "hybrid" => search::hybrid_search(
                     &conn,
