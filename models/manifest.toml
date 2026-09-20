@@ -49,10 +49,21 @@ files = [
   { name = "rec.yml", url = "https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.yml", sha256 = "0bbe984570f597af3638e50bdf2e8276f3ab26a61966096538b3b0d1849f5c84", size = 6817 },
 ]
 
-# [[model]]
-# slot = "image"
-# id = "google/siglip2-base-patch16-<res>"   # chosen in M4, recorded in an ADR
-# license = "Apache-2.0"
-# dim = 768
-# text_max_tokens = 64
-# files = [ ... ]                            # image tower, text tower, tokenizer
+# SigLIP 2 base, 256 px (ADR-0007): `q4f16` for both towers, from the
+# onnx-community export of google/siglip2-base-patch16-256 (Apache-2.0). The
+# hashes below equal Hugging Face's LFS sha256 and were re-verified locally.
+# fp16 / fp32 / int8 alternatives at this revision, for rollback:
+#   vision_model_fp16.onnx  fe9ad8020a6d3d98d394c9be8f07064066135fc2f87ec11692de0b677c0ac4db  186131676
+#   text_model_fp16.onnx    80954edffdc689599e5d5bc6a1738380bc9e8139a18e5c8892485f248b6b4890  564862230
+[[model]]
+slot = "image"
+id = "google/siglip2-base-patch16-256"
+revision = "d1114256522a37ffa257a0a58017348ab0058db2"
+license = "Apache-2.0"
+dim = 768
+max_tokens = 64
+files = [
+  { name = "vision_model.onnx", url = "https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX/resolve/d1114256522a37ffa257a0a58017348ab0058db2/onnx/vision_model_q4f16.onnx", sha256 = "e077a0e33fcc362a6e741a0c7571ba3044a4f8093bb0eaa9f93f54919191848a", size = 54723009 },
+  { name = "text_model.onnx", url = "https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX/resolve/d1114256522a37ffa257a0a58017348ab0058db2/onnx/text_model_q4f16.onnx", sha256 = "a623a87e0fbaa31a4bfbbbb3deafea756fee9a436e945b545a027adb13824e48", size = 442779433 },
+  { name = "tokenizer.json", url = "https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX/resolve/d1114256522a37ffa257a0a58017348ab0058db2/tokenizer.json", sha256 = "cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322", size = 34363039 },
+]
