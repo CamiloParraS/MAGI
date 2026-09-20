@@ -27,6 +27,7 @@ quick-xml = { workspace = true }
 calamine = { workspace = true }
 heic-rs = { workspace = true }
 image = { workspace = true }
+rxing = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }

@@ -42,6 +42,12 @@ heic-rs = "0.1.1"
 # nothing we do not index gets decoder code linked in. HEIC is not here: it
 # goes through `heic-rs` (ADR-0003).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
+# QR decoding (SPEC.md §3). `default-features = false` drops rxing's own
+# `image` feature: we already hold decoded pixels, and that feature pulls a
+# second image/png stack that does not currently compile (see
+# docs/progress.md). 1D barcodes are one more feature flag (`oned`) when a
+# fixture and an eval query ask for them.
+rxing = { version = "0.9.3", default-features = false, features = ["qrcode", "decoders", "multi_barcode_readers", "encoding_rs"] }
 tree-sitter = "0.27.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-python = "0.25.0"

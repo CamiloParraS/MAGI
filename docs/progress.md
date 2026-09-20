@@ -1014,13 +1014,18 @@ Open, carried into Slice 2:
      options → High efficiency pictures), or borrow an iPhone 14 Pro or later
      with Resolution Control on. This also closes the separate "these are not
      iPhone photos" gap.
-  b. Generate one: build `heif-enc` from libheif, or add a HEIF encoder to
-     `xtask`, and encode a large self-shot source. A synthetic HEIC will not
-     be tile-gridded the way a phone's is unless the encoder is told to
-     tile it, so it tests the budget but not the real decode path.
+  b. ~~Generate one~~ — **rejected 2026-09-20.** It would mean building
+     libheif (and so cmake, libde265 and x265) from source purely to make one
+     test fixture, and the result would not be tile-gridded the way a phone's
+     is unless the encoder were told to tile it. High cost, and it would test
+     the budget against a decode path we do not actually ship against.
   c. Amend SPEC.md §7 M4 to state the budget against the largest available
      fixture, scaled by pixel count, and record why. Cheapest, and honest,
      but it drops a real verification item.
+
+  **Parked as a known gap** (option a, deferred): the item stays open and
+  unmeasured, and the number gets filled in when a real 48 MP HEIC exists.
+  Nothing else in M4 is blocked on it.
 - **`embedded_thumbnail` was not written.** `heic-rs` decodes the primary item
   only and exposes no way to select the `thmb` item, so the function could
   only ever return `Ok(None)`. Slice 2 downscales the thumbnail from the
@@ -1087,3 +1092,48 @@ Next in Slice 2: `rxing` QR decode (blocked on the `png` version conflict
 logged above), `blake3` content hashing, the 256 px thumbnail cache, and the
 `Dispatch::Image` branch in `index::pipeline` with the `IndexContext`
 refactor alongside it.
+
+### Slice 2 (part 2) — QR decoding and the thumbnail cache
+
+- [x] **`rxing` wired without its `image` feature**, which also resolves the
+      `png` build failure logged above: the failure was inside rxing's own
+      `image` feature, which pulls a second image/png stack whose API it no
+      longer matches. We never needed it — `extract::image` has already
+      decoded and straightened the pixels, and letting rxing re-decode the
+      file would double both the work and the memory. `Luma8Source` takes the
+      buffer directly. Features pinned to `qrcode`, `decoders`,
+      `multi_barcode_readers` and `encoding_rs`; the last is not optional,
+      since without it rxing fails to compile and the Spanish payload would
+      have nowhere to come from. 1D barcodes are one more flag (`oned`) when
+      a fixture and an eval query ask for them.
+- [x] **A photographed QR does not decode at full resolution.** Measured
+      across scale × binarizer × hint combinations: at 1834 × 1546 every
+      combination returns `NotFoundException`; the JPEG fixture decodes once
+      shrunk 1/2 and the HEIC once shrunk 1/4. `TryHarder` made no difference
+      at any scale, so it is not enabled — it only costs time. `decode_barcodes`
+      therefore walks a scale ladder (1, 2, 4, 8, stopping when the short
+      edge drops below 100 px) and returns the first scale that reads
+      anything. Marked `ponytail:` — the real fix is estimating the module
+      size once and resampling to it, worth doing only if QR shows up in the
+      indexing profile.
+- [x] **SPEC.md §7 M4's QR payload item is closed on the decode side**: both
+      generated fixtures decode to their exact recorded payloads (including
+      the accented Spanish one), and the photographed QR decodes to the same
+      payload from the HEIC and the JPEG — the "OCR and QR work on the HEIC
+      fixtures exactly as on their JPEG equivalents" check, for QR. The two
+      search queries (`qr code` / `código QR`) still need the chunk text and
+      land with the pipeline wiring.
+- [x] **`thumbs`**: `thumb_key` (lowercase hex of the blake3 content hash),
+      `thumb_path` (`<cache_dir>/thumbs/<first two hex chars>/<key>.jpg`, so
+      no directory holds more than a few thousand entries) and
+      `write_thumbnail` (Lanczos3 down to a 256 px long side, never
+      upscaling, JPEG quality 80). Keyed by content rather than path, so two
+      copies of a photo share one thumbnail and a rename keeps its own.
+- [x] `just check` green: 157 unit + 9 golden + 1 idempotence tests, fmt and
+      clippy clean, frontend lint/typecheck/test pass.
+
+Still open in Slice 2: the `blake3` dependency and content hashing, the
+`files.content_hash` / `files.thumb_key` columns, `Dispatch::Image` in
+`index::pipeline` (with the `IndexContext` refactor alongside it), PDF
+first-page thumbnails through the existing `pdfium-render` path, `vec_image`
+deletion on re-index, and reclaiming timed-out extraction threads.
