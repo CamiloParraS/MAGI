@@ -1376,3 +1376,20 @@ and a green three-OS CI run; the parity-gate call above.
       larger frame is still missed (marked `ponytail:` in `qr.rs`).
 - [ ] Still undecoded: the Pepsi-can QR (curved label; ours and OpenCV fail even
       on a crop) and the 1D barcode.
+
+### Slice 9 - the `cross` regression
+
+- [x] **Fixed: text cross-language recall is back to 0.900** (was 0.750 after the
+      photo batch). Cause: OCR on text-free photos emits stray glyphs that became
+      `ocr` chunks and crowded `vec_text` (23 of 60 OCR chunks had fewer than 6
+      letters and digits). `extract_image` now drops OCR output below
+      `MIN_OCR_ALNUM = 6`. Hybrid recall@5 0.957 -> 0.982 over 164 queries, no
+      bucket worse. Test: `stray_ocr_glyphs_from_a_photo_are_not_indexed_but_real_text_is`.
+      Closes the open item in slice 7.
+- [x] **Negative results recorded** (docs/eval.md): weighting image filename
+      chunks down did not help and hurt image recall; dropping all filename-only
+      semantic hits lost most cross-language text queries. The filename chunk stays
+      as the spec has it.
+- [ ] Trade-off to know: real 4-5 letter text alone in a photo is not indexed
+      (marked `ponytail:` in the code). Threshold 4 also recovers most of the loss
+      (cross 0.850) if that matters more.

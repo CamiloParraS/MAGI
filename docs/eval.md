@@ -474,6 +474,50 @@ Character error rate after collapsing whitespace, computed from the indexed
   `wikipedia`, all of which are in the file names, and passed for the wrong
   reason. They were replaced by payload-only words.
 
+## M4: the `cross` regression, its cause and its fix
+
+The 2026-09-21 photo batch cost `cross` recall@5 0.900 -> 0.750 (above). Text-vector-only
+search fell equally, so the cause was in `vec_text`. **Cause: OCR on photos with no
+text.** PaddleOCR emits a stray glyph or two for a photo of a forest or a pizza
+(`.`, `M`, `2`, `000020`, `TUABO`), and each became an `ocr` chunk embedded as
+`passage: .`. A chunk that short sits near almost any short query, so it outranks
+real documents. In the pre-fix index 23 of the 60 OCR chunks had fewer than 6
+letters and digits, e.g. the only OCR chunk of `piotr-szajewski-snowy-forest.jpg`
+was a single full stop, which is why that photo kept turning up as a "semantic"
+hit for `team meeting notes`.
+
+**Fix:** `extract_image` drops OCR output with fewer than 6 letters and digits
+(`MIN_OCR_ALNUM`). Same corpus, same 164 queries, release build:
+
+| | cross r@5 | overall hybrid r@5 | MRR | img / img2 / ocr / qr |
+| --- | -: | -: | -: | --- |
+| before (no filter) | 0.750 | 0.957 | 0.867 | 1.000 / 0.981 / 1.000 / 0.667 |
+| threshold 4 | 0.850 | 0.976 | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+| **threshold 6 (shipped)** | **0.900** | **0.982** | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+
+(`qr` 0.667 -> 1.000 is the separate tiled-QR fix.) `cross` is back at its
+pre-batch 0.900; the two remaining misses are `informe de ingresos trimestrales`
+(rank > 100) and `doctor appointment reminder` (rank 9). Threshold 4 to 6 is one
+query, so treat the choice between them as a judgement, not a measurement: 4-5
+character OCR output in this corpus is all junk but one partial read (`PERS N`
+off a can). The cost is real short text alone in a photo (a sign reading `EXIT`),
+which is no longer indexed; the threshold is a marked constant.
+
+**What did not work, so nobody tries it again.** The first hypothesis was that
+image *file name* chunks were the crowders. Splitting the vector list and
+down-weighting image-filename-best hits (weights 0.5 and 0) left `cross` at
+0.750 and hurt the image buckets: at weight 0 the `img` bucket collapsed
+(`a dog on the beach` fell to rank 9, `perro en la playa` out of the top 100).
+Down-weighting **every** filename-best hit (weight 0) was far worse for text:
+`electrician invoice`, `receta de arepas`, `contrato de alquiler deposito` and
+most of `cross` were lost, because for a text document the file name is often
+the best cross-language bridge (`receta_arepas` <-> "arepas recipe"). The
+filename chunk is doing real work and should stay as the spec says.
+
+**Still true:** `team meeting notes` and `doctor appointment reminder` pull
+`walls-io-whiteboard.jpg` (a weekly schedule) in through the visual list, and the
+0.10 cosine floor was calibrated on 15 images. Not changed.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

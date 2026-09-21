@@ -224,7 +224,10 @@ detection + Latin recognition over `ort`, ADR-0006) or `NoOcr` when its
 models are absent. Detection fits rotated rectangles to the probability map's
 components and straightens each line; recognition is a CTC decode over the
 dictionary read from `rec.yml`. OCR adds ~310 MB of peak RSS. Known gap: the
-recognizer's dictionary has no inverted exclamation mark.
+recognizer's dictionary has no inverted exclamation mark. Output shorter than 6 letters and digits is discarded
+(`extract::image::MIN_OCR_ALNUM`): PaddleOCR emits stray glyphs for photos with no
+text, and as `ocr` chunks they crowd real documents out of the text-vector list
+(docs/eval.md).
 
 **SigLIP 2** is `embed::ImageEmbedder` (`embed::siglip::SigLipEmbedder`, 256 px
 q4f16, ADR-0007). Each tower is its own lazy, idle-unloadable `ModelSlot`, so

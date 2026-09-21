@@ -101,6 +101,16 @@ pub fn decode_bounded(path: &Path, bytes: &[u8], max_megapixels: u32) -> Result<
     Ok(decoded.into_rgb8())
 }
 
+/// OCR on a photo with no text still emits a stray glyph or two (`.`, `M`,
+/// `00000`). Embedded alone, a chunk like that sits near almost any short
+/// query and crowds real documents out of the text-vector list, so OCR output
+/// with fewer letters and digits than this is dropped. Measured on the
+/// fixture corpus, everything of 4-5 characters was junk but one partial read.
+///
+/// ponytail: real 4-5 letter text alone in a photo (a sign reading `EXIT`) is
+/// dropped too. Lower this if that matters more than the crowding.
+const MIN_OCR_ALNUM: usize = 6;
+
 /// Everything derived from one image, with the full-resolution buffer
 /// already dropped (SPEC.md §5.3).
 pub struct ImageArtifacts {
@@ -158,6 +168,11 @@ pub fn extract_image(
 
     let text = ocr.recognize(&ocr_input)?;
     let trimmed = text.trim();
+    let trimmed = if trimmed.chars().filter(|c| c.is_alphanumeric()).count() < MIN_OCR_ALNUM {
+        ""
+    } else {
+        trimmed
+    };
     for piece in crate::chunk::chunk_text(trimmed) {
         chunks.push(RawChunk {
             source: ChunkSource::Ocr,
@@ -296,6 +311,35 @@ mod tests {
         assert!(artifacts.doc.chunks.is_empty());
         assert!(artifacts.doc.lang.is_none());
         assert_eq!(artifacts.thumbnail.height(), 171); // 1920x1280 -> 256x171
+    }
+
+    #[test]
+    fn stray_ocr_glyphs_from_a_photo_are_not_indexed_but_real_text_is() {
+        struct FixedOcr(&'static str);
+        impl OcrEngine for FixedOcr {
+            fn engine_id(&self) -> &str {
+                "fixed"
+            }
+            fn recognize(&self, _: &image::RgbImage) -> Result<String> {
+                Ok(self.0.to_string())
+            }
+        }
+        let (path, bytes) = corpus("images/mountain_sunset.jpg");
+        let ocr_chunks = |text: &'static str| {
+            extract_image(&path, &bytes, 64, &FixedOcr(text), None)
+                .unwrap()
+                .doc
+                .chunks
+                .iter()
+                .filter(|c| c.source == ChunkSource::Ocr)
+                .count()
+        };
+        // What OCR really returned for photos with no text in them (fewer than
+        // six letters and digits); six or more is kept.
+        for junk in [".", "M", "3 S59", "TUABO", "00000"] {
+            assert_eq!(ocr_chunks(junk), 0, "{junk:?} should be dropped");
+        }
+        assert_eq!(ocr_chunks("Hello World!"), 1);
     }
 
     #[test]
