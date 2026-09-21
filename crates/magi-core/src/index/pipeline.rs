@@ -238,6 +238,15 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
     }
 }
 
+/// Not broken, just outside what is indexed: SPEC.md section 5.4's `skipped`.
+fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
+    FileOutcome {
+        state: "skipped",
+        skip_reason: Some(reason),
+        ..indexed_no_chunks(kind)
+    }
+}
+
 fn errored(kind: Kind, message: String) -> FileOutcome {
     FileOutcome {
         kind,
@@ -303,17 +312,7 @@ fn process_entry(
 ) -> FileOutcome {
     let file_types = &options.file_types;
     if size > max_size_bytes {
-        return FileOutcome {
-            kind: discovery::classify(path, &[]),
-            state: "skipped",
-            skip_reason: Some("too_large"),
-            error: None,
-            chunks: Vec::new(),
-            lang: None,
-            content_hash: None,
-            thumbnail: None,
-            image_embedding: None,
-        };
+        return skipped(discovery::classify(path, &[]), "too_large");
     }
 
     // Classification from the extension alone needs no I/O; only sniff a
@@ -359,6 +358,9 @@ fn process_entry(
             thumbnail: extracted.thumbnail,
             image_embedding: extracted.image_embedding,
         },
+        // SPEC.md section 5.2: images over `max_image_megapixels` are
+        // skipped. A real 75 MP panorama is not an error to retry.
+        Err(Error::ImageTooLarge { .. }) => skipped(kind, "image_too_large"),
         Err(e) => errored(kind, e.to_string()),
     };
     outcome.content_hash = Some(content_hash);
@@ -579,6 +581,40 @@ mod tests {
 
         let hits = crate::search::fts::search_fts(&conn, "murciélago", 10).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn image_over_the_megapixel_cap_is_skipped_not_errored() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        // Declares 20000 x 20000 (400 MP) in 1.1 MB, so it is over the default
+        // 64 MP cap and refused from its header.
+        let bomb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/bomb.png");
+        fs::copy(bomb, root_path.join("panorama.png")).unwrap();
+
+        // The test default caps files at 1 MB and the bomb is 1.1 MB: raise it
+        // so the image, not the file-size check, is what refuses it.
+        let options = IndexRootOptions {
+            max_file_size_mb: 10,
+            ..default_options()
+        };
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &options,
+            1,
+            &IndexContext::new(&FakeEmbedder),
+        )
+        .unwrap();
+
+        assert_eq!((summary.skipped, summary.errored), (1, 0));
+        let row = db::files::get_by_path(&conn, &root_path.join("panorama.png"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "skipped");
+        assert_eq!(row.skip_reason.as_deref(), Some("image_too_large"));
     }
 
     #[test]
