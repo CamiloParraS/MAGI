@@ -52,13 +52,6 @@ pub fn probe_dimensions(path: &Path, bytes: &[u8]) -> Result<(u32, u32)> {
         .map_err(|e| Error::Image(e.to_string()))
 }
 
-/// The declared size of an image, from its header. A decompression bomb is
-/// caught here, before any decoder allocates for it.
-pub fn probe_megapixels(path: &Path, bytes: &[u8]) -> Result<u32> {
-    let (width, height) = probe_dimensions(path, bytes)?;
-    Ok(megapixels(width, height))
-}
-
 /// Decodes to RGB8 with the image upright, refusing anything over
 /// `max_megapixels`.
 ///
@@ -166,7 +159,12 @@ pub fn extract_image(
     let thumbnail = downscaled(&ocr_input, crate::thumbs::THUMB_LONG_SIDE);
     drop(full);
 
-    let text = ocr.recognize(&ocr_input)?;
+    // Same policy as the embedding: a failed OCR costs the file its text,
+    // never the QR chunks and embedding already computed.
+    let text = ocr.recognize(&ocr_input).unwrap_or_else(|err| {
+        tracing::warn!(path = %path.display(), error = %err, "OCR failed");
+        String::new()
+    });
     let trimmed = text.trim();
     let trimmed = if trimmed.chars().filter(|c| c.is_alphanumeric()).count() < MIN_OCR_ALNUM {
         ""
@@ -346,8 +344,50 @@ mod tests {
     fn bytes_that_are_not_an_image_are_a_clean_error() {
         let path = Path::new("notes.png");
         assert!(matches!(
-            probe_megapixels(path, b"just some text"),
+            probe_dimensions(path, b"just some text"),
             Err(Error::Image(_))
         ));
+    }
+
+    #[test]
+    fn an_image_over_the_megapixel_limit_is_refused_through_the_heic_path_too() {
+        let (path, bytes) = corpus("images/shelf_christmas.heic");
+        // The fixture is 12 MP, so a 1 MP ceiling must reject it.
+        assert!(matches!(
+            decode_bounded(&path, &bytes, 1),
+            Err(Error::ImageTooLarge {
+                megapixels: 12,
+                limit: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn a_failing_ocr_engine_keeps_the_qr_chunk_and_thumbnail() {
+        struct FailingOcr;
+        impl OcrEngine for FailingOcr {
+            fn engine_id(&self) -> &str {
+                "failing"
+            }
+            fn recognize(&self, _: &image::RgbImage) -> Result<String> {
+                Err(Error::Model("boom".into()))
+            }
+        }
+        let (path, bytes) = corpus("images/phone_qr.heic");
+        let artifacts = extract_image(&path, &bytes, 64, &FailingOcr, None).unwrap();
+        assert!(
+            artifacts
+                .doc
+                .chunks
+                .iter()
+                .any(|c| c.source == ChunkSource::Qr)
+        );
+        assert_eq!(
+            artifacts
+                .thumbnail
+                .width()
+                .max(artifacts.thumbnail.height()),
+            256
+        );
     }
 }

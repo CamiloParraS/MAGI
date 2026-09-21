@@ -42,23 +42,14 @@ pub fn probe_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
 /// mirror transforms applied.
 ///
 /// Auxiliary images (depth maps, alpha) and the `.MOV` half of a Live Photo
-/// are ignored: only the primary item is decoded. Images whose declared
-/// dimensions exceed `max_megapixels` are rejected from the header, before
-/// anything is allocated.
+/// are ignored: only the primary item is decoded. Callers go through
+/// `image::decode_bounded`, which rejects oversize images from the header.
 pub fn decode_heic(bytes: &[u8], max_megapixels: u32) -> Result<image::RgbImage> {
     let max_pixels = u64::from(max_megapixels) * 1_000_000;
 
-    let (width, height) = probe_dimensions(bytes)?;
-    let declared = super::image::megapixels(width, height);
-    if declared > max_megapixels {
-        return Err(Error::ImageTooLarge {
-            megapixels: declared,
-            limit: max_megapixels,
-        });
-    }
-
-    // `max_pixels` again, so a container that lies about its dimensions
-    // cannot make the decoder allocate past the budget either.
+    // `decode_bounded` has already checked the declared size; `max_pixels`
+    // here stops a container that lies about its dimensions from making the
+    // decoder allocate past the budget.
     //
     // ponytail: the thread count is left to the rayon default. Peak RSS
     // scales with it (ADR-0003 measured 45 MB and 116 MB for two 12 MP
@@ -122,20 +113,6 @@ mod tests {
                 image.pixels().any(|p| p != first),
                 "{name} decoded to a uniform image"
             );
-        }
-    }
-
-    #[test]
-    fn rejects_an_image_over_the_megapixel_limit() {
-        let Some((_, bytes)) = fixture("shelf_christmas.heic") else {
-            panic!("committed fixture is missing");
-        };
-        // The fixture is 12 MP, so a 1 MP ceiling must reject it.
-        match decode_heic(&bytes, 1) {
-            Err(Error::ImageTooLarge { megapixels, limit }) => {
-                assert_eq!((megapixels, limit), (12, 1));
-            }
-            other => panic!("expected ImageTooLarge, got {other:?}"),
         }
     }
 

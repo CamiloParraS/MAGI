@@ -1305,6 +1305,8 @@ and a green three-OS CI run; the parity-gate call above.
       so it was renamed. Two eval queries cover the figurine (`img` bucket is now
       29).
 
+- Known gap (M4 review): the thumbnail cache has no garbage collection, so thumbnails of deleted files stay on disk. `write_thumbnail` no longer resizes (callers pass 256 px) and writes via a `.tmp` rename.
+
 ### Slice 7 - the 2026-09-21 photo batch
 
 - [x] **Orientation is verified against an independent reference.** Six goldens

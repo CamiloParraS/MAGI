@@ -346,7 +346,8 @@ fn process_entry(
         image_embedder: ctx.image_embedder.clone(),
         max_megapixels: options.max_image_megapixels,
     };
-    let mut outcome = match extract_with_isolation(job) {
+    let content_hash = Some(content_hash);
+    match extract_with_isolation(job) {
         Ok(extracted) => FileOutcome {
             kind,
             state: "indexed",
@@ -354,17 +355,21 @@ fn process_entry(
             error: None,
             chunks: extracted.doc.chunks,
             lang: extracted.doc.lang,
-            content_hash: None,
+            content_hash,
             thumbnail: extracted.thumbnail,
             image_embedding: extracted.image_embedding,
         },
         // SPEC.md section 5.2: images over `max_image_megapixels` are
         // skipped. A real 75 MP panorama is not an error to retry.
-        Err(Error::ImageTooLarge { .. }) => skipped(kind, "image_too_large"),
-        Err(e) => errored(kind, e.to_string()),
-    };
-    outcome.content_hash = Some(content_hash);
-    outcome
+        Err(Error::ImageTooLarge { .. }) => FileOutcome {
+            content_hash,
+            ..skipped(kind, "image_too_large")
+        },
+        Err(e) => FileOutcome {
+            content_hash,
+            ..errored(kind, e.to_string())
+        },
+    }
 }
 
 /// An [`ExtractedDoc`] plus the thumbnail derived from the same read.

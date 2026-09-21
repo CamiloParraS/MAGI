@@ -96,22 +96,23 @@ pub fn search_vector_image(
             FROM vec_image
             WHERE embedding MATCH vec_f32(?1) AND k = ?2
          )
-         SELECT f.id, f.path, f.file_name, f.mtime_ns, f.file_name, knn_matches.distance
+         SELECT f.id, f.path, f.file_name, f.mtime_ns, knn_matches.distance
          FROM knn_matches
          JOIN files f ON f.id = knn_matches.file_id
          ORDER BY knn_matches.distance",
     )?;
     let mut rows = stmt
         .query_map(params![embedding_to_json(query_embedding), limit], |row| {
+            let file_name: String = row.get(2)?;
             Ok((
                 FileHit {
                     file_id: row.get(0)?,
                     path: PathBuf::from(row.get::<_, String>(1)?),
-                    file_name: row.get(2)?,
+                    snippet: file_name.clone(),
+                    file_name,
                     mtime_ns: row.get(3)?,
-                    snippet: row.get(4)?,
                 },
-                row.get::<_, f64>(5)?,
+                row.get::<_, f64>(4)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

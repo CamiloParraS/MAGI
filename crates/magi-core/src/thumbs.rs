@@ -19,13 +19,7 @@ const JPEG_QUALITY: u8 = 80;
 
 /// Lowercase hex of the content hash.
 pub fn thumb_key(content_hash: &[u8; 32]) -> String {
-    let mut key = String::with_capacity(64);
-    for byte in content_hash {
-        use std::fmt::Write;
-        // Writing to a String is infallible.
-        let _ = write!(key, "{byte:02x}");
-    }
-    key
+    blake3::Hash::from(*content_hash).to_hex().to_string()
 }
 
 /// Root of the thumbnail cache. This is the one directory the webview's asset
@@ -43,29 +37,14 @@ pub fn thumb_path(key: &str) -> PathBuf {
     thumbs_dir().join(shard).join(format!("{key}.jpg"))
 }
 
-/// Downscales to [`THUMB_LONG_SIDE`] and writes a JPEG, creating the parent
-/// directory. An image already at or below that size is stored as-is rather
-/// than upscaled.
+/// Writes a JPEG, creating the parent directory. The caller passes an image
+/// already at [`THUMB_LONG_SIDE`] (`extract_image` and the PDF renderer both
+/// do); it is stored as-is. Written to a temp name then renamed, so a crash
+/// never leaves a truncated file at `path`.
 pub fn write_thumbnail(path: &Path, image: &image::RgbImage) -> Result<()> {
-    let (width, height) = (image.width(), image.height());
-    if width == 0 || height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(Error::Image("cannot thumbnail an empty image".into()));
     }
-
-    let longest = width.max(height);
-    let resized;
-    let thumbnail = if longest <= THUMB_LONG_SIDE {
-        image
-    } else {
-        let scale = f64::from(THUMB_LONG_SIDE) / f64::from(longest);
-        resized = image::imageops::resize(
-            image,
-            ((f64::from(width) * scale).round() as u32).max(1),
-            ((f64::from(height) * scale).round() as u32).max(1),
-            image::imageops::FilterType::Lanczos3,
-        );
-        &resized
-    };
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| Error::Io {
@@ -77,17 +56,20 @@ pub fn write_thumbnail(path: &Path, image: &image::RgbImage) -> Result<()> {
     let mut encoded = Vec::new();
     JpegEncoder::new_with_quality(&mut encoded, JPEG_QUALITY)
         .write_image(
-            thumbnail.as_raw(),
-            thumbnail.width(),
-            thumbnail.height(),
+            image.as_raw(),
+            image.width(),
+            image.height(),
             image::ExtendedColorType::Rgb8,
         )
         .map_err(|e| Error::Image(e.to_string()))?;
 
-    std::fs::write(path, &encoded).map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, &encoded)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 #[cfg(test)]
@@ -113,13 +95,19 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_fits_the_long_side_and_keeps_its_aspect_ratio() {
+    fn a_leftover_partial_write_never_shows_up_as_the_thumbnail() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("shard").join("wide.jpg");
-        write_thumbnail(&path, &gradient(1024, 512)).unwrap();
+        let path = dir.path().join("shard").join("x.jpg");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // What a crash mid-write leaves behind.
+        std::fs::write(path.with_extension("tmp"), b"\xff\xd8truncated").unwrap();
+        assert!(!path.exists());
+
+        write_thumbnail(&path, &gradient(256, 128)).unwrap();
 
         let written = image::open(&path).unwrap();
         assert_eq!((written.width(), written.height()), (256, 128));
+        assert!(!path.with_extension("tmp").exists());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! (ADR-0006). Detection is DB post-processing on the probability map;
 //! recognition is a CTC decode over the character dictionary in `rec.yml`.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use image::RgbImage;
 use image::imageops;
@@ -77,10 +77,7 @@ impl PaddleOcr {
 
         let input = TensorRef::from_array_view(([1usize, 3, nh as usize, nw as usize], &*data))
             .map_err(|e| Error::Model(format!("building detector input: {e}")))?;
-        let mut session = self
-            .det
-            .lock()
-            .map_err(|_| Error::Model("OCR detector lock poisoned".to_string()))?;
+        let mut session = lock(&self.det, "detector")?;
         let outputs = session
             .run(ort::inputs! { "x" => input })
             .map_err(|e| Error::Model(format!("running detector: {e}")))?;
@@ -122,10 +119,7 @@ impl PaddleOcr {
         let input =
             TensorRef::from_array_view(([1usize, 3, REC_HEIGHT as usize, nw as usize], &*data))
                 .map_err(|e| Error::Model(format!("building recognizer input: {e}")))?;
-        let mut session = self
-            .rec
-            .lock()
-            .map_err(|_| Error::Model("OCR recognizer lock poisoned".to_string()))?;
+        let mut session = lock(&self.rec, "recognizer")?;
         let outputs = session
             .run(ort::inputs! { "x" => input })
             .map_err(|e| Error::Model(format!("running recognizer: {e}")))?;
@@ -172,6 +166,17 @@ impl OcrEngine for PaddleOcr {
         }
         Ok(out.join("\n"))
     }
+}
+
+/// Fails instead of waiting: a hung `run` holds its lock forever, and every
+/// image queued behind it would otherwise block, time out and leave one more
+/// stuck thread until extraction is refused outright.
+///
+/// ponytail: a concurrent second caller also loses OCR rather than waiting.
+/// Indexing is sequential today; add a timed wait if parallel extraction lands.
+fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> Result<MutexGuard<'a, T>> {
+    m.try_lock()
+        .map_err(|_| Error::Model(format!("OCR {what} busy or poisoned")))
 }
 
 /// A detected text line: a rectangle rotated by `ux, uy` (unit vector along
@@ -416,6 +421,15 @@ fn parse_dict(yml: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_session_lock_fails_fast_instead_of_blocking() {
+        let m = Mutex::new(());
+        let held = lock(&m, "detector").unwrap();
+        assert!(matches!(lock(&m, "detector"), Err(Error::Model(_))));
+        drop(held);
+        assert!(lock(&m, "detector").is_ok());
+    }
 
     #[test]
     fn dict_parses_quoting_styles() {

@@ -134,3 +134,93 @@ The image shows a low-angle shot of a bright lime-yellow/green Ford Mustang park
 The image shows two light wooden floating shelves mounted against a dark gray wall, neatly displaying a variety of Christmas-themed decorations and gift bags. The top shelf features patterned gift bags, a decorative wooden Christmas tree topped with a star, and a standing reindeer figure. The bottom shelf holds small gnome figures, miniature decorative houses, small wrapped packages, clear glass candle holders with white and red candles, and additional red festive gift bags.
 
 ### OCR text
+
+
+# New Image Batch
+
+## 3 barcodes ver1 ver2 ver3
+
+### Description
+An image displaying three square QR codes arranged side by side horizontally within thin gray rectangular frames against a plain off-white background. The QR codes increase in pattern density and complexity from left to right.
+
+The image shows three horiziontally, the first barcode has a "ver1" payload, the second barcode has a "ver2" payload, and the third barcode has a "ver3" payload.
+
+### OCR text
+
+## Adrian Warburton Grave
+
+### Description
+A light gray headstone stands prominently in a well-maintained military cemetery with green lawn and other gravestones lined up in the background. The headstone features the engraved emblem of the Royal Air Force at the top, followed by details honoring Wing Commander A. Warburton, who died on April 12th, 1944 at age 26. Below the text is a Christian cross, and an epitaph at the base reads "FOND MEMORIES OF OUR SHORT TIME TOGETHER". At the bottom right of the base, a small QR code plaque is visible on the soil, the payload of the qr code is to his wikipedia article.
+
+### OCR text
+PER ARDUA AD ASTRA
+WING COMMANDER
+A. WARBURTON
+D.S.O. & BAR, D.F.C. & 2 BARS
+ROYAL AIR FORCE
+12TH APRIL 1944 AGE 26
+FOND MEMORIES OF
+OUR SHORT TIME TOGETHER
+
+## barcode hello world
+### Description
+A standard 1D linear barcode composed of vertical black bars of varying widths against a white background. Centered directly below the barcode is the human-readable text "Hello World!" in a clean sans-serif font.
+
+### OCR text
+Hello World!
+
+## inverted exclamation screenshot
+
+### Description
+A screenshot of a Wikipedia article explaining upside-down punctuation marks[cite: 6]. On the left side, two paragraphs of text detail the usage of inverted question and exclamation marks in languages like Spanish, Asturian, and Waray[cite: 6]. On the right side, a bordered infobox displays large illustrations of an inverted question mark (¿) and an inverted exclamation mark (¡) above the label "Upside-down question mark Upside-down exclamation mark"[cite: 6].
+
+### OCR text
+The upside-down (also inverted, turned, rotated, or opening) question mark ¿ and
+exclamation mark ¡ are punctuation marks used to begin interrogative and exclamatory
+sentences or clauses in Spanish and some languages that have cultural ties with Spain, such as
+Asturian and Waray.[1] The initial marks are mirrored at the end of the sentence or clause by the
+ordinary question mark ? or exclamation mark !.
+Upside-down marks are supported by various standards, including Unicode and HTML. They
+can be entered directly on keyboards designed for Spanish-speaking countries.
+¿ ¡
+Upside-down question
+mark
+Upside-down exclamation
+mark
+
+## QR code pepsi diet
+### Description
+An open aluminum Diet Pepsi soda can sitting on a mottled brownish countertop. The front of the can features the classic red, white, and blue Pepsi globe logo alongside the words "PEPSI diet". Below the branding is a black square box containing the text "GET A KICK HERE" at the top, a mobile phone icon next to a QR code in the middle, and the prompt "WANNA KNOW MORE? go to www.pepsi.co.uk" at the bottom.
+
+### OCR text
+PEPSI®
+diet
+GET A KICK HERE
+WANNA KNOW MORE?
+go to www.pepsi.co.uk
+
+
+## spanish printed page
+### Description
+A top-down photograph of a spiral-bound, grid-lined notepad resting on a rustic, blue-tinted wooden surface. Handwritten on the page in light blue marker is a mind map centered around the circled word "ESPAÑOL". Radiating outward via connecting lines and dashes are common Spanish words and phrases: "¿Qué tal?", "estoy", "¡Hola!", "gato", "ser", "bien", "casa", "verduras", "estudiar", and "¡Adiós!".
+
+### OCR text
+¿Qué tal? estoy ¡Hola!
+gato ESPAÑOL ser
+bien verduras
+estudiar casa ¡Adiós!
+
+## Code Screenshot
+### Description
+A screenshot of a code editor displaying Rust code syntax-highlighted in a dark theme. The code imports an `AiIsEven` struct, retrieves an "ANTHROPIC_API_KEY" environment variable inside a `main` function returning an `anyhow::Result<()>`, initializes the AI struct, checks if the number 42 is even, and prints the result alongside a comment stating it should print the SHA256 hash of "True".
+
+### OCR text
+use rust_bitcoin_style_ai_iseven::AiIsEven;
+fn main() -> anyhow::Result<()> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")?;
+    let ai_is_even = AiIsEven::new(api_key);
+    let hash = ai_is_even.is_even(42)?;
+    println!("is_even(42) = {}", hash);
+    // Should print the SHA256 hash of "True"
+    Ok(())
+}
