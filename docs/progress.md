@@ -1277,3 +1277,21 @@ and a green three-OS CI run; the parity-gate call above.
       400 MB. The 12 MP figure measured the same way is 0.09 s / 75 MB, so it
       scales linearly. Caveat: smoother content than a real 48 MP photo, so time
       may be slightly optimistic; memory is content-independent.
+
+- [ ] **Found while checking the eval's error count: unsupported RAW files are
+      reported as errors.** `images/mustang_landscape.arw` (Sony RAW) indexes as
+      `error` ("required tag `ImageWidth` not found"). `discovery::classify` has
+      no `arw`, as `fixtures/README.md` intends, but for an unknown extension it
+      falls back to `infer` magic-byte sniffing, which identifies TIFF-based RAW
+      containers (ARW, CR2, NEF, DNG, ...) as TIFF, so they reach the TIFF
+      decoder and fail. Every RAW in a photographer's folder would show up in the
+      error list. Expected behaviour is filename-only indexing (`Other`). Not
+      fixed; a denylist of RAW extensions in `classify` (or not sniffing a file
+      that already has an unrecognized extension) would do it.
+- [ ] **Three files appeared in `fixtures/corpus/images/` that this session
+      did not create and did not commit:** `phone_48mp_landscape.heif`
+      (3024 x 4032 = **12.2 MP**, iPhone 13 Pro Max, so not a 48 MP file, and its
+      EXIF carries **GPS**), `VW_beetle.jpg` (45.4 MP Nikon Z 8, EXIF with
+      **GPS**) and `city_landscape.jpg` (75.3 MP, no EXIF, over the 64 MP
+      default cap). Run `fixtures/scrub_metadata.py` and decide before
+      committing any of them.

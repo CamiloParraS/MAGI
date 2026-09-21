@@ -296,8 +296,13 @@ The 15 MB file took ~1360 s wall on the reference machine (int8,
 **Method:** `magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`, all
 real models (int8 e5, PaddleOCR, SigLIP 2 q4f16), fresh temp DB, release
 build. The set is now 97 queries: the earlier 70 plus 27 in a new `img`
-bucket. `fixtures/corpus` indexed 57 files (5 errors are the intentionally
-broken fixtures, 1 skipped). A new `visual` mode runs `vec_image` alone.
+bucket. `fixtures/corpus` indexed 57 files, with 5 errors and 1 skip. Four
+errors are intentional: `edge/bomb.png` (refused at 400 MP), `edge/truncated.jpg`,
+`edge/truncated.pdf` and `edge/password_protected.pdf`. The fifth,
+`images/mustang_landscape.arw`, is **not** intentional: a Sony RAW is not a
+supported kind, but the classifier sniffs its TIFF container and hands it to the
+TIFF decoder, which fails (see docs/progress.md). The skip is the 20 MP `.ppm`
+over the file-size limit. A new `visual` mode runs `vec_image` alone.
 
 The `img` bucket: 20 visual queries (dogs, cat, car, mountains at sunrise and
 sunset, Christmas shelf, anime screenshot; English and Spanish, including the
