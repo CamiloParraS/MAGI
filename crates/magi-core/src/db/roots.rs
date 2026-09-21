@@ -7,6 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::paths;
+use crate::platform::RootAccess;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Root {
@@ -89,6 +90,27 @@ pub fn remove(conn: &Connection, id: i64) -> Result<()> {
     }
     tx.commit()?;
     super::files::remove_unreferenced_thumbnails(conn, &thumbnail_keys);
+    Ok(())
+}
+
+/// Records what the access probe found. `ok` only replaces the statuses a probe
+/// can set, so it does not clear `watch_failed`.
+pub fn set_access(conn: &Connection, id: i64, access: &RootAccess) -> Result<()> {
+    let status = match access {
+        RootAccess::Ok => {
+            conn.execute(
+                "UPDATE roots SET status = 'ok' WHERE id = ?1 AND status IN ('missing', 'permission_denied')",
+                params![id],
+            )?;
+            return Ok(());
+        }
+        RootAccess::PermissionDenied => "permission_denied",
+        RootAccess::Missing => "missing",
+    };
+    conn.execute(
+        "UPDATE roots SET status = ?2 WHERE id = ?1",
+        params![id, status],
+    )?;
     Ok(())
 }
 

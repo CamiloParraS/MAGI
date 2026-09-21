@@ -11,6 +11,7 @@ use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
+use magi_core::watch::reconcile::next_scan_id;
 use magi_core::{config, db, paths};
 
 #[derive(Parser)]
@@ -177,14 +178,13 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     };
 
     let options = IndexRootOptions::from_config(&config.indexing)?;
-    // ponytail: fixed scan_id since reconciliation (M5) doesn't exist yet;
-    // each one-shot `index` run reuses id 1.
+    let scan_id = next_scan_id(&conn)?;
     let summary = index_root(
         &mut conn,
         root_row.id,
         &root_row.path,
         &options,
-        1,
+        scan_id,
         &IndexContext {
             embedder: embedder.as_ref(),
             ocr: ocr_from_env(),
@@ -193,8 +193,13 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     )?;
 
     println!(
-        "indexed: {}  unchanged: {}  skipped: {}  errors: {}",
-        summary.indexed, summary.unchanged, summary.skipped, summary.errored
+        "indexed: {}  unchanged: {}  moved: {}  removed: {}  skipped: {}  errors: {}",
+        summary.indexed,
+        summary.unchanged,
+        summary.moved,
+        summary.removed,
+        summary.skipped,
+        summary.errored
     );
     Ok(())
 }

@@ -50,6 +50,17 @@ fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// The entry a walk would yield for `path`, stat'd now.
+pub fn stat(path: &Path) -> std::io::Result<WalkEntry> {
+    let meta = std::fs::metadata(path)?;
+    Ok(WalkEntry {
+        path: path.to_path_buf(),
+        size: meta.len(),
+        mtime_ns: mtime_ns(&meta),
+        is_dir: meta.is_dir(),
+    })
+}
+
 /// Walks `root`, returning one entry per indexable file plus one entry per
 /// opaque bundle directory (never descended into). Excluded and hidden
 /// paths are omitted entirely.

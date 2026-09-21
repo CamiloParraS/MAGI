@@ -358,6 +358,161 @@ pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) 
     })
 }
 
+/// A file the walk found that the index has never seen: a `pending` row with
+/// no content hash yet, indexed by whatever the queue does next. `kind` comes
+/// from the extension alone; extraction settles it.
+pub fn insert_pending(
+    conn: &Connection,
+    root_id: i64,
+    path: &Path,
+    rel_path: &Path,
+    size: u64,
+    mtime_ns: i64,
+    scan_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO files (root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
+                            state, pipeline_version, seen_scan_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 0, ?9)",
+        params![
+            root_id,
+            path.to_string_lossy(),
+            rel_path.to_string_lossy(),
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default(),
+            path.extension().and_then(|e| e.to_str()),
+            crate::discovery::classify(path, &[]).as_str(),
+            size as i64,
+            mtime_ns,
+            scan_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// A reconciliation scan saw the file and its indexed content is still right.
+pub fn mark_seen(conn: &Connection, file_id: i64, scan_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET seen_scan_id = ?2 WHERE id = ?1",
+        params![file_id, scan_id],
+    )?;
+    Ok(())
+}
+
+/// A reconciliation scan saw the file differ from its row (or the row is stale):
+/// queue it again with its current size and mtime, keeping its chunks
+/// searchable until the new ones replace them.
+pub fn mark_changed(
+    conn: &Connection,
+    file_id: i64,
+    root_id: i64,
+    size: u64,
+    mtime_ns: i64,
+    scan_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET state = 'pending', root_id = ?2, size = ?3, mtime_ns = ?4,
+                seen_scan_id = ?5, attempts = 0, next_attempt_at = NULL
+         WHERE id = ?1",
+        params![file_id, root_id, size as i64, mtime_ns, scan_id],
+    )?;
+    Ok(())
+}
+
+/// A file the last scan no longer found, and what move detection needs to know
+/// about it.
+pub struct Missing {
+    pub id: i64,
+    pub kind: String,
+    pub size: u64,
+    pub content_hash: Option<Vec<u8>>,
+}
+
+/// Rows of `root_id` that scan `scan_id` did not see.
+pub fn unseen(conn: &Connection, root_id: i64, scan_id: i64) -> Result<Vec<Missing>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, kind, size, content_hash FROM files
+         WHERE root_id = ?1 AND seen_scan_id < ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![root_id, scan_id], |row| {
+            Ok(Missing {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                size: row.get::<_, i64>(2)? as u64,
+                content_hash: row.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Brand-new `pending` rows (no hash yet) of exactly `size` bytes: the only
+/// places a moved file can have turned up.
+pub fn new_pending_of_size(conn: &Connection, size: u64) -> Result<Vec<(i64, PathBuf)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, path FROM files
+         WHERE state = 'pending' AND content_hash IS NULL AND size = ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![size as i64], |row| {
+            Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?)))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// A move or rename: `keep_id` (already indexed) takes over the location of
+/// `new_id` (the fresh `pending` row for the same bytes), which is dropped.
+/// Chunks and vectors are kept, not recomputed (SPEC.md §5.4 step 4). The
+/// filename chunk's text follows the new name so it stays findable by it; its
+/// vector still describes the old name.
+pub fn rename_file(conn: &mut Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
+    let tx = conn.transaction()?;
+    let (root_id, path, rel_path, file_name, ext, size, mtime_ns): (
+        i64,
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        i64,
+    ) = tx.query_row(
+        "SELECT root_id, path, rel_path, file_name, ext, size, mtime_ns FROM files WHERE id = ?1",
+        params![new_id],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        },
+    )?;
+    delete_files(&tx, &[new_id])?;
+    tx.execute(
+        "UPDATE files SET root_id = ?2, path = ?3, rel_path = ?4, file_name = ?5, ext = ?6,
+                size = ?7, mtime_ns = ?8, seen_scan_id = ?9
+         WHERE id = ?1",
+        params![
+            keep_id, root_id, path, rel_path, file_name, ext, size, mtime_ns, scan_id
+        ],
+    )?;
+    tx.execute(
+        "UPDATE chunks SET text = ?2 WHERE file_id = ?1 AND source = 'filename'",
+        params![
+            keep_id,
+            crate::extract::filename::filename_chunk(Path::new(&rel_path)).text
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Removes files and everything derived from them: `vec_text` rows (before the
 /// chunks their subquery reads), chunks (their `chunks_fts` rows go with them
 /// through the trigger), the `vec_image` row, and the file row. Virtual tables

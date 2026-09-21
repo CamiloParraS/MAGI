@@ -36,6 +36,8 @@ pub fn search_vector_text(
          FROM knn_matches
          JOIN chunks c ON c.id = knn_matches.chunk_id
          JOIN files f ON f.id = c.file_id
+         JOIN roots r ON r.id = f.root_id
+         WHERE r.enabled = 1 AND r.status <> 'missing'
          ORDER BY knn_matches.distance",
     )?;
     // vec0 KNN queries only permit a single-column `ORDER BY distance` in
@@ -99,6 +101,8 @@ pub fn search_vector_image(
          SELECT f.id, f.path, f.file_name, f.mtime_ns, knn_matches.distance
          FROM knn_matches
          JOIN files f ON f.id = knn_matches.file_id
+         JOIN roots r ON r.id = f.root_id
+         WHERE r.enabled = 1 AND r.status <> 'missing'
          ORDER BY knn_matches.distance",
     )?;
     let mut rows = stmt

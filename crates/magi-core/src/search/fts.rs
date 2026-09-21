@@ -36,7 +36,8 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
          FROM chunks_fts
          JOIN chunks c ON c.id = chunks_fts.rowid
          JOIN files f ON f.id = c.file_id
-         WHERE chunks_fts MATCH ?1
+         JOIN roots r ON r.id = f.root_id
+         WHERE chunks_fts MATCH ?1 AND r.enabled = 1 AND r.status <> 'missing'
          ORDER BY bm25(chunks_fts), c.id
          LIMIT ?2",
     )?;

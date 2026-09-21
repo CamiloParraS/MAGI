@@ -1,11 +1,13 @@
 //! hash -> extract -> chunk -> embed -> write. Implemented starting M2
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::Connection;
 
 use crate::db::files::{self, FileRecord, StoredFile, upsert_file};
+use crate::db::roots;
 use crate::discovery::{self, Kind, WalkEntry, WalkOptions};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
@@ -16,6 +18,8 @@ use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
+use crate::watch::reconcile::{reconcile_root, resolve_moves};
 
 use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
 
@@ -77,6 +81,16 @@ impl IndexRootOptions {
     }
 }
 
+impl IndexRootOptions {
+    pub(crate) fn walk_options(&self) -> WalkOptions {
+        WalkOptions {
+            exclude_globs: self.exclude_globs.clone(),
+            include_hidden: self.include_hidden,
+            follow_symlinks: self.follow_symlinks,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct IndexSummary {
     pub indexed: u32,
@@ -85,17 +99,26 @@ pub struct IndexSummary {
     /// Files whose indexed content was still right, so nothing was
     /// re-extracted or re-embedded.
     pub unchanged: u32,
+    /// Files that were renamed or moved: kept as they were, not re-embedded.
+    pub moved: u32,
+    /// Files that are gone from disk (or no longer wanted) and were removed.
+    pub removed: u32,
 }
 
-/// Brings the database in line with the files under `root_path`: a file whose
-/// indexed content is still right is left alone, anything else is extracted,
-/// chunked, embedded and written. Files marked stale by a model, engine or
-/// pipeline-version change are re-done even though their content is identical
-/// ([`requeue_on_model_change`]).
+/// Brings the database in line with the files under `root_path`: reconciles
+/// the walk against the rows (new and changed files become `pending`, vanished
+/// ones are deleted, moved ones are renamed in place), then works the pending
+/// queue. A file whose indexed content is still right is left alone; anything
+/// else is extracted, chunked, embedded and written. Files marked stale by a
+/// model, engine or pipeline-version change are re-done even though their
+/// content is identical ([`requeue_on_model_change`]).
 ///
-/// One-shot and synchronous: no watcher or queue, and it does not notice files
-/// that have disappeared. The reconciliation and runtime built on the per-file
-/// stages below (M5) cover those.
+/// `scan_id` must be larger than on the previous run
+/// ([`crate::watch::reconcile::next_scan_id`]): rows not seen by this scan are
+/// the deletions. A root that is missing or unreadable keeps its rows and its
+/// status says why (SPEC.md §5.4).
+///
+/// One-shot and synchronous: no watcher or worker threads (M5, later slices).
 pub fn index_root(
     conn: &mut Connection,
     root_id: i64,
@@ -114,29 +137,80 @@ pub fn index_root(
         },
     )?;
 
-    let walk_options = WalkOptions {
-        exclude_globs: options.exclude_globs.clone(),
-        include_hidden: options.include_hidden,
-        follow_symlinks: options.follow_symlinks,
-    };
-    let entries = discovery::walk(root_path, &walk_options)?;
+    let access = FsProbe.probe(root_path);
+    roots::set_access(conn, root_id, &access)?;
+    if access != RootAccess::Ok {
+        return Ok(IndexSummary::default());
+    }
 
-    let mut summary = IndexSummary::default();
-    for entry in &entries {
-        let target = Target {
-            root_id,
-            root_path,
-            entry,
-            scan_id,
-        };
-        match index_file(conn, ctx, options, target)? {
-            Status::Indexed => summary.indexed += 1,
-            Status::Skipped => summary.skipped += 1,
-            Status::Errored => summary.errored += 1,
-            Status::Unchanged => summary.unchanged += 1,
+    let report = reconcile_root(conn, root_id, root_path, options, scan_id)?;
+    let moves = resolve_moves(conn, report.unseen, scan_id)?;
+    let mut summary = IndexSummary {
+        unchanged: report.unchanged,
+        moved: moves.moved,
+        removed: moves.removed,
+        ..IndexSummary::default()
+    };
+    drain_pending(conn, ctx, options, scan_id, &mut summary)?;
+    Ok(summary)
+}
+
+/// Works the `pending` queue, newest first, until nothing is ready. A file
+/// that has vanished since the scan is deleted instead; one that cannot be
+/// stat'd is put back with a delay ([`files::record_failure`]).
+fn drain_pending(
+    conn: &mut Connection,
+    ctx: &IndexContext,
+    options: &IndexRootOptions,
+    scan_id: i64,
+    summary: &mut IndexSummary,
+) -> Result<()> {
+    let root_paths: HashMap<i64, PathBuf> = roots::list(conn)?
+        .into_iter()
+        .map(|r| (r.id, r.path))
+        .collect();
+    loop {
+        let now = unix_now();
+        let batch = files::next_pending(conn, now, 256)?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        for pending in batch {
+            let entry = match discovery::stat(&pending.path) {
+                Ok(entry) => entry,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    files::delete_file(conn, pending.id)?;
+                    summary.removed += 1;
+                    continue;
+                }
+                Err(e) => {
+                    files::record_failure(conn, pending.id, &e.to_string(), now)?;
+                    continue;
+                }
+            };
+            let Some(root_path) = root_paths.get(&pending.root_id) else {
+                continue;
+            };
+            let target = Target {
+                root_id: pending.root_id,
+                root_path,
+                entry: &entry,
+                scan_id,
+            };
+            match index_file(conn, ctx, options, target)? {
+                Status::Indexed => summary.indexed += 1,
+                Status::Skipped => summary.skipped += 1,
+                Status::Errored => summary.errored += 1,
+                Status::Unchanged => summary.unchanged += 1,
+            }
         }
     }
-    Ok(summary)
+}
+
+pub(crate) fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// One file to bring up to date, and where it was found.
@@ -406,7 +480,7 @@ fn plan_entry(path: &Path, size: u64, max_size_bytes: u64, options: &IndexRootOp
 
 /// blake3 of the file, streamed so a touched large file is not loaded whole
 /// just to learn it did not change.
-fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
+pub(crate) fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
     let mut hasher = blake3::Hasher::new();
     hasher.update_reader(std::fs::File::open(path)?)?;
     Ok(*hasher.finalize().as_bytes())

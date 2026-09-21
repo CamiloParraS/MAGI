@@ -310,3 +310,18 @@ foreign-key error on any root that had been indexed.
 **Test instrumentation.** `embed::CountingEmbedder` wraps a `TextEmbedder` and
 counts `embed_passages` calls and chunks (`FakeEmbedder::counting()`), with
 `with_model_id` to simulate a model change.
+
+**Reconciliation** (`watch::reconcile`, Slice 2). `index_root` is
+`reconcile_root` -> `resolve_moves` -> drain `pending`. `reconcile_root` walks a
+root and, in one transaction, inserts unknown files as `pending`, marks files
+whose size, mtime or `pipeline_version` differ as `pending` (storing the new
+stat), and stamps everything else with the scan's `seen_scan_id`. Rows of the
+root with an older `seen_scan_id` come back as deletion candidates.
+`resolve_moves` renames a candidate in place (`files::rename_file`) when a
+brand-new `pending` row has the same size, kind and blake3 hash, and deletes the
+rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`) and must increase.
+
+**Root status.** `platform::FsProbe` maps a failed `read_dir`/`metadata` to
+`permission_denied` or `missing`; `roots::set_access` stores it. A root that is
+not `ok` is not scanned and keeps its rows. Search ignores files of roots that
+are `missing` or `enabled = 0`.

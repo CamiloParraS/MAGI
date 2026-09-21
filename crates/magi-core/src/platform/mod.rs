@@ -15,10 +15,32 @@ pub trait PermissionProbe {
 }
 
 /// Result of a [`PermissionProbe::probe`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootAccess {
     Ok,
     PermissionDenied,
     Missing,
+}
+
+/// Lists the folder and stats one entry, which is what a real walk needs.
+/// Shared by every OS: the OS-specific part is only the error it returns.
+pub struct FsProbe;
+
+impl PermissionProbe for FsProbe {
+    fn probe(&self, root: &std::path::Path) -> RootAccess {
+        let listed = std::fs::read_dir(root).and_then(|mut entries| match entries.next() {
+            Some(entry) => entry?.metadata().map(drop),
+            None => Ok(()),
+        });
+        match listed {
+            Ok(()) => RootAccess::Ok,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                RootAccess::PermissionDenied
+            }
+            // Not found, not a directory, or a device that is not there.
+            Err(_) => RootAccess::Missing,
+        }
+    }
 }
 
 /// Detects cloud-only (dataless) files that must not be read, per SPEC.md §6.
@@ -132,5 +154,19 @@ pub fn onnxruntime_library_filename() -> &'static str {
     #[cfg(target_os = "linux")]
     {
         linux::ONNXRUNTIME_LIBRARY_FILENAME
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_tells_a_folder_from_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(FsProbe.probe(dir.path()), RootAccess::Ok);
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        assert_eq!(FsProbe.probe(dir.path()), RootAccess::Ok);
+        assert_eq!(FsProbe.probe(&dir.path().join("gone")), RootAccess::Missing);
     }
 }

@@ -1584,3 +1584,58 @@ globs, which Slice 2 reads anyway.
   at (the usual trade-off; the periodic reconciliation and hash check in later
   slices are the safety net for a same-size, same-mtime edit).
 - `index_root` still does not notice deleted files; that is Slice 2.
+
+### M5 Slice 2 - reconciliation, move detection, root lifecycle
+
+Plan: docs/m5-plan.md. Still synchronous. `index_root` is now
+reconcile -> resolve moves -> drain the `pending` queue, so it notices deletions,
+renames and moves, and `magi-cli index` is incremental against a changing folder.
+
+- [x] **`watch/reconcile.rs`**: `reconcile_root` (one transaction: unknown ->
+      `pending`; size, mtime or `pipeline_version` differ -> `pending` with the new
+      stat; else only `seen_scan_id`), `next_scan_id` (`meta.last_scan_id`),
+      `roots.last_full_scan_at`, and `resolve_moves`.
+- [x] **Move detection.** Rows the scan did not see are held as candidates;
+      one whose blake3 hash matches a brand-new `pending` row of the same size and
+      kind is renamed in place (`files::rename_file`: row, chunks and vectors kept,
+      nothing embedded), the rest are deleted. Only same-size new rows are hashed,
+      so a scan with no deletions reads nothing. Because the caller scans every
+      root before resolving, a move **between roots** is matched too.
+- [x] **Root lifecycle.** `platform::FsProbe` (`read_dir` + one `metadata`;
+      permission-denied and not-found map to the two statuses) and
+      `roots::set_access`. A missing or unreadable root keeps its rows and returns
+      an empty summary; `ok` is set again when it returns. Search
+      (`search_fts`, text and image vector) hides roots that are `missing` or
+      `enabled = 0`.
+- [x] **Verification, at function level:** item 4 (edited while stopped:
+      re-embedded, old text gone), 5 (rename: same row, zero embeds, found by the
+      new name only), 6/7 (deleted: files, chunks, vectors, FTS all gone), 8 (move
+      + edit is a delete plus a new file), 12 (missing root keeps rows, hidden, and
+      visible again on return; disabled root hidden), 13 (a newly excluded file is
+      deleted by the next scan), 15 (move between roots). 10 new unit tests plus a
+      probe test; 203 unit tests and the integration suite pass, clippy clean.
+- [x] `magi-cli index` prints `moved` and `removed` and takes its scan id from
+      `next_scan_id` instead of a fixed 1.
+
+**Deviations from the plan.**
+- `purge_excluded` is not needed: an excluded file is simply not walked, so it is
+  an unseen row and the deletion pass removes it (test above). It would only add
+  a second code path.
+- `index_root` keeps its `scan_id` parameter (callers pass `next_scan_id`) rather
+  than allocating one itself, which kept the existing pipeline tests as they were.
+- A `pending` row whose file is gone by the time it is drained is deleted, not
+  errored.
+
+**Known limits.**
+- A walk that could not read a subfolder (permissions) yields no entries for it,
+  so its files look deleted and their rows are removed until the next scan finds
+  them again. Slice 5 (platform behaviour) reports unreadable subtrees.
+- A renamed file's filename *chunk text* is updated (so it is searchable by the
+  new name) but its filename *vector* still describes the old name; SPEC's "no
+  re-embedding" is kept.
+- A root that is mounted but empty (an unmounted volume's mount point) is
+  indistinguishable from an emptied folder and is reconciled as such.
+- Files that are never hashed (filename-only kinds) cannot be matched as moves;
+  they are deleted and re-inserted, costing one filename chunk.
+- Vector search filters by root after the k-nearest step, so a hidden root can
+  leave fewer than k results.
