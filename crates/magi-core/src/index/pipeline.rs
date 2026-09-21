@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use crate::db::files::{FileRecord, upsert_file};
-use crate::discovery::{self, Kind, WalkOptions};
+use crate::db::files::{self, FileRecord, StoredFile, upsert_file};
+use crate::discovery::{self, Kind, WalkEntry, WalkOptions};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::extract::code::CodeExtractor;
@@ -16,6 +16,8 @@ use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
+
+use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
 
 /// What an indexing run needs beyond the walk options: the models.
 pub struct IndexContext<'a> {
@@ -80,11 +82,20 @@ pub struct IndexSummary {
     pub indexed: u32,
     pub skipped: u32,
     pub errored: u32,
+    /// Files whose indexed content was still right, so nothing was
+    /// re-extracted or re-embedded.
+    pub unchanged: u32,
 }
 
-/// Walks `root_path`, extracts, chunks, embeds, and writes every file to
-/// the database. One-shot, no watcher — incremental re-indexing and the
-/// pending/indexing state machine land in M5.
+/// Brings the database in line with the files under `root_path`: a file whose
+/// indexed content is still right is left alone, anything else is extracted,
+/// chunked, embedded and written. Files marked stale by a model, engine or
+/// pipeline-version change are re-done even though their content is identical
+/// ([`requeue_on_model_change`]).
+///
+/// One-shot and synchronous: no watcher or queue, and it does not notice files
+/// that have disappeared. The reconciliation and runtime built on the per-file
+/// stages below (M5) cover those.
 pub fn index_root(
     conn: &mut Connection,
     root_id: i64,
@@ -93,78 +104,186 @@ pub fn index_root(
     scan_id: i64,
     ctx: &IndexContext,
 ) -> Result<IndexSummary> {
-    let embedder = ctx.embedder;
+    files::reset_indexing_to_pending(conn)?;
+    requeue_on_model_change(
+        conn,
+        &ModelIds {
+            text: ctx.embedder.model_id(),
+            image: ctx.image_embedder.as_deref().map(|e| e.model_id()),
+            ocr: ctx.ocr.engine_id(),
+        },
+    )?;
+
     let walk_options = WalkOptions {
         exclude_globs: options.exclude_globs.clone(),
         include_hidden: options.include_hidden,
         follow_symlinks: options.follow_symlinks,
     };
     let entries = discovery::walk(root_path, &walk_options)?;
-    let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
-    let previous_model_id = crate::db::meta::get(conn, "text_model_id")?;
 
     let mut summary = IndexSummary::default();
     for entry in &entries {
-        let rel_path = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
-        let file_name = entry
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let ext = entry.path.extension().and_then(|e| e.to_str());
-
-        let mut outcome = process_entry(&entry.path, entry.size, max_size_bytes, options, ctx);
-        let thumb_key = store_thumbnail(&entry.path, &outcome);
-        let mut chunks = std::mem::take(&mut outcome.doc.chunks);
-        chunks.push(filename_chunk(rel_path));
-        let embeddings = embed_chunks(embedder, &entry.path, &mut chunks, &mut outcome)?;
-
-        let record = FileRecord {
+        let target = Target {
             root_id,
-            path: &entry.path,
-            rel_path,
-            file_name,
-            ext,
-            kind: outcome.kind.as_str(),
-            size: entry.size,
-            mtime_ns: entry.mtime_ns,
-            lang: outcome.doc.lang.as_deref(),
-            state: outcome.state,
-            skip_reason: outcome.skip_reason,
-            error: outcome.error.as_deref(),
-            seen_scan_id: scan_id,
-            content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
-            thumb_key: thumb_key.as_deref(),
+            root_path,
+            entry,
+            scan_id,
         };
-        upsert_file(
-            conn,
-            &record,
-            &chunks,
-            &embeddings,
-            outcome.doc.image_embedding.as_deref(),
-        )?;
-
-        match outcome.state {
-            "indexed" => summary.indexed += 1,
-            "skipped" => summary.skipped += 1,
-            _ => summary.errored += 1,
+        match index_file(conn, ctx, options, target)? {
+            Status::Indexed => summary.indexed += 1,
+            Status::Skipped => summary.skipped += 1,
+            Status::Errored => summary.errored += 1,
+            Status::Unchanged => summary.unchanged += 1,
         }
     }
-
-    if let Some(previous) = &previous_model_id
-        && previous != embedder.model_id()
-    {
-        tracing::warn!(
-            previous_model = %previous,
-            current_model = %embedder.model_id(),
-            "text embedding model changed since the last index; vec_text now mixes vectors from two models until affected files are re-embedded (re-embed triggering lands in M5)"
-        );
-    }
-    crate::db::meta::set(conn, "text_model_id", embedder.model_id())?;
-    if let Some(image_embedder) = &ctx.image_embedder {
-        crate::db::meta::set(conn, "image_model_id", image_embedder.model_id())?;
-    }
     Ok(summary)
+}
+
+/// One file to bring up to date, and where it was found.
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    root_id: i64,
+    root_path: &'a Path,
+    entry: &'a WalkEntry,
+    scan_id: i64,
+}
+
+enum Status {
+    Indexed,
+    Skipped,
+    Errored,
+    Unchanged,
+}
+
+/// What the file's stored row says about whether it can be kept as is.
+fn is_settled(stored: &StoredFile) -> bool {
+    stored.pipeline_version == PIPELINE_VERSION
+        && matches!(stored.state.as_str(), "indexed" | "skipped" | "error")
+}
+
+/// A file whose kind is not extracted (unsupported, disabled, too large) has no
+/// content hash; it is unchanged if it would be indexed the same way again.
+fn unchanged_without_content(stored: &StoredFile, outcome: &FileOutcome) -> bool {
+    stored.pipeline_version == PIPELINE_VERSION
+        && stored.state != "error"
+        && outcome.state != "error"
+        && stored.kind == outcome.kind.as_str()
+        && stored.content_hash.is_none()
+        && stored.skip_reason.as_deref() == outcome.skip_reason
+}
+
+/// Same bytes as when it was indexed, by the current pipeline, with real
+/// chunks (a row that was `skipped` or `error` is re-tried instead).
+fn content_is(stored: &StoredFile, hash: &[u8; 32]) -> bool {
+    stored.pipeline_version == PIPELINE_VERSION
+        && stored.skip_reason.is_none()
+        && matches!(stored.state.as_str(), "indexed" | "pending")
+        && stored.content_hash.as_deref() == Some(hash.as_slice())
+}
+
+/// The stages for one file, in order: is it unchanged? (size and mtime, then
+/// content hash) -> extract -> embed -> write in one transaction. The pieces
+/// are separate so the runtime can run them on different threads.
+fn index_file(
+    conn: &mut Connection,
+    ctx: &IndexContext,
+    options: &IndexRootOptions,
+    target: Target,
+) -> Result<Status> {
+    let Target {
+        root_id,
+        root_path,
+        entry,
+        scan_id,
+    } = target;
+    let stored = files::get_stored(conn, &entry.path)?;
+    let keep = |conn: &Connection, id: i64, state: &str| {
+        files::touch_unchanged(conn, id, entry.size, entry.mtime_ns, scan_id, state)
+    };
+
+    // Same size and mtime as when it was indexed: nothing to read.
+    if let Some(s) = &stored
+        && is_settled(s)
+        && s.root_id == root_id
+        && s.size == entry.size
+        && s.mtime_ns == entry.mtime_ns
+    {
+        keep(conn, s.id, &s.state)?;
+        return Ok(Status::Unchanged);
+    }
+
+    let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
+    let mut outcome = match plan_entry(&entry.path, entry.size, max_size_bytes, options) {
+        Plan::Done(outcome) => {
+            let outcome = *outcome;
+            if let Some(s) = stored
+                .as_ref()
+                .filter(|s| unchanged_without_content(s, &outcome))
+            {
+                keep(conn, s.id, outcome.state)?;
+                return Ok(Status::Unchanged);
+            }
+            outcome
+        }
+        Plan::Extract(kind) => {
+            // Only a file already in the index has a hash to compare with; a
+            // new one goes straight to extraction, which hashes it anyway.
+            match stored.as_ref().map(|s| (s, hash_file(&entry.path))) {
+                // Touched or re-saved with the same content: keep the chunks
+                // and vectors, update only size and mtime (SPEC.md §5.4 step 4).
+                Some((s, Ok(hash))) if content_is(s, &hash) => {
+                    keep(conn, s.id, "indexed")?;
+                    return Ok(Status::Unchanged);
+                }
+                Some((_, Err(e))) => errored(kind, e.to_string()),
+                _ => extract_entry(&entry.path, kind, options, ctx),
+            }
+        }
+    };
+
+    let rel_path = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
+    let file_name = entry
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let ext = entry.path.extension().and_then(|e| e.to_str());
+
+    let thumb_key = store_thumbnail(&entry.path, &outcome);
+    let mut chunks = std::mem::take(&mut outcome.doc.chunks);
+    chunks.push(filename_chunk(rel_path));
+    let embeddings = embed_chunks(ctx.embedder, &entry.path, &mut chunks, &mut outcome)?;
+
+    let record = FileRecord {
+        root_id,
+        path: &entry.path,
+        rel_path,
+        file_name,
+        ext,
+        kind: outcome.kind.as_str(),
+        size: entry.size,
+        mtime_ns: entry.mtime_ns,
+        lang: outcome.doc.lang.as_deref(),
+        state: outcome.state,
+        skip_reason: outcome.skip_reason,
+        error: outcome.error.as_deref(),
+        seen_scan_id: scan_id,
+        content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
+        thumb_key: thumb_key.as_deref(),
+    };
+    upsert_file(
+        conn,
+        &record,
+        &chunks,
+        &embeddings,
+        outcome.doc.image_embedding.as_deref(),
+    )?;
+
+    Ok(match outcome.state {
+        "indexed" => Status::Indexed,
+        "skipped" => Status::Skipped,
+        _ => Status::Errored,
+    })
 }
 
 /// Embeds `chunks` (content chunks, filename chunk last). One bad file must
@@ -250,15 +369,20 @@ fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn process_entry(
-    path: &Path,
-    size: u64,
-    max_size_bytes: u64,
-    options: &IndexRootOptions,
-    ctx: &IndexContext,
-) -> FileOutcome {
+/// What to do with a file before reading its content.
+enum Plan {
+    /// Settled without reading it: too large, unsupported, or unreadable.
+    Done(Box<FileOutcome>),
+    /// Read it and run this kind's extractor.
+    Extract(Kind),
+}
+
+fn plan_entry(path: &Path, size: u64, max_size_bytes: u64, options: &IndexRootOptions) -> Plan {
     if size > max_size_bytes {
-        return skipped(discovery::classify(path, &[]), "too_large");
+        return Plan::Done(Box::new(skipped(
+            discovery::classify(path, &[]),
+            "too_large",
+        )));
     }
 
     // Classification from the extension alone needs no I/O; only sniff a
@@ -267,7 +391,7 @@ fn process_entry(
     if kind == Kind::Other {
         match read_header(path, SNIFF_HEADER_LEN) {
             Ok(header) => kind = discovery::classify(path, &header),
-            Err(e) => return errored(Kind::Other, e.to_string()),
+            Err(e) => return Plan::Done(Box::new(errored(Kind::Other, e.to_string()))),
         }
     }
 
@@ -275,13 +399,31 @@ fn process_entry(
     // is indexed by filename only: either way the bytes would be discarded,
     // so don't read them.
     if kind == Kind::Other || !options.file_types.contains(&kind) {
-        return indexed_no_chunks(kind);
+        return Plan::Done(Box::new(indexed_no_chunks(kind)));
     }
+    Plan::Extract(kind)
+}
 
+/// blake3 of the file, streamed so a touched large file is not loaded whole
+/// just to learn it did not change.
+fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(std::fs::File::open(path)?)?;
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn extract_entry(
+    path: &Path,
+    kind: Kind,
+    options: &IndexRootOptions,
+    ctx: &IndexContext,
+) -> FileOutcome {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => return errored(kind, e.to_string()),
     };
+    // Hashed from the bytes about to be extracted, not carried over from the
+    // skip check: the file may have changed in between.
     let content_hash = Some(*blake3::hash(&bytes).as_bytes());
 
     let (path_buf, ocr, image_embedder, max_megapixels) = (
@@ -873,5 +1015,271 @@ mod tests {
             crate::db::meta::get(&conn, "text_model_id").unwrap(),
             Some(OtherFakeEmbedder.model_id().to_string())
         );
+    }
+
+    // ---- M5 slice 1: hash-skip, model-change re-queue, state recovery ----
+
+    fn run(
+        conn: &mut Connection,
+        root_id: i64,
+        root_path: &Path,
+        embedder: &dyn TextEmbedder,
+        scan_id: i64,
+    ) -> IndexSummary {
+        index_root(
+            conn,
+            root_id,
+            root_path,
+            &default_options(),
+            scan_id,
+            &IndexContext::new(embedder),
+        )
+        .unwrap()
+    }
+
+    fn scalar(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn an_unchanged_file_is_not_embedded_again() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        let embedder = FakeEmbedder::counting();
+
+        let first = run(&mut conn, root_id, &root, &embedder, 1);
+        let embedded = embedder.chunks();
+        let second = run(&mut conn, root_id, &root, &embedder, 2);
+
+        assert_eq!((first.indexed, first.unchanged), (1, 0));
+        assert_eq!((second.indexed, second.unchanged), (0, 1));
+        assert_eq!(embedder.chunks(), embedded, "nothing may be embedded again");
+        assert_eq!(scalar(&conn, "SELECT seen_scan_id FROM files"), 2);
+    }
+
+    /// SPEC.md §7 M5 item 3.
+    #[test]
+    fn touching_a_file_without_changing_it_does_not_re_embed() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let file = root.join("notes.txt");
+        fs::write(&file, "the same words").unwrap();
+        let embedder = FakeEmbedder::counting();
+        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedded = embedder.chunks();
+        let old_mtime = scalar(&conn, "SELECT mtime_ns FROM files");
+
+        // Same bytes, new mtime: what `touch` or a re-save does.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+
+        assert_eq!((summary.indexed, summary.unchanged), (0, 1));
+        assert_eq!(embedder.chunks(), embedded);
+        assert!(
+            scalar(&conn, "SELECT mtime_ns FROM files") > old_mtime,
+            "the new mtime must be recorded so the next scan does not hash it again"
+        );
+    }
+
+    /// SPEC.md §7 M5 item 2: the old chunks, FTS rows and vectors are gone.
+    #[test]
+    fn a_modified_file_replaces_its_chunks_search_rows_and_vectors() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let file = root.join("notes.txt");
+        fs::write(&file, "alpha apple").unwrap();
+        let embedder = FakeEmbedder::counting();
+        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedded = embedder.chunks();
+
+        fs::write(&file, "beta banana and a longer second sentence").unwrap();
+        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+
+        assert_eq!(summary.indexed, 1);
+        assert!(embedder.chunks() > embedded, "the new content is embedded");
+        let fts = |term: &str| {
+            crate::search::fts::search_fts(&conn, term, 10)
+                .unwrap()
+                .len()
+        };
+        assert_eq!((fts("apple"), fts("banana")), (0, 1));
+        assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(
+            scalar(&conn, "SELECT COUNT(*) FROM vec_text"),
+            scalar(&conn, "SELECT COUNT(*) FROM chunks"),
+            "one vector per chunk, none left over from the old content"
+        );
+    }
+
+    /// SPEC.md §7 M5 item 3b.
+    #[test]
+    fn a_model_change_re_embeds_unchanged_content_and_the_same_model_does_not() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        let v1 = FakeEmbedder::counting();
+        run(&mut conn, root_id, &root, &v1, 1);
+
+        let same = run(&mut conn, root_id, &root, &v1, 2);
+        assert_eq!(
+            (same.indexed, same.unchanged),
+            (0, 1),
+            "same id: hash-skip applies"
+        );
+
+        let v2 = FakeEmbedder::counting().with_model_id("fake-v2");
+        let changed = run(&mut conn, root_id, &root, &v2, 3);
+        assert_eq!((changed.indexed, changed.unchanged), (1, 0));
+        assert!(
+            v2.chunks() > 0,
+            "the file must be embedded by the new model"
+        );
+        assert_eq!(
+            db::meta::get(&conn, "text_model_id").unwrap().as_deref(),
+            Some("fake-v2")
+        );
+
+        let after = run(&mut conn, root_id, &root, &v2, 4);
+        assert_eq!(
+            (after.indexed, after.unchanged),
+            (0, 1),
+            "and then it is settled again"
+        );
+    }
+
+    #[test]
+    fn a_stale_pipeline_version_is_re_extracted() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        let embedder = FakeEmbedder::counting();
+        run(&mut conn, root_id, &root, &embedder, 1);
+        conn.execute("UPDATE files SET pipeline_version = 0", [])
+            .unwrap();
+
+        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+
+        assert_eq!((summary.indexed, summary.unchanged), (1, 0));
+        assert_eq!(
+            scalar(&conn, "SELECT pipeline_version FROM files"),
+            PIPELINE_VERSION
+        );
+    }
+
+    struct NamedOcr(&'static str);
+    impl OcrEngine for NamedOcr {
+        fn engine_id(&self) -> &str {
+            self.0
+        }
+        fn recognize(&self, _: &image::RgbImage) -> Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn an_ocr_engine_change_re_queues_images_and_nothing_else() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        let qr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/qr/qr_url.png");
+        fs::copy(qr, root.join("code.png")).unwrap();
+        let with = |ocr: &'static str| IndexContext {
+            ocr: Arc::new(NamedOcr(ocr)),
+            ..IndexContext::new(&FakeEmbedder)
+        };
+        let go = |conn: &mut Connection, ctx: &IndexContext, scan| {
+            index_root(conn, root_id, &root, &default_options(), scan, ctx).unwrap()
+        };
+
+        go(&mut conn, &with("ocr-a"), 1);
+        let same = go(&mut conn, &with("ocr-a"), 2);
+        assert_eq!((same.indexed, same.unchanged), (0, 2));
+
+        let changed = go(&mut conn, &with("ocr-b"), 3);
+        assert_eq!(
+            (changed.indexed, changed.unchanged),
+            (1, 1),
+            "only the image is read again"
+        );
+        assert_eq!(
+            db::meta::get(&conn, "ocr_engine_id").unwrap().as_deref(),
+            Some("ocr-b")
+        );
+    }
+
+    /// SPEC.md §7 M5 item 14, the part that does not need file permissions: a
+    /// file that cannot be read becomes `error` and the others carry on.
+    #[test]
+    fn a_corrupt_file_is_an_error_and_the_run_continues() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let truncated = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/truncated.pdf");
+        fs::copy(truncated, root.join("a_broken.pdf")).unwrap();
+        fs::write(root.join("z_fine.txt"), "still gets indexed").unwrap();
+
+        let summary = run(&mut conn, root_id, &root, &FakeEmbedder, 1);
+
+        assert_eq!((summary.indexed, summary.errored), (1, 1));
+        let broken = db::files::get_by_path(&conn, &root.join("a_broken.pdf"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(broken.state, "error");
+        assert_eq!(
+            crate::search::fts::search_fts(&conn, "indexed", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_pending_file_with_the_same_content_is_confirmed_not_re_extracted() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        let embedder = FakeEmbedder::counting();
+        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedded = embedder.chunks();
+        let id = scalar(&conn, "SELECT id FROM files");
+        // What a reconciliation scan does when it sees a different mtime.
+        db::files::mark_pending(&conn, id).unwrap();
+        conn.execute("UPDATE files SET mtime_ns = 1", []).unwrap();
+
+        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+
+        assert_eq!((summary.indexed, summary.unchanged), (0, 1));
+        assert_eq!(embedder.chunks(), embedded);
+        let state: String = conn
+            .query_row("SELECT state FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(state, "indexed");
+    }
+
+    /// The pipeline half of SPEC.md §7 M5 item 11: rows a crash left
+    /// `indexing` go back in the queue and are finished.
+    #[test]
+    fn rows_left_indexing_by_a_crash_are_finished_on_the_next_run() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "the same words").unwrap();
+        run(&mut conn, root_id, &root, &FakeEmbedder, 1);
+        conn.execute("UPDATE files SET state = 'indexing'", [])
+            .unwrap();
+
+        run(&mut conn, root_id, &root, &FakeEmbedder, 2);
+
+        let state: String = conn
+            .query_row("SELECT state FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(state, "indexed");
     }
 }

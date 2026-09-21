@@ -193,8 +193,8 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     )?;
 
     println!(
-        "indexed: {}  skipped: {}  errors: {}",
-        summary.indexed, summary.skipped, summary.errored
+        "indexed: {}  unchanged: {}  skipped: {}  errors: {}",
+        summary.indexed, summary.unchanged, summary.skipped, summary.errored
     );
     Ok(())
 }

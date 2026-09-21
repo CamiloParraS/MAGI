@@ -77,11 +77,18 @@ pub fn list(conn: &Connection) -> Result<Vec<Root>> {
     Ok(rows)
 }
 
+/// Removes a root and everything indexed under it: files, chunks, FTS rows and
+/// both vector tables, in one transaction (SPEC.md §7 M5 item 12). Without the
+/// purge the delete would fail on the `files.root_id` foreign key.
 pub fn remove(conn: &Connection, id: i64) -> Result<()> {
-    let affected = conn.execute("DELETE FROM roots WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let thumbnail_keys = super::files::purge_root(&tx, id)?;
+    let affected = tx.execute("DELETE FROM roots WHERE id = ?1", params![id])?;
     if affected == 0 {
         return Err(Error::RootIdNotFound(id));
     }
+    tx.commit()?;
+    super::files::remove_unreferenced_thumbnails(conn, &thumbnail_keys);
     Ok(())
 }
 
@@ -175,5 +182,56 @@ mod tests {
             remove(&conn, 999),
             Err(Error::RootIdNotFound(999))
         ));
+    }
+
+    /// SPEC.md §7 M5 item 12: removing a root purges everything under it. This
+    /// used to fail outright on the `files.root_id` foreign key.
+    #[test]
+    fn removing_a_root_purges_its_files_chunks_and_vectors() {
+        use crate::db::files::{FileRecord, upsert_file};
+        use crate::embed::{FakeEmbedder, TextEmbedder};
+        use crate::extract::RawChunk;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = db::open(&dir.path().join("magi.db")).unwrap();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = add(&conn, root_dir.path()).unwrap();
+        let path = root.path.join("notes.txt");
+        let rel = std::path::PathBuf::from("notes.txt");
+        let chunks = vec![RawChunk::body("hello world".to_string())];
+        let embeddings = FakeEmbedder.embed_passages(&["hello world"]).unwrap();
+        let record = FileRecord {
+            root_id: root.id,
+            path: &path,
+            rel_path: &rel,
+            file_name: "notes.txt",
+            ext: Some("txt"),
+            kind: "text",
+            size: 11,
+            mtime_ns: 1,
+            lang: None,
+            state: "indexed",
+            skip_reason: None,
+            error: None,
+            seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
+        };
+        upsert_file(&mut conn, &record, &chunks, &embeddings, Some(&[0.5; 768])).unwrap();
+
+        remove(&conn, root.id).unwrap();
+
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        for table in ["roots", "files", "chunks", "vec_text", "vec_image"] {
+            assert_eq!(count(table), 0, "{table} must be empty");
+        }
+        assert_eq!(
+            count("chunks_fts WHERE chunks_fts MATCH 'hello'"),
+            0,
+            "and nothing searchable is left"
+        );
     }
 }

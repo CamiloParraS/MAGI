@@ -175,6 +175,72 @@ impl TextEmbedder for FakeEmbedder {
     }
 }
 
+/// Wraps a [`TextEmbedder`] and counts what goes through it, so a test can
+/// prove that nothing was re-embedded (SPEC.md §7 M5's test instrumentation).
+/// `with_model_id` overrides the reported id, to simulate a model change.
+pub struct CountingEmbedder<E> {
+    inner: E,
+    model_id: Option<String>,
+    calls: std::sync::atomic::AtomicUsize,
+    chunks: std::sync::atomic::AtomicUsize,
+}
+
+impl<E> CountingEmbedder<E> {
+    pub fn new(inner: E) -> Self {
+        Self {
+            inner,
+            model_id: None,
+            calls: Default::default(),
+            chunks: Default::default(),
+        }
+    }
+
+    pub fn with_model_id(mut self, id: impl Into<String>) -> Self {
+        self.model_id = Some(id.into());
+        self
+    }
+
+    /// `embed_passages` calls so far.
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Chunk texts embedded so far, across all calls.
+    pub fn chunks(&self) -> usize {
+        self.chunks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl FakeEmbedder {
+    /// A [`FakeEmbedder`] that counts its calls.
+    pub fn counting() -> CountingEmbedder<FakeEmbedder> {
+        CountingEmbedder::new(FakeEmbedder)
+    }
+}
+
+impl<E: TextEmbedder> TextEmbedder for CountingEmbedder<E> {
+    fn model_id(&self) -> &str {
+        self.model_id
+            .as_deref()
+            .unwrap_or_else(|| self.inner.model_id())
+    }
+
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.calls.fetch_add(1, SeqCst);
+        self.chunks.fetch_add(texts.len(), SeqCst);
+        self.inner.embed_passages(texts)
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.inner.embed_query(text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +254,17 @@ mod tests {
         } else {
             dot / (na * nb)
         }
+    }
+
+    #[test]
+    fn counting_embedder_counts_calls_and_chunks_but_not_queries() {
+        let counting = FakeEmbedder::counting();
+        counting.embed_passages(&["a", "b"]).unwrap();
+        counting.embed_passages(&["c"]).unwrap();
+        counting.embed_query("q").unwrap();
+        assert_eq!((counting.calls(), counting.chunks()), (2, 3));
+        assert_eq!(counting.model_id(), "fake-v1");
+        assert_eq!(FakeEmbedder::counting().with_model_id("x").model_id(), "x");
     }
 
     #[test]

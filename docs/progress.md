@@ -1527,3 +1527,60 @@ re-queue images: that needs an `ocr_engine_id` `meta` key. The owner approved
 adding it on 2026-09-21; SPEC.md §5.5 and M5's re-embed trigger now list it. Also,
 `PaddleOcr::load` is eager. Unlike SigLIP, it is not a lazy `ModelSlot`, so it
 does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.
+
+### M5 Slice 1 - file state machine, hash-skip, re-embed trigger
+
+Plan: docs/m5-plan.md. Synchronous only: no threads or watcher yet. A real-model
+eval afterwards is identical to the last recorded run (hybrid recall@5 0.982, same
+three misses), so the refactor of the per-file path changed no retrieval result.
+
+- [x] **DB operations** (`db/files.rs`): state transitions, `reset_indexing_to_pending`,
+      `next_pending`, `record_failure` with the 30 s / 2 min / give-up-on-third
+      backoff, `invalidate`, `delete_files` / `delete_file` / `purge_root`, and
+      thumbnail removal only when no other file shares the key.
+- [x] **Hash-skip** (`pipeline::index_file`): unchanged size+mtime reads nothing;
+      a changed mtime with the same streamed hash keeps the chunks and vectors.
+      `index_root` is now incremental for files that are still there.
+- [x] **`PIPELINE_VERSION` = 1**, written by `upsert_file`. The upsert's
+      `ON CONFLICT` branch did not refresh `pipeline_version`, which a
+      version-based skip would have tripped over; it does now, and clears
+      `attempts` and `next_attempt_at`.
+- [x] **Re-embed trigger** (`index::requeue_on_model_change`) for the text model,
+      the image model and, new in M5, `meta.ocr_engine_id`. Invalidation sets
+      `pipeline_version = 0`, because marking rows `pending` alone would not stop a
+      hash-skip.
+- [x] **`roots::remove` purges the root's rows.** Verified beforehand that the old
+      code failed with `FOREIGN KEY constraint failed` on an indexed root.
+- [x] **`CountingEmbedder`** (`FakeEmbedder::counting()`) for the "nothing was
+      re-embedded" assertions.
+- [x] **Verification, at function level** (the end-to-end versions with a real
+      watcher come in later slices): item 2 (modified file: old chunks, FTS rows
+      and vectors gone), 3 (touch: embed counter unchanged), 3b (model id
+      changed: re-embedded; same id: skipped), 7 (delete removes every table),
+      12 (root removal purges), 11 in part (rows left `indexing` are finished),
+      14 in part (a corrupt file becomes `error`, the others carry on; the
+      permission-denied half waits for Slice 5). 16 new unit tests plus a
+      thumbnail-sharing integration test. A mutation check (disabling the
+      hash comparison) turns exactly the two hash-skip tests red.
+- [x] The idempotence test changed on purpose: it used to assert that two runs
+      give **identical summaries**, which is the re-index-everything behaviour M5
+      removes. It now asserts the second run is a no-op (every file
+      `unchanged`, zero chunks embedded). It also runs in ~100 s instead of
+      200-400 s.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets --all-features -D
+      warnings` clean; workspace tests pass (192 unit).
+
+**Deviations from the plan.** `insert_pending`, `rename_file`, `find_by_hash` and
+`purge_excluded` were listed for Slice 1 but are only used by reconciliation and
+move detection, so they land in Slice 2 with their tests instead of as untested
+code here. `purge_excluded` also depends on how the walker matches exclusion
+globs, which Slice 2 reads anyway.
+
+**Known limits.**
+- Turning a kind on or off in `indexing.file_types` does not invalidate existing
+  rows: a file with unchanged size and mtime keeps whatever it was indexed as.
+  Slice 7's `apply_config` handles it.
+- A file is judged unchanged by size and mtime alone before any hash is looked
+  at (the usual trade-off; the periodic reconciliation and hash check in later
+  slices are the safety net for a same-size, same-mtime edit).
+- `index_root` still does not notice deleted files; that is Slice 2.

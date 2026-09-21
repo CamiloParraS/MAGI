@@ -244,8 +244,8 @@ Gemma-tokenized with EOS, padded to 64.
 **Pipeline wiring.** `index::pipeline::IndexContext` carries `embedder`, `ocr`
 (`Arc<dyn OcrEngine>`) and an optional `image_embedder`
 (`Arc<dyn ImageEmbedder>`; `None` leaves `vec_image` empty). `IndexContext::new`
-uses `NoOcr` and no image embedder. After a run `meta.image_model_id` records
-the image model, like `meta.text_model_id`. `files.content_hash` (blake3, every
+uses `NoOcr` and no image embedder. `meta.text_model_id`, `meta.image_model_id`
+and `meta.ocr_engine_id` record what produced the index (see "Change detection"). `files.content_hash` (blake3, every
 file whose bytes are read) and `files.thumb_key` are filled by the pipeline.
 `indexing.file_types` deserializes straight into `discovery::Kind`, so an
 unknown name fails config loading with serde's list of valid ones. Extraction
@@ -262,3 +262,51 @@ under the magi data directory, which the Tauri identifier cannot name.
 `rec.yml`) and `image` (`vision_model.onnx`, `text_model.onnx`,
 `tokenizer.json`), both pinned by revision and SHA-256. `ModelEntry::dim` is
 optional (OCR has no embedding width).
+
+## Change detection (M5)
+
+Slice 1 of M5 (docs/m5-plan.md) made indexing incremental. These are the
+contracts the rest of M5 builds on.
+
+**File states** (`files.state`): `pending -> indexing -> indexed | skipped |
+error`, with `attempts` and `next_attempt_at` for retries. `db::files` holds the
+transitions: `mark_pending`, `mark_indexing`, `reset_indexing_to_pending` (a
+crash leaves rows `indexing`; startup puts them back), `next_pending(now, limit)`
+(newest `mtime_ns` first, honouring `next_attempt_at`), and `record_failure`,
+which retries after 30 s, then 2 min, and gives up to `error` on the third
+failure (`backoff_secs`, `MAX_ATTEMPTS`).
+
+**Is this file unchanged?** `pipeline::index_file` asks in three steps and stops
+at the first yes, updating only `size`, `mtime_ns` and `seen_scan_id`:
+1. same size and mtime as the stored row, and the row is settled (`indexed`,
+   `skipped` or `error`) at the current `PIPELINE_VERSION`: nothing is read;
+2. otherwise, for a file that will be extracted and is already in the index, a
+   streamed blake3 hash equal to the stored `content_hash` (state `indexed` or
+   `pending`, no `skip_reason`): kept, so `touch` and re-saves cost no embedding;
+3. a file that is not extracted (unsupported, disabled kind, too large) has no
+   hash and is unchanged if it would be indexed the same way again.
+
+Anything else is extracted, embedded and written by `upsert_file` in one
+transaction, which also stamps `pipeline_version`.
+
+**Stale rows.** `index::PIPELINE_VERSION` is bumped when extraction or chunking
+changes what a file's rows would contain. `index::requeue_on_model_change`
+compares `meta.text_model_id`, `meta.image_model_id` and `meta.ocr_engine_id`
+with the running components and, on a mismatch, calls `files::invalidate`:
+`state = 'pending'` and `pipeline_version = 0`, which is what defeats the
+hash-skip above. A text-model change invalidates every file, an image-model or
+OCR change only `kind = 'image'`. The stored ids are updated in the same
+transaction. A missing stored id is not a mismatch, and no image model configured
+leaves `image_model_id` alone. Old rows stay searchable until replaced.
+
+**Deleting.** `files::delete_files` (call inside a transaction) removes
+`vec_text`, chunks (their FTS rows follow through the trigger), `vec_image` and
+the file row, and returns the thumbnail keys; `remove_unreferenced_thumbnails`
+deletes a thumbnail after the commit only when no other row shares its key.
+`delete_file` wraps one file; `purge_root` covers a root. `roots::remove` now
+purges the root's files first, in the same transaction: before, it failed with a
+foreign-key error on any root that had been indexed.
+
+**Test instrumentation.** `embed::CountingEmbedder` wraps a `TextEmbedder` and
+counts `embed_passages` calls and chunks (`FakeEmbedder::counting()`), with
+`with_model_id` to simulate a model change.
