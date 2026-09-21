@@ -1229,3 +1229,24 @@ deletion on re-index, and reclaiming timed-out extraction threads.
 Still open in M4: thumbnails through the scoped asset protocol; the 48 MP
 HEIC budget (no valid 48 MP fixture); the bomb-rejection RSS delta (< 200 MB)
 and a green three-OS CI run; the parity-gate call above.
+
+### Slice 5 - thumbnails over the asset protocol, and the image RSS budgets
+
+- [x] **Thumbnails are served through a scoped asset protocol.** `thumbs_dir()`
+      is the cache root; the Tauri app enables `assetProtocol` with an empty
+      static scope, the `protocol-asset` feature, and CSP
+      `img-src 'self' asset: http://asset.localhost`, then grants exactly
+      `thumbs_dir()` at startup (`app.asset_protocol_scope().allow_directory`).
+      The scope is granted at runtime because the cache lives under the magi
+      data directory (`directories` or `MAGI_DATA_DIR`), which the Tauri
+      identifier cannot name. **Compile- and clippy-verified only:** nothing in
+      the frontend requests a thumbnail until M6, so the protocol has not been
+      exercised end to end.
+- [x] **Decompression bomb (SPEC.md §7 M4, RSS delta < 200 MB):** rejecting
+      `edge/bomb.png` costs **0 MB** of RSS (6 MB baseline, 6 MB peak, polled at
+      5 ms over 30 repeats) and 51 microseconds each: refused from the header.
+- [ ] **48 MP HEIC (< 400 MB RSS delta, < 3 s): still not measured.** There is
+      no valid 48 MP fixture. What was measured: a 12 MP HEIC decodes in 80 ms
+      with a **74 MB** RSS delta (release). Scaling linearly by pixel count that
+      is ~300 MB and ~0.3 s at 48 MP, inside both budgets, but that is an
+      extrapolation.

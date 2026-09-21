@@ -28,16 +28,19 @@ pub fn thumb_key(content_hash: &[u8; 32]) -> String {
     key
 }
 
+/// Root of the thumbnail cache. This is the one directory the webview's asset
+/// protocol may read (SPEC.md §9); user files are never exposed to it.
+pub fn thumbs_dir() -> PathBuf {
+    crate::paths::cache_dir().join("thumbs")
+}
+
 /// `<cache_dir>/thumbs/<first two hex chars>/<key>.jpg`.
 ///
 /// The two-character shard keeps any one directory to a few thousand
 /// entries, which matters on filesystems that scan a directory linearly.
 pub fn thumb_path(key: &str) -> PathBuf {
     let shard = key.get(..2).unwrap_or("00");
-    crate::paths::cache_dir()
-        .join("thumbs")
-        .join(shard)
-        .join(format!("{key}.jpg"))
+    thumbs_dir().join(shard).join(format!("{key}.jpg"))
 }
 
 /// Downscales to [`THUMB_LONG_SIDE`] and writes a JPEG, creating the parent
