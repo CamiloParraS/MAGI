@@ -221,3 +221,10 @@ contradicted by two Samsung files that carry `nclx` with `full_range = 1` and
 override. Orientation is unaffected (verified against PIL, see docs/progress.md).
 The blessed golden thumbnails record `heic-rs`'s rendering, so they will need
 re-blessing if this is ever fixed.
+
+**Update, same day: `heic-rs` looks like the correct side.** The owner viewed
+`Frontphoto.heic` in Windows Photos, a third implementation, and reported the
+dark shelf is black, as `heic-rs` renders it, not the lifted grey of the libheif
+build inside `pillow-heif`. That is one file, one viewer and a visual judgement,
+not a measurement, and the *cause* of the disagreement is still not established,
+but it is enough to leave the decoder and the goldens as they are.

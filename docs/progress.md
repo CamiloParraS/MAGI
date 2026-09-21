@@ -1395,3 +1395,82 @@ and a green three-OS CI run; the parity-gate call above.
 - [ ] Trade-off to know: real 4-5 letter text alone in a photo is not indexed
       (marked `ponytail:` in the code). Threshold 4 also recovers most of the loss
       (cross 0.850) if that matters more.
+
+## M4 sign-off (images: OCR, QR codes, visual embeddings, thumbnails)
+
+Requested by the owner on 2026-09-21. Every SPEC.md §7 M4 verification item below
+either passes or has a recorded, owner-accepted exception. This is the one place
+that collects them; the evidence lives in the slices above, `docs/eval.md`, and
+ADR-0003 / 0006 / 0007. SPEC.md's own checkboxes are left as they are (M3's were
+too); this section is the record.
+
+### Verification items
+
+| # | SPEC.md item | Result | Evidence |
+| - | --- | --- | --- |
+| 1 | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32 | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries). | ADR-0007, slice 4 |
+| 2 | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7 |
+| 3 | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly. | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
+| 4 | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11) | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries. | docs/eval.md |
+| 5 | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why. | ADR-0006, slice 3 |
+| 6 | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3 | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3. | slices 2, 4 |
+| 7 | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3 | **Pass.** | slice 4 |
+| 8 | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error. | slice 5, slice 7 |
+| 9 | Eval extended with >= 20 image queries, results in `docs/eval.md` | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900. | docs/eval.md |
+
+Also true at sign-off: `cargo fmt` and `cargo clippy --workspace --all-targets
+--all-features -D warnings` clean; 175 unit tests plus the golden, idempotence,
+image-index and thumbnail tests pass.
+
+### Deliverables
+
+- Image decoding with limits and orientation (one decode point): done.
+- HEIC extractor (`heic-rs`, ADR-0003): done. On the disagreement with libheif's
+  colours see "Resolved" below.
+- OCR (`PaddleOcr` behind `OcrEngine`, ADR-0006): done.
+- `rxing` QR decoding into `qr` chunks: done, including tiled scanning of small
+  codes in images up to 6 MP.
+- SigLIP 2 image and text towers, `vec_image`, visual list in hybrid search
+  (ADR-0007): done, behind a cosine floor of 0.10 that the spec does not have.
+- Thumbnail cache (256 px, keyed by content hash) served through the scoped asset
+  protocol: **the cache is done and tested; the asset protocol is wired and
+  compile-checked only**, because nothing in the frontend requests a thumbnail
+  until M6.
+
+### Exceptions the owner accepted
+
+1. Image parity 0.969 mean against 0.97 (2026-09-20).
+2. 48 MP measured on a synthetic HEIC (2026-09-20).
+3. `¡` not recognized by OCR (2026-09-21).
+
+### Resolved
+
+- **HEIC colours.** `heic-rs` and libheif (via `pillow-heif`) disagree by ~8-13
+  levels. The owner, asked to check `Frontphoto.heic` in Windows Photos on 2026-09-21,
+  reported the dark shelf is **black**, as `heic-rs` renders it, not lifted as libheif renders
+  it. One file in one viewer, but it points at `heic-rs` being the right one, so
+  nothing changes. ADR-0003's correction is updated.
+
+### Known limits carried into M5 (none blocks it)
+
+- The 0.10 visual cosine floor was calibrated on 15 images; a real photo library
+  needs re-measuring. Some text queries already pull a related photo through it.
+- OCR: a curved can label reads CER 0.92, a handwriting-style page 0.29, a receipt
+  0.77. Real 4-5 letter text alone in a photo is not indexed (`MIN_OCR_ALNUM`).
+- QR: a code under ~100 px in an image over 6 MP, the curved Pepsi-can code, and
+  1D barcodes are not decoded.
+- `cross` text recall is 0.900 and rank-sensitive (the expected document is the
+  twin of the one ranked first); `informe de ingresos trimestrales` is a standing
+  miss.
+- No fixture covers an `imir` mirror box. The synthetic 48 MP file is smoother
+  than a real photo, so its time may be slightly optimistic.
+- The asset protocol is unexercised until M6.
+- The `fp32` recall comparison for SigLIP used 25 queries on 15 images; it was not
+  repeated on the 164-query eval.
+
+### For M5
+
+Not part of M4, but M5 inherits these from it: the `meta.image_model_id` and
+`meta.text_model_id` re-embed trigger (deliverable in M5), thumbnail garbage
+collection (deleted files' thumbnails stay on disk), and the OCR engine and
+SigLIP embedder not yet being owned by `Engine`.
