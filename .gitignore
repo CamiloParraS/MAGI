@@ -35,6 +35,7 @@ fixtures/corpus/images/mustang_landscape.arw
 fixtures/corpus/images/VW_beetle.jpg
 fixtures/corpus/images/city_landscape.jpg
 fixtures/corpus/images/NOT_A_HEIC_*
+fixtures/corpus/local/
 fixtures/golden/ocr/personal.md
 
 # Python bytecode
