@@ -213,7 +213,7 @@ image is decoded (HEIC routes to `extract::heic`, everything else to the
 against `max_image_megapixels` before any allocation) and the EXIF/`irot`
 orientation fix run exactly once. `extract::image::extract_image` decodes once
 and derives everything from that buffer, in this order: QR/barcode payloads
-(`qr::decode_barcodes`, full resolution, a scale ladder), the visual embedding
+(`qr::decode_barcodes`: a shrink-only scale ladder, then, for images up to 6 MP, overlapping native-resolution tiles so a small code in a big busy photo is found), the visual embedding
 (`ImageEmbedder::embed_image`, from the full-resolution decode), then the
 full buffer is dropped, a 2048 px copy goes to OCR, and a 256 px copy becomes
 the thumbnail. A failed embedding or OCR-less run costs the file that signal,

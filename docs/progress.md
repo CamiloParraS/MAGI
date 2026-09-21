@@ -1357,3 +1357,22 @@ and a green three-OS CI run; the parity-gate call above.
   failure keeps the QR chunks, atomic thumbnail writes, one dimension probe,
   a fail-fast OCR lock). It was not made or committed here; fmt, clippy and all
   172 unit tests pass with it applied.
+
+### Slice 8 - small QR codes in large photos
+
+- [x] **Fixed: the war-grave photo's QR is now decoded** (`http://en.qrwp.org/Adrian_Warburton`),
+      closing the open item in slice 7. After the shrink-only ladder finds nothing,
+      `qr::decode_barcodes` scans overlapping native-resolution square tiles (half
+      the short edge, half overlap) of any image up to 6 MP. The prototype found
+      the code with tiles at a half, a third and a quarter of the short edge; the
+      half (12-15 tiles) is the cheapest. Test:
+      `a_small_qr_in_a_large_busy_photo_is_found_by_tiling` (local-only fixture, a
+      skip when absent) and `tiles_cover_the_whole_axis_with_half_overlap`.
+- [x] **Cost, measured over the ~50 non-QR images in the corpus (release):** images
+      up to 6 MP with no code average 42 ms (0.9 MP) against 30 ms before; images
+      over 6 MP are unchanged (~40 ms per MP), because their codes are big enough
+      for the ladder. **No false positives:** every payload returned across the
+      corpus is a real code. The 6 MP cap is the ceiling: a code under ~100 px in a
+      larger frame is still missed (marked `ponytail:` in `qr.rs`).
+- [ ] Still undecoded: the Pepsi-can QR (curved label; ours and OpenCV fail even
+      on a crop) and the 1D barcode.

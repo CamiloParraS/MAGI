@@ -161,4 +161,4 @@
 {"query": "porsche car", "lang": "skip", "expected": ["local/porsche_car.jpg"], "notes": "147 MP: skipped as image_too_large, so findable by file name only"}
 {"query": "Version 2", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 2nd of 3 QR codes; not in the file name. Verified with OpenCV (independent decoder), not just ours"}
 {"query": "Version 3 QR Code", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 3rd QR code; verified with OpenCV"}
-{"query": "qrwp", "lang": "qr", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": "KNOWN FAILURE: payload http://en.qrwp.org/Adrian_Warburton (OpenCV, from a crop). The ~100 px code in a 1600x2035 photo is not located by the downscale-only ladder"}
+{"query": "qrwp", "lang": "qr", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": "payload http://en.qrwp.org/Adrian_Warburton (OpenCV, from a crop). A ~100 px code in a 1600x2035 photo: needs the tiled scan, the shrink-only ladder cannot see it"}

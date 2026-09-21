@@ -466,7 +466,7 @@ Character error rate after collapsing whitespace, computed from the indexed
   so does our decoder on the same 640 x 306 crop, but neither finds it in the
   full 1600 x 2035 frame. The code is ~100 px in a busy scene. `qr.rs`'s scale
   ladder only downsizes (1, 1/2, 1/4, 1/8), which helps a large code and hurts a
-  small one. Tiled native-resolution scanning is the natural fix; not done.
+  small one. **Fixed afterwards** by native-resolution tiling (docs/progress.md, slice 8); the `qr` numbers in the table above are from before that.
 - The Pepsi can's QR is not decoded by ours or by OpenCV (curved, ~perspective).
 - The 1D barcode `barcode-Hello World!.png` decodes with neither rxing nor
   OpenCV; only its printed text is found, by OCR.
