@@ -32,6 +32,8 @@ fixtures/corpus/images/receipt_es.jpg
 fixtures/corpus/images/phone_12mp_portrait.heic
 fixtures/corpus/images/phone_12mp_landscape.heic
 fixtures/corpus/images/mustang_landscape.arw
+fixtures/corpus/images/VW_beetle.jpg
+fixtures/corpus/images/city_landscape.jpg
 fixtures/corpus/images/NOT_A_HEIC_*
 fixtures/golden/ocr/personal.md
 

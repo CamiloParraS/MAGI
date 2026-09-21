@@ -295,27 +295,31 @@ The 15 MB file took ~1360 s wall on the reference machine (int8,
 
 **Method:** `magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`, all
 real models (int8 e5, PaddleOCR, SigLIP 2 q4f16), fresh temp DB, release
-build. The set is now 97 queries: the earlier 70 plus 27 in a new `img`
-bucket. `fixtures/corpus` indexed 57 files, with 5 errors and 1 skip. Four
-errors are intentional: `edge/bomb.png` (refused at 400 MP), `edge/truncated.jpg`,
-`edge/truncated.pdf` and `edge/password_protected.pdf`. The fifth,
-`images/mustang_landscape.arw`, is **not** intentional: a Sony RAW is not a
-supported kind, but the classifier sniffs its TIFF container and hands it to the
-TIFF decoder, which fails (see docs/progress.md). The skip is the 20 MP `.ppm`
-over the file-size limit. A new `visual` mode runs `vec_image` alone.
+build. The set is now 99 queries: the earlier 70 plus 29 in a new `img`
+bucket. `fixtures/corpus` indexed 60 files, with 3 skips and 3 errors. The three
+errors are the intentionally broken fixtures (`edge/truncated.jpg`,
+`edge/truncated.pdf`, `edge/password_protected.pdf`). The skips are the 20 MP
+`.ppm` (over the file-size limit), `edge/bomb.png` (400 MP declared) and
+`images/city_landscape.jpg` (75 MP), the last two as `image_too_large`. A Sony
+`.arw` RAW in the folder is indexed by filename only: an earlier run of this
+eval reported it as an error, because the classifier sniffed its TIFF container
+and the TIFF decoder failed (fixed alongside; see docs/progress.md). **The
+corpus includes the gitignored local-only fixtures** (`fixtures/README.md`), so
+a fresh clone indexes fewer files and its numbers differ slightly. A new
+`visual` mode runs `vec_image` alone.
 
-The `img` bucket: 20 visual queries (dogs, cat, car, mountains at sunrise and
-sunset, Christmas shelf, anime screenshot; English and Spanish, including the
+The `img` bucket: 22 visual queries (dogs, cat, car, mountains at sunrise and
+sunset, Christmas shelf, anime screenshot, anime figurine; English and Spanish, including the
 SPEC.md M4 pair `dog on the beach` / `perro en la playa`), 3 OCR-text queries
 (one with accents), and 4 QR queries (including SPEC.md's `qr code` /
 `código QR`, where any of the four QR fixtures is a correct hit).
 
 | Mode | n | recall@5 | recall@10 | MRR |
 | --- | -: | -: | -: | -: |
-| fts-only | 97 | 0.443 | 0.443 | 0.443 |
-| vector-only (text) | 97 | 0.979 | 0.990 | 0.801 |
-| visual-only | 97 | 0.247 | 0.247 | 0.247 |
-| **hybrid** | 97 | **0.990** | **0.990** | **0.840** |
+| fts-only | 99 | 0.434 | 0.434 | 0.434 |
+| vector-only (text) | 99 | 0.970 | 0.990 | 0.804 |
+| visual-only | 99 | 0.263 | 0.263 | 0.263 |
+| **hybrid** | 99 | **0.980** | **0.990** | **0.843** |
 
 Hybrid by bucket:
 
@@ -323,12 +327,13 @@ Hybrid by bucket:
 | --- | -: | -: | -: |
 | en | 20 | 1.000 | 0.975 |
 | es | 20 | 1.000 | 0.925 |
-| cross | 20 | 0.950 | 0.401 |
+| cross | 20 | 0.900 | 0.399 |
 | kw | 10 | 1.000 | 0.950 |
-| **img** | 27 | **1.000** | **0.963** |
+| **img** | 29 | **1.000** | **0.966** |
 
-On the `img` bucket alone: fts-only 0.333, visual-only 0.889 (0.963 before the
-cosine floor below), text-vector-only 0.963, hybrid 1.000. Every image query
+On the `img` bucket alone: fts-only 0.310, visual-only 0.897 (0.963 on the
+earlier 27-query set before the cosine floor below), text-vector-only 0.966,
+hybrid 1.000. Every image query
 lands in the top 5, including SPEC.md's four required ones: `qr code` /
 `código QR` return a QR fixture and `dog on the beach` / `perro en la playa`
 return a dog photo, all inside the top 3. The visual list earns its place:
@@ -355,10 +360,18 @@ images), so a real photo library needs re-measuring.
 image occasionally takes rank 2 ahead of the expected document. Recall@5 is
 unaffected.
 
+Hybrid `cross` recall@5 went from 0.950 (97 queries, 57 files) to 0.900 (99
+queries, 60 files): one query dropped out of the top 5 when the corpus grew by
+three images. Text-vector-only search dropped by exactly the same amount over
+the same change, so this is added distractors, not the visual list. It is one
+query of twenty; treat it as noise until the corpus is larger.
+
 **Peak RSS, the whole fixture corpus with all models loaded (NFR-11):
-1340 MB** (limit 1.5 GB). One process polled at 50 ms through indexing 57
-files (e5 + PaddleOCR + SigLIP vision) and all 97 x 4 queries (which loads
-the SigLIP text tower, the last +190 MB step). Wall time 64 s.
+1328 MB** (limit 1.5 GB; 1340 MB on the earlier 57-file run). One process
+polled at 50 ms through indexing 60 files (e5 + PaddleOCR + SigLIP vision,
+including a real 45 MP JPEG) and all 99 x 4 queries (which loads the SigLIP text
+tower, the last +190 MB step). Wall time 1-2 minutes, and not stable between
+runs.
 
 ## Not yet done
 

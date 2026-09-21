@@ -95,3 +95,5 @@
 {"query": "código QR", "lang": "img", "expected": ["images/phone_qr.jpg", "images/phone_qr.heic", "qr/qr_url.png", "qr/qr_text_es.png"], "notes": "QR chunk, SPEC M4 query (Spanish): any QR fixture"}
 {"query": "código QR de prueba", "lang": "img", "expected": ["qr/qr_text_es.png"], "notes": "QR payload"}
 {"query": "example.com magi-test", "lang": "img", "expected": ["qr/qr_url.png"], "notes": "QR payload"}
+{"query": "an anime figurine with spiky orange hair", "lang": "img", "expected": ["images/phone_figurine.heif"], "notes": "visual, iPhone .heif"}
+{"query": "figura de anime con el pelo naranja", "lang": "img", "expected": ["images/phone_figurine.heif"], "notes": "visual (Spanish), iPhone .heif"}

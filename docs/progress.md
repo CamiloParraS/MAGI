@@ -1278,20 +1278,29 @@ and a green three-OS CI run; the parity-gate call above.
       scales linearly. Caveat: smoother content than a real 48 MP photo, so time
       may be slightly optimistic; memory is content-independent.
 
-- [ ] **Found while checking the eval's error count: unsupported RAW files are
-      reported as errors.** `images/mustang_landscape.arw` (Sony RAW) indexes as
-      `error` ("required tag `ImageWidth` not found"). `discovery::classify` has
-      no `arw`, as `fixtures/README.md` intends, but for an unknown extension it
-      falls back to `infer` magic-byte sniffing, which identifies TIFF-based RAW
-      containers (ARW, CR2, NEF, DNG, ...) as TIFF, so they reach the TIFF
-      decoder and fail. Every RAW in a photographer's folder would show up in the
-      error list. Expected behaviour is filename-only indexing (`Other`). Not
-      fixed; a denylist of RAW extensions in `classify` (or not sniffing a file
-      that already has an unrecognized extension) would do it.
-- [ ] **Three files appeared in `fixtures/corpus/images/` that this session
-      did not create and did not commit:** `phone_48mp_landscape.heif`
-      (3024 x 4032 = **12.2 MP**, iPhone 13 Pro Max, so not a 48 MP file, and its
-      EXIF carries **GPS**), `VW_beetle.jpg` (45.4 MP Nikon Z 8, EXIF with
-      **GPS**) and `city_landscape.jpg` (75.3 MP, no EXIF, over the 64 MP
-      default cap). Run `fixtures/scrub_metadata.py` and decide before
-      committing any of them.
+- [x] **Fixed: unsupported RAW files were reported as errors.**
+      `images/mustang_landscape.arw` (Sony RAW) indexed as `error` ("required tag
+      `ImageWidth` not found"): `discovery::classify` has no `arw`, as
+      `fixtures/README.md` intends, but for an unknown extension it fell back to
+      `infer` magic-byte sniffing, which reads TIFF-based RAW containers (ARW,
+      CR2, NEF, DNG, ...) as TIFF, so they reached the TIFF decoder and failed.
+      `classify` now names the common RAW extensions and files them as `Other`
+      (filename-only) before sniffing; the same bytes with no extension are still
+      sniffed as a TIFF. Test: `camera_raw_is_not_sniffed_into_an_image`.
+- [x] **Fixed: an image over the megapixel cap was an `error`, SPEC says
+      `skipped`.** SPEC.md §5.2 and §7 M4 both say images over
+      `max_image_megapixels` are skipped, but the pipeline recorded
+      `ImageTooLarge` as `error`, so a real 75 MP panorama would sit in the error
+      list with a retry. It is now `skipped` with `skip_reason = image_too_large`.
+      Test: `image_over_the_megapixel_cap_is_skipped_not_errored` (via
+      `edge/bomb.png`). The eval now shows exactly the three intentional errors.
+- [x] **New fixtures (owner-supplied, 2026-09-21).** `phone_figurine.heif`
+      (12 MP iPhone photo, the only `.heif`-extension fixture; committed after
+      its GPS/vendor EXIF was removed with `fixtures/scrub_metadata.py`, since the
+      copy that arrived still carried it, and after being viewed) plus two
+      royalty-free stock JPEGs kept local-only like the RAW (`VW_beetle.jpg`,
+      45 MP, GPS EXIF scrubbed; `city_landscape.jpg`, 75 MP): 18 MB each is too
+      much to add to every clone. `fixtures/README.md` and `.gitignore` list them.
+      The original name `phone_48mp_landscape.heif` was wrong (12 MP, portrait),
+      so it was renamed. Two eval queries cover the figurine (`img` bucket is now
+      29).
