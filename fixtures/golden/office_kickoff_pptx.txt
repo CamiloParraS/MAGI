@@ -22,4 +22,6 @@ ExtractedDoc {
     lang: Some(
         "ca",
     ),
+    thumbnail: None,
+    image_embedding: None,
 }

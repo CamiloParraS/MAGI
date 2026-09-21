@@ -1,10 +1,7 @@
 //! hash -> extract -> chunk -> embed -> write. Implemented starting M2
 
-use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::Connection;
 
@@ -19,13 +16,6 @@ use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
-
-pub const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Timed-out extraction threads that may still be running before new
-/// extractions are refused. A hung thread can't be killed, and each one
-/// pins its file's bytes and any decoded image, so this caps that memory.
-const MAX_STUCK_THREADS: usize = 4;
 
 /// What an indexing run needs beyond the walk options: the models.
 pub struct IndexContext<'a> {
@@ -56,9 +46,8 @@ pub struct IndexRootOptions {
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
     pub max_image_megapixels: u32,
-    /// Kinds (`Kind::as_str`) that get content extraction; others are
-    /// indexed by filename only.
-    pub file_types: Vec<String>,
+    /// Kinds that get content extraction; others are indexed by filename only.
+    pub file_types: Vec<Kind>,
 }
 
 impl IndexRootOptions {
@@ -125,26 +114,10 @@ pub fn index_root(
         let ext = entry.path.extension().and_then(|e| e.to_str());
 
         let mut outcome = process_entry(&entry.path, entry.size, max_size_bytes, options, ctx);
-        let thumb_key = write_thumbnail(&entry.path, &outcome);
-        let mut chunks = std::mem::take(&mut outcome.chunks);
+        let thumb_key = store_thumbnail(&entry.path, &outcome);
+        let mut chunks = std::mem::take(&mut outcome.doc.chunks);
         chunks.push(filename_chunk(rel_path));
-
-        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let embeddings = match embedder.embed_passages(&texts) {
-            Ok(e) => e,
-            Err(e) => {
-                // One bad file must not abort the run: keep only the
-                // filename chunk (still searchable by name) and mark error.
-                tracing::warn!(path = %entry.path.display(), error = %e, "embedding failed");
-                outcome.state = "error";
-                outcome.error = Some(e.to_string());
-                chunks.drain(..chunks.len() - 1);
-                let texts = [chunks[0].text.as_str()];
-                // If even the filename chunk fails, the embedder itself is
-                // broken: propagate rather than error every remaining file.
-                embedder.embed_passages(&texts)?
-            }
-        };
+        let embeddings = embed_chunks(embedder, &entry.path, &mut chunks, &mut outcome)?;
 
         let record = FileRecord {
             root_id,
@@ -155,7 +128,7 @@ pub fn index_root(
             kind: outcome.kind.as_str(),
             size: entry.size,
             mtime_ns: entry.mtime_ns,
-            lang: outcome.lang.as_deref(),
+            lang: outcome.doc.lang.as_deref(),
             state: outcome.state,
             skip_reason: outcome.skip_reason,
             error: outcome.error.as_deref(),
@@ -168,7 +141,7 @@ pub fn index_root(
             &record,
             &chunks,
             &embeddings,
-            outcome.image_embedding.as_deref(),
+            outcome.doc.image_embedding.as_deref(),
         )?;
 
         match outcome.state {
@@ -194,22 +167,41 @@ pub fn index_root(
     Ok(summary)
 }
 
-/// Content-hash-keyed, so an unchanged or duplicate image is not rewritten.
+/// Embeds `chunks` (content chunks, filename chunk last). One bad file must
+/// not abort the run: if embedding fails, the file keeps only its filename
+/// chunk (still searchable by name) and is marked `error`. If even that
+/// fails, the embedder itself is broken and the error propagates rather than
+/// erroring every remaining file.
+fn embed_chunks(
+    embedder: &dyn TextEmbedder,
+    path: &Path,
+    chunks: &mut Vec<RawChunk>,
+    outcome: &mut FileOutcome,
+) -> Result<Vec<Vec<f32>>> {
+    let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+    match embedder.embed_passages(&texts) {
+        Ok(embeddings) => Ok(embeddings),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "embedding failed");
+            outcome.state = "error";
+            outcome.error = Some(e.to_string());
+            chunks.drain(..chunks.len() - 1);
+            embedder.embed_passages(&[chunks[0].text.as_str()])
+        }
+    }
+}
+
 /// A failed write costs the file its thumbnail, never its index entry.
-fn write_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
+fn store_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
     let (hash, image) = outcome
         .content_hash
         .as_ref()
-        .zip(outcome.thumbnail.as_ref())?;
-    let key = crate::thumbs::thumb_key(hash);
-    let thumb_path = crate::thumbs::thumb_path(&key);
-    if !thumb_path.exists()
-        && let Err(e) = crate::thumbs::write_thumbnail(&thumb_path, image)
-    {
-        tracing::warn!(path = %path.display(), error = %e, "thumbnail not written");
-        return None;
-    }
-    Some(key)
+        .zip(outcome.doc.thumbnail.as_ref())?;
+    crate::thumbs::store(hash, image)
+        .inspect_err(
+            |e| tracing::warn!(path = %path.display(), error = %e, "thumbnail not written"),
+        )
+        .ok()
 }
 
 struct FileOutcome {
@@ -217,11 +209,8 @@ struct FileOutcome {
     state: &'static str,
     skip_reason: Option<&'static str>,
     error: Option<String>,
-    chunks: Vec<RawChunk>,
-    lang: Option<String>,
     content_hash: Option<[u8; 32]>,
-    thumbnail: Option<image::RgbImage>,
-    image_embedding: Option<Vec<f32>>,
+    doc: ExtractedDoc,
 }
 
 fn indexed_no_chunks(kind: Kind) -> FileOutcome {
@@ -230,11 +219,8 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
         state: "indexed",
         skip_reason: None,
         error: None,
-        chunks: Vec::new(),
-        lang: None,
         content_hash: None,
-        thumbnail: None,
-        image_embedding: None,
+        doc: ExtractedDoc::default(),
     }
 }
 
@@ -249,49 +235,10 @@ fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
 
 fn errored(kind: Kind, message: String) -> FileOutcome {
     FileOutcome {
-        kind,
         state: "error",
-        skip_reason: None,
         error: Some(message),
-        chunks: Vec::new(),
-        lang: None,
-        content_hash: None,
-        thumbnail: None,
-        image_embedding: None,
+        ..indexed_no_chunks(kind)
     }
-}
-
-/// Which extractor (if any) handles a [`Kind`]. A single exhaustive match
-/// over `Kind` here — rather than separate `has_extractor` and
-/// `extract_for_kind` matches — means the compiler forces both "should we
-/// read this file's bytes" and "how do we extract it" to stay in sync
-/// whenever a `Kind` variant is added.
-enum Dispatch {
-    Text,
-    Pdf,
-    Office,
-    Code,
-    Image,
-    /// No extractor: filename-only indexing.
-    None,
-}
-
-fn dispatch_for(kind: Kind) -> Dispatch {
-    match kind {
-        Kind::Text => Dispatch::Text,
-        Kind::Pdf => Dispatch::Pdf,
-        Kind::Office => Dispatch::Office,
-        Kind::Code => Dispatch::Code,
-        Kind::Image => Dispatch::Image,
-        Kind::Other => Dispatch::None,
-    }
-}
-
-/// Whether `extract_for_kind` does real content extraction for `kind`.
-/// Kinds without one fall back to filename-only indexing, so there's no
-/// point reading their full file content.
-fn has_extractor(kind: Kind) -> bool {
-    !matches!(dispatch_for(kind), Dispatch::None)
 }
 
 fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
@@ -310,7 +257,6 @@ fn process_entry(
     options: &IndexRootOptions,
     ctx: &IndexContext,
 ) -> FileOutcome {
-    let file_types = &options.file_types;
     if size > max_size_bytes {
         return skipped(discovery::classify(path, &[]), "too_large");
     }
@@ -325,10 +271,10 @@ fn process_entry(
         }
     }
 
-    // No extractor for this kind yet: skip reading the rest of the file,
-    // since the bytes would just be discarded (see `has_extractor`).
-    // Also filename-only when the user disabled this kind in `file_types`.
-    if !has_extractor(kind) || !file_types.iter().any(|t| t == kind.as_str()) {
+    // `Other` has no extractor, and a kind the user disabled in `file_types`
+    // is indexed by filename only: either way the bytes would be discarded,
+    // so don't read them.
+    if kind == Kind::Other || !options.file_types.contains(&kind) {
         return indexed_no_chunks(kind);
     }
 
@@ -336,28 +282,46 @@ fn process_entry(
         Ok(b) => b,
         Err(e) => return errored(kind, e.to_string()),
     };
+    let content_hash = Some(*blake3::hash(&bytes).as_bytes());
 
-    let content_hash = *blake3::hash(&bytes).as_bytes();
-    let job = ExtractJob {
-        kind,
-        path: path.to_path_buf(),
-        bytes,
-        ocr: Arc::clone(&ctx.ocr),
-        image_embedder: ctx.image_embedder.clone(),
-        max_megapixels: options.max_image_megapixels,
-    };
-    let content_hash = Some(content_hash);
-    match extract_with_isolation(job) {
-        Ok(extracted) => FileOutcome {
-            kind,
-            state: "indexed",
-            skip_reason: None,
-            error: None,
-            chunks: extracted.doc.chunks,
-            lang: extracted.doc.lang,
+    let (path_buf, ocr, image_embedder, max_megapixels) = (
+        path.to_path_buf(),
+        Arc::clone(&ctx.ocr),
+        ctx.image_embedder.clone(),
+        options.max_image_megapixels,
+    );
+    let extracted = super::isolate::run(path.to_path_buf(), move || {
+        let (path, bytes) = (path_buf.as_path(), bytes.as_slice());
+        match kind {
+            Kind::Text => TextExtractor.extract(path, bytes),
+            Kind::Code => CodeExtractor.extract(path, bytes),
+            Kind::Office => OfficeExtractor.extract(path, bytes),
+            Kind::Pdf => {
+                let mut doc = PdfExtractor.extract(path, bytes)?;
+                // A PDF we can read but not render is still searchable.
+                doc.thumbnail = crate::extract::pdf::first_page_thumbnail(bytes)
+                    .inspect_err(
+                        |e| tracing::warn!(path = %path.display(), error = %e, "no PDF thumbnail"),
+                    )
+                    .ok();
+                Ok(doc)
+            }
+            Kind::Image => crate::extract::image::extract_image(
+                path,
+                bytes,
+                max_megapixels,
+                &*ocr,
+                image_embedder.as_deref(),
+            ),
+            Kind::Other => Ok(ExtractedDoc::default()),
+        }
+    });
+
+    match extracted {
+        Ok(doc) => FileOutcome {
             content_hash,
-            thumbnail: extracted.thumbnail,
-            image_embedding: extracted.image_embedding,
+            doc,
+            ..indexed_no_chunks(kind)
         },
         // SPEC.md section 5.2: images over `max_image_megapixels` are
         // skipped. A real 75 MP panorama is not an error to retry.
@@ -369,153 +333,6 @@ fn process_entry(
             content_hash,
             ..errored(kind, e.to_string())
         },
-    }
-}
-
-/// An [`ExtractedDoc`] plus the thumbnail derived from the same read.
-#[derive(Default)]
-struct Extracted {
-    doc: ExtractedDoc,
-    thumbnail: Option<image::RgbImage>,
-    image_embedding: Option<Vec<f32>>,
-}
-
-/// Owned inputs for the extraction thread.
-struct ExtractJob {
-    kind: Kind,
-    path: PathBuf,
-    bytes: Vec<u8>,
-    ocr: Arc<dyn OcrEngine>,
-    image_embedder: Option<Arc<dyn ImageEmbedder>>,
-    max_megapixels: u32,
-}
-
-fn extract_for_kind(job: &ExtractJob) -> Result<Extracted> {
-    let (path, bytes) = (job.path.as_path(), job.bytes.as_slice());
-    let plain = |doc| Extracted {
-        doc,
-        ..Default::default()
-    };
-    match dispatch_for(job.kind) {
-        Dispatch::Text => TextExtractor.extract(path, bytes).map(plain),
-        Dispatch::Pdf => {
-            let mut extracted = plain(PdfExtractor.extract(path, bytes)?);
-            // A PDF we can read but not render is still searchable.
-            match crate::extract::pdf::first_page_thumbnail(bytes) {
-                Ok(thumbnail) => extracted.thumbnail = Some(thumbnail),
-                Err(e) => tracing::warn!(path = %path.display(), error = %e, "no PDF thumbnail"),
-            }
-            Ok(extracted)
-        }
-        Dispatch::Office => OfficeExtractor.extract(path, bytes).map(plain),
-        Dispatch::Code => CodeExtractor.extract(path, bytes).map(plain),
-        Dispatch::Image => crate::extract::image::extract_image(
-            path,
-            bytes,
-            job.max_megapixels,
-            &*job.ocr,
-            job.image_embedder.as_deref(),
-        )
-        .map(|artifacts| Extracted {
-            doc: artifacts.doc,
-            thumbnail: Some(artifacts.thumbnail),
-            image_embedding: artifacts.image_embedding,
-        }),
-        Dispatch::None => Ok(Extracted::default()),
-    }
-}
-
-/// Timed-out extraction threads, kept so they can be joined once they
-/// finish instead of being forgotten. Rust can't kill a thread; the best
-/// available is to notice when a stuck one ends and to stop starting new
-/// work while too many are still alive.
-///
-/// ponytail: a thread that never finishes holds its slot until restart;
-/// past [`MAX_STUCK_THREADS`] of those, extraction is refused. Real
-/// reclamation needs a subprocess per extraction.
-struct StuckThreads(Mutex<Vec<JoinHandle<()>>>);
-
-static STUCK: StuckThreads = StuckThreads(Mutex::new(Vec::new()));
-
-impl StuckThreads {
-    /// Joins the ones that have finished; returns how many still run.
-    fn reap(&self) -> usize {
-        let mut threads = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let (finished, running): (Vec<_>, Vec<_>) =
-            threads.drain(..).partition(|t| t.is_finished());
-        for thread in finished {
-            let _ = thread.join();
-        }
-        *threads = running;
-        threads.len()
-    }
-
-    fn add(&self, thread: JoinHandle<()>) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(thread);
-    }
-}
-
-/// Runs extraction on a worker thread so a hang can be treated as a
-/// timeout, and contains panics so one bad file never kills the engine
-/// (see SPEC.md §7 M2 "Extraction isolation").
-fn extract_with_isolation(job: ExtractJob) -> Result<Extracted> {
-    let path = job.path.clone();
-    run_isolated(&STUCK, EXTRACTION_TIMEOUT, path, move || {
-        extract_for_kind(&job)
-    })
-}
-
-fn run_isolated<T: Send + 'static>(
-    stuck: &StuckThreads,
-    timeout: Duration,
-    path: PathBuf,
-    work: impl FnOnce() -> Result<T> + Send + 'static,
-) -> Result<T> {
-    let stuck_now = stuck.reap();
-    if stuck_now >= MAX_STUCK_THREADS {
-        return Err(Error::ExtractionBacklog {
-            path,
-            stuck: stuck_now,
-        });
-    }
-
-    let (tx, rx) = mpsc::channel();
-    let thread = std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(AssertUnwindSafe(work));
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(result) => {
-            let _ = thread.join();
-            match result {
-                Ok(work_result) => work_result,
-                Err(panic_payload) => Err(Error::ExtractionPanicked {
-                    path,
-                    message: panic_message(&panic_payload),
-                }),
-            }
-        }
-        Err(_timed_out) => {
-            stuck.add(thread);
-            Err(Error::ExtractionTimeout {
-                path,
-                seconds: timeout.as_secs(),
-            })
-        }
-    }
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".to_string()
     }
 }
 
@@ -556,9 +373,7 @@ mod tests {
             follow_symlinks: false,
             max_file_size_mb: 1,
             max_image_megapixels: 64,
-            file_types: ["text", "code", "pdf", "office", "image"]
-                .map(String::from)
-                .to_vec(),
+            file_types: vec![Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image],
         }
     }
 
@@ -986,7 +801,7 @@ mod tests {
         fs::write(root_path.join("a.txt"), "zebrafish").unwrap();
 
         let mut options = default_options();
-        options.file_types.retain(|t| t != "text");
+        options.file_types.retain(|&k| k != Kind::Text);
         let summary = index_root(
             &mut conn,
             root_id,
@@ -1058,40 +873,5 @@ mod tests {
             crate::db::meta::get(&conn, "text_model_id").unwrap(),
             Some(OtherFakeEmbedder.model_id().to_string())
         );
-    }
-
-    #[test]
-    fn timed_out_thread_is_reaped_once_it_finishes_and_new_work_is_refused_while_they_pile_up() {
-        let stuck = StuckThreads(Mutex::new(Vec::new()));
-        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let path = PathBuf::from("hang.bin");
-        let hang = |release: Arc<std::sync::atomic::AtomicBool>| {
-            move || -> Result<()> {
-                while !release.load(std::sync::atomic::Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Ok(())
-            }
-        };
-
-        for _ in 0..MAX_STUCK_THREADS {
-            let err = run_isolated(
-                &stuck,
-                Duration::from_millis(20),
-                path.clone(),
-                hang(release.clone()),
-            )
-            .unwrap_err();
-            assert!(matches!(err, Error::ExtractionTimeout { .. }), "{err:?}");
-        }
-        let err =
-            run_isolated(&stuck, Duration::from_secs(5), path.clone(), || Ok(())).unwrap_err();
-        assert!(matches!(err, Error::ExtractionBacklog { .. }), "{err:?}");
-
-        release.store(true, std::sync::atomic::Ordering::Relaxed);
-        while stuck.reap() > 0 {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        run_isolated(&stuck, Duration::from_secs(5), path, || Ok(())).unwrap();
     }
 }

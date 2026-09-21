@@ -173,7 +173,9 @@ not its default `download-binaries`, which would fetch a third-party CDN
 mirror at build time — see ADR-0001) from `vendor/onnxruntime/<target>/lib/`,
 vendored and SHA-256-verified by `cargo xtask fetch-onnxruntime` the same
 way `xtask fetch-pdfium` vendors PDFium. `MAGI_ONNXRUNTIME_PATH` overrides
-the resolved path, mirroring `MAGI_PDFIUM_PATH`.
+the resolved path, mirroring `MAGI_PDFIUM_PATH`. Loading it and building a
+session (CPU, arena off) live in `crate::onnx`, shared by the text embedder,
+the SigLIP towers and OCR.
 
 Verified end to end on the developer machine (Windows x86_64): real
 `model.onnx`/`tokenizer.json` (downloaded from Hugging Face) plus the real
@@ -217,7 +219,9 @@ and derives everything from that buffer, in this order: QR/barcode payloads
 (`ImageEmbedder::embed_image`, from the full-resolution decode), then the
 full buffer is dropped, a 2048 px copy goes to OCR, and a 256 px copy becomes
 the thumbnail. A failed embedding or OCR-less run costs the file that signal,
-never its index entry.
+never its index entry. Everything comes back in one `extract::ExtractedDoc`
+(chunks, language, `thumbnail`, `image_embedding`), the same type every
+extractor returns; the PDF path fills only its `thumbnail`.
 
 **OCR** is `ocr::OcrEngine`: `paddle::PaddleOcr` (PaddleOCR PP-OCRv5 mobile
 detection + Latin recognition over `ort`, ADR-0006) or `NoOcr` when its
@@ -243,9 +247,12 @@ Gemma-tokenized with EOS, padded to 64.
 uses `NoOcr` and no image embedder. After a run `meta.image_model_id` records
 the image model, like `meta.text_model_id`. `files.content_hash` (blake3, every
 file whose bytes are read) and `files.thumb_key` are filled by the pipeline.
+`indexing.file_types` deserializes straight into `discovery::Kind`, so an
+unknown name fails config loading with serde's list of valid ones. Extraction
+runs under `index::isolate::run` (timeout, panic containment, stuck-thread cap).
 
 **Thumbnails** are 256 px JPEGs at `<cache_dir>/thumbs/<first two hex>/<key>.jpg`
-(`thumbs::thumb_path`), keyed by content hash, for images and PDF first pages.
+(`thumbs::store`), keyed by content hash, for images and PDF first pages.
 The desktop app enables Tauri's asset protocol with an empty static scope and
 grants exactly `thumbs::thumbs_dir()` at startup, so the webview can read
 thumbnails and nothing else. It is granted at runtime because the cache lives

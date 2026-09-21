@@ -33,7 +33,11 @@ impl Extractor for TextExtractor {
             .into_iter()
             .map(RawChunk::body)
             .collect();
-        Ok(ExtractedDoc { chunks, lang })
+        Ok(ExtractedDoc {
+            chunks,
+            lang,
+            ..Default::default()
+        })
     }
 }
 

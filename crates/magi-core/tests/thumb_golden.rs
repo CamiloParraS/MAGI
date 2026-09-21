@@ -53,6 +53,7 @@ fn thumbnail_of(name: &str) -> RgbImage {
     extract_image(&path, &bytes, 64, &NoOcr, None)
         .unwrap_or_else(|e| panic!("{name}: {e}"))
         .thumbnail
+        .expect("an image always yields a thumbnail")
 }
 
 fn mean_abs_diff(a: &RgbImage, b: &RgbImage) -> f64 {

@@ -11,6 +11,7 @@ pub mod error;
 pub mod extract;
 pub mod index;
 pub mod ocr;
+mod onnx;
 pub mod paths;
 pub mod platform;
 pub mod qr;

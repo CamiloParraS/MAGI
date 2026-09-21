@@ -1,12 +1,9 @@
 //! `multilingual-e5-small` text embedder (`ort` + `tokenizers`). Implemented
 //! in M3 (see SPEC.md §7 M3).
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
-use ort::ep;
 use ort::session::Session;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 use tokenizers::Tokenizer;
 
@@ -36,65 +33,6 @@ pub struct E5Embedder {
     tokenizer: &'static Tokenizer,
 }
 
-/// Resolves the vendored ONNX Runtime shared library: `MAGI_ONNXRUNTIME_PATH`
-/// first (an explicit override), then the dev-time `vendor/onnxruntime/<target>/`
-/// layout that `xtask fetch-onnxruntime` populates — mirrors
-/// `extract::pdf::resolve_library_path`.
-fn onnxruntime_library_path() -> PathBuf {
-    if let Ok(path) = std::env::var("MAGI_ONNXRUNTIME_PATH") {
-        return PathBuf::from(path);
-    }
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .unwrap_or(manifest_dir);
-    workspace_root
-        .join("vendor/onnxruntime")
-        .join(crate::platform::onnxruntime_vendor_dir())
-        .join("lib")
-        .join(crate::platform::onnxruntime_library_filename())
-}
-
-/// Dynamically loads the vendored ONNX Runtime. Process-wide and idempotent
-/// (`ort::init_from` no-ops after the first successful call), so every
-/// model that needs a session calls this first.
-pub(crate) fn init_onnxruntime() -> Result<()> {
-    let ort_lib = onnxruntime_library_path();
-    ort::init_from(&ort_lib)
-        .map_err(|e| {
-            Error::Model(format!(
-                "loading ONNX Runtime from {} (set MAGI_ONNXRUNTIME_PATH or run `cargo xtask fetch-onnxruntime`): {e}",
-                ort_lib.display()
-            ))
-        })?
-        .commit();
-    Ok(())
-}
-
-/// Builds a CPU session with the settings every model here shares: light
-/// graph optimization, `threads` intra-op threads, and the CPU memory arena
-/// off, so the pool is not sized for the largest input ever seen and kept
-/// for the life of the process (ADR-0005 measured ~66 MB from it).
-pub(crate) fn build_session(path: &std::path::Path, threads: usize) -> Result<Session> {
-    let model = |what: &str, e: &dyn std::fmt::Display| Error::Model(format!("{what}: {e}"));
-    Session::builder()
-        .map_err(|e| model("creating session builder", &e))?
-        .with_optimization_level(GraphOptimizationLevel::Level1)
-        .map_err(|e| model("setting optimization level", &e))?
-        .with_intra_threads(threads)
-        .map_err(|e| model("setting intra-op thread count", &e))?
-        .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
-        .map_err(|e| model("disabling the CPU memory arena", &e))?
-        .commit_from_file(path)
-        .map_err(|e| {
-            Error::Model(format!(
-                "loading model {} (run `just models` first): {e}",
-                path.display()
-            ))
-        })
-}
-
 impl E5Embedder {
     /// Loads the model + tokenizer from `embed::manager::model_dir("text")`
     /// (populated by `ensure_model_file`/`import_offline_model_file`).
@@ -102,7 +40,7 @@ impl E5Embedder {
     /// idempotent (`ort::init_from` no-ops after the first successful
     /// call), so constructing more than one `E5Embedder` is safe.
     pub fn load() -> Result<Self> {
-        init_onnxruntime()?;
+        crate::onnx::init()?;
 
         let dir = crate::embed::manager::model_dir("text");
         let model_path = dir.join("model.onnx");
@@ -117,32 +55,10 @@ impl E5Embedder {
             ))
         })?;
 
-        let session = Session::builder()
-            .map_err(|e| Error::Model(format!("creating session builder: {e}")))?
-            .with_optimization_level(GraphOptimizationLevel::Level1)
-            .map_err(|e| Error::Model(format!("setting optimization level: {e}")))?
-            // The embed worker is architecturally single-threaded (SPEC.md
-            // §5.3: one dedicated embed thread), so there's no batch-level
-            // parallelism to exploit; no reason to let `ort` default to one
-            // intra-op thread per logical core.
-            .with_intra_threads(1)
-            .map_err(|e| Error::Model(format!("setting intra-op thread count: {e}")))?
-            // The CPU arena allocator grows a pool sized for the *largest*
-            // batch seen and never shrinks it back — ADR-0005 measured
-            // ~66 MB of peak RSS attributable to it. Only `.with_memory_pattern`
-            // was tested there (a related but distinct setting); disabling the
-            // arena itself trades a small per-inference allocation cost (the
-            // embed worker isn't latency-sensitive at that scale) for not
-            // holding onto that pool for the process's lifetime.
-            .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
-            .map_err(|e| Error::Model(format!("disabling the CPU memory arena: {e}")))?
-            .commit_from_file(&model_path)
-            .map_err(|e| {
-                Error::Model(format!(
-                    "loading model {} (run `just models` first): {e}",
-                    model_path.display()
-                ))
-            })?;
+        // The embed worker is architecturally single-threaded (SPEC.md §5.3:
+        // one dedicated embed thread), so there's no batch-level parallelism
+        // for more intra-op threads to exploit.
+        let session = crate::onnx::session(&model_path, 1)?;
 
         Ok(Self {
             session: Mutex::new(session),

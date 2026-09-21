@@ -13,7 +13,6 @@ use ort::session::Session;
 use ort::value::TensorRef;
 use tokenizers::Tokenizer;
 
-use super::e5::{build_session, init_onnxruntime};
 use super::manager::{ModelSlot, model_dir};
 use super::{IMAGE_EMBEDDING_DIM, ImageEmbedder, l2_normalize};
 use crate::error::{Error, Result};
@@ -55,13 +54,13 @@ impl SigLipEmbedder {
 }
 
 fn load_vision() -> Result<Mutex<Session>> {
-    init_onnxruntime()?;
+    crate::onnx::init()?;
     let path = model_dir("image").join("vision_model.onnx");
-    Ok(Mutex::new(build_session(&path, 2)?))
+    Ok(Mutex::new(crate::onnx::session(&path, 2)?))
 }
 
 fn load_text() -> Result<TextTower> {
-    init_onnxruntime()?;
+    crate::onnx::init()?;
     let dir = model_dir("image");
     let tokenizer_path = dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
@@ -71,7 +70,7 @@ fn load_text() -> Result<TextTower> {
         ))
     })?;
     Ok(TextTower {
-        session: Mutex::new(build_session(&dir.join("text_model.onnx"), 1)?),
+        session: Mutex::new(crate::onnx::session(&dir.join("text_model.onnx"), 1)?),
         tokenizer,
     })
 }

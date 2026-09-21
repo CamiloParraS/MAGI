@@ -1422,6 +1422,55 @@ Also true at sign-off: `cargo fmt` and `cargo clippy --workspace --all-targets
 --all-features -D warnings` clean; 175 unit tests plus the golden, idempotence,
 image-index and thumbnail tests pass.
 
+### Code-quality review before sign-off (2026-09-21)
+
+A strict structural review of the branch diff (`main...feat/image-search`, 36 Rust
+files). Behaviour is unchanged apart from the panic-message bug below. Net
+-300 lines.
+
+- **`index/pipeline.rs` had grown from 730 to 1,097 lines.** Extraction isolation
+  (timeout, panic containment, stuck-thread cap) moved to `index/isolate.rs`
+  along with its test. The file is now 877 lines.
+- **Three structs carried the same data.** `ImageArtifacts`, the pipeline's
+  private `Extracted`, and half of `FileOutcome` all held
+  chunks/lang/thumbnail/image embedding. `ExtractedDoc` now carries
+  `thumbnail` and `image_embedding` itself, so the other two are gone and
+  `FileOutcome` holds a `doc`. The nine extraction goldens were re-blessed: the
+  only change is two `None` lines each.
+- **`Dispatch` was a copy of `Kind`.** Once images had an extractor, the enum
+  matched `Kind` one to one. It is deleted, and extraction matches `Kind` directly.
+- **`indexing.file_types` was `Vec<String>`,** checked by hand against
+  `ALL_KINDS` and matched with string comparisons. It is now `Vec<Kind>`, so serde
+  rejects an unknown name at load time and lists the valid ones.
+  `ALL_KINDS`, `Error::UnknownFileType` and the validation loop are deleted. The
+  TOML format is unchanged.
+- **Shared ONNX Runtime setup lived in `embed::e5`.** OCR imported from the text
+  embedder, and `E5Embedder::load` still had its own inline copy of
+  `build_session`. It is now `crate::onnx::{init, session}`, used by e5, SigLIP
+  and PaddleOCR.
+- **Thumbnail storage** (content-hash key, skip if already cached, write) moved from
+  the pipeline to `thumbs::store`.
+- **The embedding-failure fallback** was an inline branch in the per-file loop. It
+  is now the `embed_chunks` helper.
+- **Bug, also on `main`:** a contained extraction panic was always recorded as
+  "unknown panic". `panic_message(&payload)` downcast the `Box` rather than its
+  contents. Fixed with `&*payload`, and a new `isolate` test covers it.
+- **`discovery/classify.rs` held raw NUL bytes** in a test's TIFF literal, so git
+  treated it as a binary file and showed no diffs for it. The bytes are now written
+  as ` ` escapes.
+- **`OcrEngine::engine_id`'s doc claimed a `meta.ocr_engine_id` key.** Nothing
+  writes that key, and SPEC.md §5.5 doesn't list it. The doc is corrected; see
+  "For M5".
+
+Considered and left alone: `rank_and_boost` takes three positional hit lists.
+That works, but a fourth source should become a list of `(source, hits, weight)`.
+`IndexContext::image_embedder` is an `Option`, while OCR uses the `NoOcr` null
+object. The two are inconsistent but both are clear.
+
+After the review: `just check` is green (fmt, clippy `-D warnings`, 175 unit tests
+plus the golden, idempotence, image-index, HEIC-budget and thumbnail tests, and the
+frontend checks).
+
 ### Deliverables
 
 - Image decoding with limits and orientation (one decode point): done.
@@ -1473,4 +1522,8 @@ image-index and thumbnail tests pass.
 Not part of M4, but M5 inherits these from it: the `meta.image_model_id` and
 `meta.text_model_id` re-embed trigger (deliverable in M5), thumbnail garbage
 collection (deleted files' thumbnails stay on disk), and the OCR engine and
-SigLIP embedder not yet being owned by `Engine`.
+SigLIP embedder not yet being owned by `Engine`. An OCR engine change does not
+re-queue images: that needs an `ocr_engine_id` `meta` key, which SPEC.md §5.5
+does not yet list. Ask the owner before M5's re-embed trigger is built. Also,
+`PaddleOcr::load` is eager. Unlike SigLIP, it is not a lazy `ModelSlot`, so it
+does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.

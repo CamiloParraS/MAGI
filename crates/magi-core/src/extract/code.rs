@@ -55,7 +55,11 @@ impl Extractor for CodeExtractor {
             })
             .collect();
         let lang = super::lang::detect_lang(&source);
-        Ok(ExtractedDoc { chunks, lang })
+        Ok(ExtractedDoc {
+            chunks,
+            lang,
+            ..Default::default()
+        })
     }
 }
 

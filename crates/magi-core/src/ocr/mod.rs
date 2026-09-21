@@ -12,8 +12,9 @@ pub mod paddle;
 /// Implementations are shared across indexing threads, so they must be
 /// `Sync`; the model itself lives behind whatever locking the engine needs.
 pub trait OcrEngine: Send + Sync {
-    /// Stored in `meta.ocr_engine_id`. A change re-queues image files in M5,
-    /// the same way a changed embedding model does.
+    /// Identifies the engine and its models. Not persisted yet: SPEC.md
+    /// §5.5's `meta` keys cover only the embedders, so an OCR change does not
+    /// re-queue images until that contract grows an `ocr_engine_id`.
     fn engine_id(&self) -> &str;
 
     /// Recognized text, one line per detected line, in reading order. An

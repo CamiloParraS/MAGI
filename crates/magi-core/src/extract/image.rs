@@ -104,20 +104,9 @@ pub fn decode_bounded(path: &Path, bytes: &[u8], max_megapixels: u32) -> Result<
 /// dropped too. Lower this if that matters more than the crowding.
 const MIN_OCR_ALNUM: usize = 6;
 
-/// Everything derived from one image, with the full-resolution buffer
-/// already dropped (SPEC.md §5.3).
-pub struct ImageArtifacts {
-    /// `ocr` and `qr` chunks, plus the language detected from the OCR text.
-    pub doc: ExtractedDoc,
-    /// Already downscaled to [`crate::thumbs::THUMB_LONG_SIDE`].
-    pub thumbnail: image::RgbImage,
-    /// The visual embedding, or `None` without an embedder or when embedding
-    /// failed (the image is still searchable by its text and filename).
-    pub image_embedding: Option<Vec<f32>>,
-}
-
 /// Decodes `bytes` once and derives everything from that single buffer:
-/// barcode payloads, the visual embedding, recognized text, and the thumbnail.
+/// barcode payloads, the visual embedding, recognized text, and the thumbnail
+/// (always `Some`). The full-resolution buffer never escapes (SPEC.md §5.3).
 ///
 /// The full-resolution image is dropped before OCR runs. Barcode
 /// detection and the embedding run on it first ([`crate::qr::decode_barcodes`]
@@ -129,7 +118,7 @@ pub fn extract_image(
     max_megapixels: u32,
     ocr: &dyn OcrEngine,
     embedder: Option<&dyn ImageEmbedder>,
-) -> Result<ImageArtifacts> {
+) -> Result<ExtractedDoc> {
     let full = decode_bounded(path, bytes, max_megapixels)?;
 
     let mut chunks = Vec::new();
@@ -181,12 +170,10 @@ pub fn extract_image(
         });
     }
 
-    Ok(ImageArtifacts {
-        doc: ExtractedDoc {
-            chunks,
-            lang: lang::detect_lang(trimmed),
-        },
-        thumbnail,
+    Ok(ExtractedDoc {
+        chunks,
+        lang: lang::detect_lang(trimmed),
+        thumbnail: Some(thumbnail),
         image_embedding,
     })
 }
@@ -280,7 +267,6 @@ mod tests {
         let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr, None).unwrap();
 
         let qr: Vec<&str> = artifacts
-            .doc
             .chunks
             .iter()
             .filter(|c| c.source == ChunkSource::Qr)
@@ -296,9 +282,9 @@ mod tests {
         assert_eq!(
             artifacts
                 .thumbnail
-                .width()
-                .max(artifacts.thumbnail.height()),
-            crate::thumbs::THUMB_LONG_SIDE
+                .as_ref()
+                .map(|t| t.width().max(t.height())),
+            Some(crate::thumbs::THUMB_LONG_SIDE)
         );
     }
 
@@ -306,9 +292,9 @@ mod tests {
     fn without_an_ocr_engine_an_image_still_yields_its_thumbnail() {
         let (path, bytes) = corpus("images/mountain_sunset.jpg");
         let artifacts = extract_image(&path, &bytes, 64, &crate::ocr::NoOcr, None).unwrap();
-        assert!(artifacts.doc.chunks.is_empty());
-        assert!(artifacts.doc.lang.is_none());
-        assert_eq!(artifacts.thumbnail.height(), 171); // 1920x1280 -> 256x171
+        assert!(artifacts.chunks.is_empty());
+        assert!(artifacts.lang.is_none());
+        assert_eq!(artifacts.thumbnail.map(|t| t.height()), Some(171)); // 1920x1280 -> 256x171
     }
 
     #[test]
@@ -326,7 +312,6 @@ mod tests {
         let ocr_chunks = |text: &'static str| {
             extract_image(&path, &bytes, 64, &FixedOcr(text), None)
                 .unwrap()
-                .doc
                 .chunks
                 .iter()
                 .filter(|c| c.source == ChunkSource::Ocr)
@@ -375,19 +360,13 @@ mod tests {
         }
         let (path, bytes) = corpus("images/phone_qr.heic");
         let artifacts = extract_image(&path, &bytes, 64, &FailingOcr, None).unwrap();
-        assert!(
-            artifacts
-                .doc
-                .chunks
-                .iter()
-                .any(|c| c.source == ChunkSource::Qr)
-        );
+        assert!(artifacts.chunks.iter().any(|c| c.source == ChunkSource::Qr));
         assert_eq!(
             artifacts
                 .thumbnail
-                .width()
-                .max(artifacts.thumbnail.height()),
-            256
+                .as_ref()
+                .map(|t| t.width().max(t.height())),
+            Some(256)
         );
     }
 }

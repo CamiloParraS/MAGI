@@ -11,7 +11,6 @@ use ort::session::Session;
 use ort::value::TensorRef;
 
 use super::OcrEngine;
-use crate::embed::e5::{build_session, init_onnxruntime};
 use crate::error::{Error, Result};
 
 const ENGINE_ID: &str = "paddle-ppocrv5-latin";
@@ -38,7 +37,7 @@ impl PaddleOcr {
     /// Loads `det.onnx`, `rec.onnx` and `rec.yml` from
     /// `embed::manager::model_dir("ocr")`.
     pub fn load() -> Result<Self> {
-        init_onnxruntime()?;
+        crate::onnx::init()?;
         let dir = crate::embed::manager::model_dir("ocr");
         let yml_path = dir.join("rec.yml");
         let yml = std::fs::read_to_string(&yml_path).map_err(|source| Error::Io {
@@ -49,8 +48,8 @@ impl PaddleOcr {
         classes.extend(parse_dict(&yml));
         classes.push(" ".to_string());
         Ok(Self {
-            det: Mutex::new(build_session(&dir.join("det.onnx"), 2)?),
-            rec: Mutex::new(build_session(&dir.join("rec.onnx"), 2)?),
+            det: Mutex::new(crate::onnx::session(&dir.join("det.onnx"), 2)?),
+            rec: Mutex::new(crate::onnx::session(&dir.join("rec.onnx"), 2)?),
             classes,
         })
     }

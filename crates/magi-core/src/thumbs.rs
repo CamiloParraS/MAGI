@@ -37,6 +37,17 @@ pub fn thumb_path(key: &str) -> PathBuf {
     thumbs_dir().join(shard).join(format!("{key}.jpg"))
 }
 
+/// Caches `image` as the thumbnail for `content_hash` and returns its key.
+/// Content-keyed, so an unchanged or duplicate file is not rewritten.
+pub fn store(content_hash: &[u8; 32], image: &image::RgbImage) -> Result<String> {
+    let key = thumb_key(content_hash);
+    let path = thumb_path(&key);
+    if !path.exists() {
+        write_thumbnail(&path, image)?;
+    }
+    Ok(key)
+}
+
 /// Writes a JPEG, creating the parent directory. The caller passes an image
 /// already at [`THUMB_LONG_SIDE`] (`extract_image` and the PDF renderer both
 /// do); it is stored as-is. Written to a temp name then renamed, so a crash

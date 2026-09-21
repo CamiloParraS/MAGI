@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::discovery::Kind;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,7 +22,9 @@ pub struct IndexingConfig {
     pub include_hidden: bool,
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
-    pub file_types: Vec<String>,
+    /// Kinds that get content extraction; others are indexed by filename
+    /// only. An unknown name fails deserialization, listing the valid ones.
+    pub file_types: Vec<Kind>,
     pub pause_on_battery: bool,
     pub worker_threads: u32,
     pub max_image_megapixels: u32,
@@ -46,13 +49,7 @@ impl Default for IndexingConfig {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size_mb: 50,
-            file_types: vec![
-                "text".into(),
-                "code".into(),
-                "pdf".into(),
-                "office".into(),
-                "image".into(),
-            ],
+            file_types: vec![Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image],
             pause_on_battery: true,
             worker_threads: 0,
             max_image_megapixels: 64,
@@ -118,33 +115,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Rejects bad exclude globs, unknown `file_types` names, and roots
-    /// that don't exist on disk.
+    /// Rejects bad exclude globs and roots that don't exist on disk.
     pub fn validate(&self) -> Result<()> {
         for glob in &self.indexing.exclude_globs {
             glob::Pattern::new(glob).map_err(|e| Error::InvalidGlob {
                 glob: glob.clone(),
                 reason: e.to_string(),
             })?;
-        }
-        // A typo here would silently stop indexing that kind's content
-        // (`index::pipeline::process_entry` matches on these names), so it
-        // is rejected at load time rather than diagnosed later as
-        // "search stopped finding my PDFs".
-        for name in &self.indexing.file_types {
-            if !crate::discovery::ALL_KINDS
-                .iter()
-                .any(|k| k.as_str() == name)
-            {
-                return Err(Error::UnknownFileType {
-                    name: name.clone(),
-                    expected: crate::discovery::ALL_KINDS
-                        .iter()
-                        .map(|k| k.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                });
-            }
         }
         for root in &self.roots {
             if !root.path.exists() {
@@ -241,18 +218,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_file_type_is_rejected() {
-        let mut config = Config::default();
-        config.indexing.file_types.push("pdfs".into());
-        assert!(matches!(
-            config.validate(),
-            Err(Error::UnknownFileType { .. })
-        ));
-    }
-
-    #[test]
-    fn every_default_file_type_is_a_real_kind() {
-        assert!(Config::default().validate().is_ok());
+    fn unknown_file_type_is_rejected_at_load() {
+        // A typo would otherwise silently stop indexing that kind's content.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[indexing]
+file_types = [\"text\", \"pdfs\"]
+",
+        )
+        .unwrap();
+        assert!(matches!(load_from(&path), Err(Error::ConfigParse(_))));
     }
 
     #[test]

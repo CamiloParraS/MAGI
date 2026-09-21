@@ -116,12 +116,6 @@ fn hash_text(text: &str, dim: usize) -> Vec<f32> {
     v
 }
 
-impl FakeEmbedder {
-    fn hash_text(text: &str) -> Vec<f32> {
-        hash_text(text, TEXT_EMBEDDING_DIM)
-    }
-}
-
 /// Deterministic image embedder for tests: a 4x4 grid of coarse colours
 /// hashed into the vector, so identical images match and different ones
 /// don't. Queries are hashed text, so a query is *not* close to any image;
@@ -170,11 +164,14 @@ impl TextEmbedder for FakeEmbedder {
     }
 
     fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|t| Self::hash_text(t)).collect())
+        Ok(texts
+            .iter()
+            .map(|t| hash_text(t, TEXT_EMBEDDING_DIM))
+            .collect())
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        Ok(Self::hash_text(text))
+        Ok(hash_text(text, TEXT_EMBEDDING_DIM))
     }
 }
 
