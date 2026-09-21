@@ -1523,7 +1523,7 @@ Not part of M4, but M5 inherits these from it: the `meta.image_model_id` and
 `meta.text_model_id` re-embed trigger (deliverable in M5), thumbnail garbage
 collection (deleted files' thumbnails stay on disk), and the OCR engine and
 SigLIP embedder not yet being owned by `Engine`. An OCR engine change does not
-re-queue images: that needs an `ocr_engine_id` `meta` key, which SPEC.md §5.5
-does not yet list. Ask the owner before M5's re-embed trigger is built. Also,
+re-queue images: that needs an `ocr_engine_id` `meta` key. The owner approved
+adding it on 2026-09-21; SPEC.md §5.5 and M5's re-embed trigger now list it. Also,
 `PaddleOcr::load` is eager. Unlike SigLIP, it is not a lazy `ModelSlot`, so it
 does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.

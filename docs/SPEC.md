@@ -565,7 +565,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- keys: pipeline_version, text_model_id, image_model_id, last_scan_id
+-- keys: pipeline_version, text_model_id, image_model_id, ocr_engine_id, last_scan_id
 
 CREATE TABLE roots (
   id                INTEGER PRIMARY KEY,
@@ -889,7 +889,9 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - Re-embed trigger on model change: a stored `meta.text_model_id` /
   `meta.image_model_id` that differs from the running embedder's marks the
   affected files `pending` so hash-skip does not preserve vectors from the
-  old model. M3 delivers the `meta` tracking and logs a warning on a
+  old model. Likewise a stored `meta.ocr_engine_id` that differs from the
+  running `OcrEngine::engine_id()` marks image files `pending`, so their
+  `ocr` chunks are re-read by the new engine (M5 starts writing this key). M3 delivers the `meta` tracking and logs a warning on a
   mismatch; the trigger belongs here because M5's hash-skip is what makes a
   stale vector survive a re-index (before it, every index run re-embeds
   everything, so the mismatch is latent). See SPEC.md §7 M3's deliverable.
