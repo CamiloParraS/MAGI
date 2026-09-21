@@ -74,7 +74,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
             let path = entry.path();
             if opaque_roots
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .iter()
                 .any(|r| path != r && path.starts_with(r))
             {
@@ -84,7 +84,10 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
                 return false;
             }
             if entry.file_type().is_some_and(|t| t.is_dir()) && is_opaque_bundle(path) {
-                opaque_roots.lock().unwrap().push(path.to_path_buf());
+                opaque_roots
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(path.to_path_buf());
             }
             true
         })

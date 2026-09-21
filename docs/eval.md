@@ -291,6 +291,233 @@ The 15 MB file took ~1360 s wall on the reference machine (int8,
 `with_intra_threads(1)`, one dedicated embed thread per SPEC.md §5.3), i.e.
 ~4 chunks/s. That throughput is the next thing to look at, not memory.
 
+## M4: image queries and the visual list (SigLIP 2, ADR-0007)
+
+**Method:** `magi-cli eval eval/queries.jsonl --corpus fixtures/corpus`, all
+real models (int8 e5, PaddleOCR, SigLIP 2 q4f16), fresh temp DB, release
+build. The set is now 99 queries: the earlier 70 plus 29 in a new `img`
+bucket. `fixtures/corpus` indexed 60 files, with 3 skips and 3 errors. The three
+errors are the intentionally broken fixtures (`edge/truncated.jpg`,
+`edge/truncated.pdf`, `edge/password_protected.pdf`). The skips are the 20 MP
+`.ppm` (over the file-size limit), `edge/bomb.png` (400 MP declared) and
+`images/city_landscape.jpg` (75 MP), the last two as `image_too_large`. A Sony
+`.arw` RAW in the folder is indexed by filename only: an earlier run of this
+eval reported it as an error, because the classifier sniffed its TIFF container
+and the TIFF decoder failed (fixed alongside; see docs/progress.md). **The
+corpus includes the gitignored local-only fixtures** (`fixtures/README.md`), so
+a fresh clone indexes fewer files and its numbers differ slightly. A new
+`visual` mode runs `vec_image` alone.
+
+The `img` bucket: 22 visual queries (dogs, cat, car, mountains at sunrise and
+sunset, Christmas shelf, anime screenshot, anime figurine; English and Spanish, including the
+SPEC.md M4 pair `dog on the beach` / `perro en la playa`), 3 OCR-text queries
+(one with accents), and 4 QR queries (including SPEC.md's `qr code` /
+`código QR`, where any of the four QR fixtures is a correct hit).
+
+| Mode | n | recall@5 | recall@10 | MRR |
+| --- | -: | -: | -: | -: |
+| fts-only | 99 | 0.434 | 0.434 | 0.434 |
+| vector-only (text) | 99 | 0.970 | 0.990 | 0.804 |
+| visual-only | 99 | 0.263 | 0.263 | 0.263 |
+| **hybrid** | 99 | **0.980** | **0.990** | **0.843** |
+
+Hybrid by bucket:
+
+| bucket | n | recall@5 | MRR |
+| --- | -: | -: | -: |
+| en | 20 | 1.000 | 0.975 |
+| es | 20 | 1.000 | 0.925 |
+| cross | 20 | 0.900 | 0.399 |
+| kw | 10 | 1.000 | 0.950 |
+| **img** | 29 | **1.000** | **0.966** |
+
+On the `img` bucket alone: fts-only 0.310, visual-only 0.897 (0.963 on the
+earlier 27-query set before the cosine floor below), text-vector-only 0.966,
+hybrid 1.000. Every image query
+lands in the top 5, including SPEC.md's four required ones: `qr code` /
+`código QR` return a QR fixture and `dog on the beach` / `perro en la playa`
+return a dog photo, all inside the top 3. The visual list earns its place:
+without it the text-only modes miss images whose only signal is what they
+look like.
+
+**A finding worth keeping: the visual list needs a similarity floor.** The
+first hybrid run scored 0.000 on `cross` and 0.55 / 0.70 on `en` / `es`, the
+same as keyword-only. A KNN always returns its nearest rows, so every text
+query (`car maintenance oil change`) got the whole photo library as visual
+hits, and each image, present in both the text-vector and visual lists,
+outscored the real document, which sat in one. The fix is a cosine floor on
+the visual list, `IMAGE_MIN_COSINE = 0.10`, chosen from measurement: over the
+70 text queries the best cosine against any fixture image never exceeded
+0.117, while genuine visual matches have a median of 0.139 and the weakest
+non-OCR one is ~0.105 (SigLIP's own sigmoid probability is too conservative to
+gate on: median 0.25 for true matches). The floor costs the three OCR-text
+queries their visual match (visual-only 0.963 -> 0.889), which the OCR chunks
+already answer. The threshold belongs to the model: recalibrate it with any
+image-model change, and it is only as good as this small fixture set (15
+images), so a real photo library needs re-measuring.
+
+`es` MRR is 0.925 against 1.000 before the visual list existed: a leaked
+image occasionally takes rank 2 ahead of the expected document. Recall@5 is
+unaffected.
+
+Hybrid `cross` recall@5 went from 0.950 (97 queries, 57 files) to 0.900 (99
+queries, 60 files): one query dropped out of the top 5 when the corpus grew by
+three images. Text-vector-only search dropped by exactly the same amount over
+the same change, so this is added distractors, not the visual list. It is one
+query of twenty; treat it as noise until the corpus is larger.
+
+**Peak RSS, the whole fixture corpus with all models loaded (NFR-11):
+1328 MB** (limit 1.5 GB; 1340 MB on the earlier 57-file run). One process
+polled at 50 ms through indexing 60 files (e5 + PaddleOCR + SigLIP vision,
+including a real 45 MP JPEG) and all 99 x 4 queries (which loads the SigLIP text
+tower, the last +190 MB step). Wall time 1-2 minutes, and not stable between
+runs.
+
+## M4: the 2026-09-21 photo batch (113 files, 164 queries)
+
+**Method:** as above (`magi-cli eval`, release build, real models, fresh DB),
+now over 113 indexed files, 4 skips and the 3 intentional errors, with 164
+queries. New: 51 owner-supplied stock photos, screenshots and QR/barcode
+images in `fixtures/corpus/local/` (gitignored, so this only runs on a machine
+that has them), and three phone shots of toy cars. New buckets: `img2` (54
+visual queries), `ocr` (7), `qr` (3) and `skip` (1); see `eval/README.md`.
+Every expected answer was written from looking at the image, not its file name
+(`mae-mu-burguer.jpg` is pancakes). **File names leak into the results**: the
+`visual` row, which has no filename and no OCR, is the clean measure of the
+image model; hybrid is what a user sees.
+
+| Mode | n | recall@5 | recall@10 | MRR |
+| --- | -: | -: | -: | -: |
+| fts-only | 164 | 0.299 | 0.299 | 0.295 |
+| vector-only (text) | 164 | 0.866 | 0.933 | 0.710 |
+| visual-only | 164 | 0.494 | 0.494 | 0.486 |
+| **hybrid** | 164 | **0.957** | **0.988** | **0.867** |
+
+Hybrid by bucket:
+
+| bucket | n | recall@5 | MRR | visual-only recall@5 |
+| --- | -: | -: | -: | -: |
+| en | 20 | 1.000 | 0.967 | - |
+| es | 20 | 1.000 | 0.925 | - |
+| kw | 10 | 1.000 | 0.925 | - |
+| cross | 20 | **0.750** | 0.312 | - |
+| img (first batch) | 29 | 1.000 | 0.938 | 0.897 |
+| **img2 (new photos)** | 54 | **0.981** | 0.954 | **0.963** |
+| ocr | 7 | 1.000 | 1.000 | 0.429 |
+| qr | 3 | 0.667 | 0.700 | 0.000 |
+| skip | 1 | 1.000 | 1.000 | 0.000 |
+
+**The image model holds up on a bigger, more confusable set.** 53 of 54 new
+visual queries land in the top 5 through hybrid, and 52 of 54 through the
+visual list alone, with the confusable clusters in play: three burgers and
+pancakes and a hot dog, five trucks and three buses and two trains, a wolf
+beside dog photos, four forests, three rooms, three guitars. The Spanish
+queries (`hamburguesa con queso`, `un camión`, `bosque nevado`, ...) behave
+like the English ones. The one miss is `a Hot Wheels package` (rank > 100, top
+hit a hot dog): SigLIP does not know the brand from a photo, and the printed
+text is reached through OCR instead (`Hot Wheels Nissan Z Proto` finds it).
+The query was kept, not reworded after the fact.
+
+**A regression to look at: `cross` fell from 0.900 to 0.750.** Text-vector-only
+search fell by the same amount, so it is not the visual list. Growing the
+corpus from 60 to 113 files added 100+ chunks to `vec_text` (a filename chunk
+per file plus OCR text), and short ones such as `piotr-szajewski-snowy-forest.jpg`
+or `MON TUE WED THU FRI TWITTER...` sit at ranks 3-4 for unrelated queries,
+pushing the other-language twin from rank <= 5 to 6-10. The five misses are
+`cross` queries whose expected document is the twin of the one that ranks first
+(`team meeting notes` expects the Spanish notes while the English original is
+rank 1), so they are the most rank-sensitive queries in the set; recall@10 is
+unchanged at 0.950. The `en`, `es` and `kw` buckets are unaffected (1.000).
+Not fixed: it is a ranking-design question (weight filename chunks lower? skip
+them when a file has real text?) and the corpus is still small.
+
+**The 0.10 cosine floor is not as clean as it was on 15 images.**
+`team meeting notes` and `doctor appointment reminder` now pull
+`walls-io-whiteboard.jpg` (a weekly schedule on a whiteboard) into the results
+labelled `visual`. That is a defensible match, not a clear false positive, but
+it means "text queries never exceed the floor" no longer holds. The floor was
+not changed.
+
+**Peak RSS, all models loaded, the whole 113-file corpus: 1271-1348 MB across
+two runs** (limit 1.5 GB), including a 50 MP JPEG.
+
+### OCR quality against `fixtures/golden/ocr/fixture_stem.txt`
+
+Character error rate after collapsing whitespace, computed from the indexed
+`ocr` chunks:
+
+| image | CER | note |
+| --- | -: | --- |
+| barcode "Hello World!" | 0.00 | |
+| code screenshot (Rust) | 0.01 | |
+| Wikipedia article screenshot | 0.09 | `¿` `¡` lost in the running text |
+| war-grave headstone | 0.13 | engraved text on stone |
+| handwriting-style Spanish page | 0.29 | `¡Hola!` came back as `iHola!`: the known `¡` gap |
+| Pepsi can, curved label | **0.92** | read only "PERS N" |
+
+### QR and barcodes
+
+- `3_barcodes_ver1_ver2_ver3.png`: all three codes decode, to `Ver1`,
+  `Version 2` and `Version 3 QR Code`. OpenCV, an independent decoder, returns
+  the same three. The owner's note in `fixture_stem.txt` says `ver1/ver2/ver3`,
+  which is shorthand, not the payload.
+- **The grave photo's QR is not decoded.** OpenCV reads it from a cropped,
+  enlarged region (`http://en.qrwp.org/Adrian_Warburton`, a QRpedia link), and
+  so does our decoder on the same 640 x 306 crop, but neither finds it in the
+  full 1600 x 2035 frame. The code is ~100 px in a busy scene. `qr.rs`'s scale
+  ladder only downsizes (1, 1/2, 1/4, 1/8), which helps a large code and hurts a
+  small one. **Fixed afterwards** by native-resolution tiling (docs/progress.md, slice 8); the `qr` numbers in the table above are from before that.
+- The Pepsi can's QR is not decoded by ours or by OpenCV (curved, ~perspective).
+- The 1D barcode `barcode-Hello World!.png` decodes with neither rxing nor
+  OpenCV; only its printed text is found, by OCR.
+- The first version of the `qr` queries used `ver1`, `ver2`, `ver3` and
+  `wikipedia`, all of which are in the file names, and passed for the wrong
+  reason. They were replaced by payload-only words.
+
+## M4: the `cross` regression, its cause and its fix
+
+The 2026-09-21 photo batch cost `cross` recall@5 0.900 -> 0.750 (above). Text-vector-only
+search fell equally, so the cause was in `vec_text`. **Cause: OCR on photos with no
+text.** PaddleOCR emits a stray glyph or two for a photo of a forest or a pizza
+(`.`, `M`, `2`, `000020`, `TUABO`), and each became an `ocr` chunk embedded as
+`passage: .`. A chunk that short sits near almost any short query, so it outranks
+real documents. In the pre-fix index 23 of the 60 OCR chunks had fewer than 6
+letters and digits, e.g. the only OCR chunk of `piotr-szajewski-snowy-forest.jpg`
+was a single full stop, which is why that photo kept turning up as a "semantic"
+hit for `team meeting notes`.
+
+**Fix:** `extract_image` drops OCR output with fewer than 6 letters and digits
+(`MIN_OCR_ALNUM`). Same corpus, same 164 queries, release build:
+
+| | cross r@5 | overall hybrid r@5 | MRR | img / img2 / ocr / qr |
+| --- | -: | -: | -: | --- |
+| before (no filter) | 0.750 | 0.957 | 0.867 | 1.000 / 0.981 / 1.000 / 0.667 |
+| threshold 4 | 0.850 | 0.976 | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+| **threshold 6 (shipped)** | **0.900** | **0.982** | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+
+(`qr` 0.667 -> 1.000 is the separate tiled-QR fix.) `cross` is back at its
+pre-batch 0.900; the two remaining misses are `informe de ingresos trimestrales`
+(rank > 100) and `doctor appointment reminder` (rank 9). Threshold 4 to 6 is one
+query, so treat the choice between them as a judgement, not a measurement: 4-5
+character OCR output in this corpus is all junk but one partial read (`PERS N`
+off a can). The cost is real short text alone in a photo (a sign reading `EXIT`),
+which is no longer indexed; the threshold is a marked constant.
+
+**What did not work, so nobody tries it again.** The first hypothesis was that
+image *file name* chunks were the crowders. Splitting the vector list and
+down-weighting image-filename-best hits (weights 0.5 and 0) left `cross` at
+0.750 and hurt the image buckets: at weight 0 the `img` bucket collapsed
+(`a dog on the beach` fell to rank 9, `perro en la playa` out of the top 100).
+Down-weighting **every** filename-best hit (weight 0) was far worse for text:
+`electrician invoice`, `receta de arepas`, `contrato de alquiler deposito` and
+most of `cross` were lost, because for a text document the file name is often
+the best cross-language bridge (`receta_arepas` <-> "arepas recipe"). The
+filename chunk is doing real work and should stay as the spec says.
+
+**Still true:** `team meeting notes` and `doctor appointment reminder` pull
+`walls-io-whiteboard.jpg` (a weekly schedule) in through the visual list, and the
+0.10 cosine floor was calibrated on 15 images. Not changed.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

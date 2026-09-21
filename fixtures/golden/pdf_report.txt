@@ -31,4 +31,6 @@ ExtractedDoc {
     lang: Some(
         "en",
     ),
+    thumbnail: None,
+    image_embedding: None,
 }

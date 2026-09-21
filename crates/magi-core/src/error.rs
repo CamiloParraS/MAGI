@@ -41,11 +41,23 @@ pub enum Error {
     #[error("extraction of {} timed out after {seconds}s", .path.display())]
     ExtractionTimeout { path: PathBuf, seconds: u64 },
 
+    #[error("extraction of {} refused: {stuck} timed-out extractions are still running", .path.display())]
+    ExtractionBacklog { path: PathBuf, stuck: usize },
+
     #[error("extraction of {} panicked: {message}", .path.display())]
     ExtractionPanicked { path: PathBuf, message: String },
 
     #[error("PDF error: {0}")]
     Pdf(String),
+
+    #[error("image error: {0}")]
+    Image(String),
+
+    #[error("HEIC error: {0}")]
+    Heic(String),
+
+    #[error("image is {megapixels} MP, over the {limit} MP limit")]
+    ImageTooLarge { megapixels: u32, limit: u32 },
 
     #[error("Office document error: {0}")]
     Office(String),

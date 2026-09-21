@@ -8,8 +8,7 @@ use crate::embed::embedding_to_json;
 use crate::error::Result;
 use crate::extract::RawChunk;
 
-/// Everything needed to upsert one file's row. `content_hash` is left for
-/// M5's change-detection work.
+/// Everything needed to upsert one file's row.
 pub struct FileRecord<'a> {
     pub root_id: i64,
     pub path: &'a Path,
@@ -24,6 +23,10 @@ pub struct FileRecord<'a> {
     pub skip_reason: Option<&'a str>,
     pub error: Option<&'a str>,
     pub seen_scan_id: i64,
+    /// blake3 of the file's bytes; `None` when the content was never read.
+    pub content_hash: Option<&'a [u8]>,
+    /// Thumbnail cache key (see `crate::thumbs`).
+    pub thumb_key: Option<&'a str>,
 }
 
 /// Inserts or replaces `record`, its `chunks`, and their `vec_text`
@@ -31,6 +34,8 @@ pub struct FileRecord<'a> {
 /// unique `path`, and any previous chunks/vectors for that file are
 /// deleted before the new ones are inserted (idempotent re-indexing).
 /// `embeddings[i]` is the vector for `chunks[i]` — same length, same order.
+/// `image_embedding` replaces the file's `vec_image` row (or removes it
+/// when `None`) in the same transaction.
 ///
 /// Deletes `vec_text` rows before `chunks` (not after): the delete uses a
 /// subquery over `chunks` to find which `vec_text` rows belong to this
@@ -42,6 +47,7 @@ pub fn upsert_file(
     record: &FileRecord,
     chunks: &[RawChunk],
     embeddings: &[Vec<f32>],
+    image_embedding: Option<&[f32]>,
 ) -> Result<i64> {
     if chunks.len() != embeddings.len() {
         // `zip` below would silently drop the excess, i.e. lose chunks
@@ -60,8 +66,9 @@ pub fn upsert_file(
     let file_id: i64 = tx.query_row(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
-            lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, unixepoch())
+            lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at,
+            content_hash, thumb_key
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, unixepoch(), ?14, ?15)
          ON CONFLICT(path) DO UPDATE SET
             root_id = excluded.root_id,
             rel_path = excluded.rel_path,
@@ -75,6 +82,8 @@ pub fn upsert_file(
             skip_reason = excluded.skip_reason,
             error = excluded.error,
             seen_scan_id = excluded.seen_scan_id,
+            content_hash = excluded.content_hash,
+            thumb_key = excluded.thumb_key,
             indexed_at = unixepoch()
          RETURNING id",
         params![
@@ -91,6 +100,8 @@ pub fn upsert_file(
             record.skip_reason,
             record.error,
             record.seen_scan_id,
+            record.content_hash,
+            record.thumb_key,
         ],
         |row| row.get(0),
     )?;
@@ -100,6 +111,13 @@ pub fn upsert_file(
         params![file_id],
     )?;
     tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
+    tx.execute("DELETE FROM vec_image WHERE file_id = ?1", params![file_id])?;
+    if let Some(embedding) = image_embedding {
+        tx.execute(
+            "INSERT INTO vec_image (file_id, embedding) VALUES (?1, vec_f32(?2))",
+            params![file_id, embedding_to_json(embedding)],
+        )?;
+    }
     // Prepared once, not per chunk: a single large file can carry
     // thousands. `RETURNING id` avoids a follow-up SELECT — and avoids
     // `tx.last_insert_rowid()`, which the `chunks_ai` trigger's own INSERT
@@ -173,6 +191,15 @@ pub fn count_chunks(conn: &Connection) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn upsert(
+        conn: &mut Connection,
+        record: &FileRecord,
+        chunks: &[RawChunk],
+        embeddings: &[Vec<f32>],
+    ) -> Result<i64> {
+        upsert_file(conn, record, chunks, embeddings, None)
+    }
     use crate::db;
     use crate::embed::{FakeEmbedder, TextEmbedder};
     use crate::extract::ChunkSource;
@@ -205,6 +232,8 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         }
     }
 
@@ -215,7 +244,7 @@ mod tests {
         let rel = PathBuf::from("notes.txt");
         let chunks = vec![RawChunk::body("hello world".to_string())];
 
-        let file_id = upsert_file(
+        let file_id = upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &chunks,
@@ -247,7 +276,7 @@ mod tests {
         let rel = PathBuf::from("notes.txt");
 
         let first_chunks = vec![RawChunk::body("version one".to_string())];
-        let first_id = upsert_file(
+        let first_id = upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &first_chunks,
@@ -258,7 +287,7 @@ mod tests {
             RawChunk::body("version two".to_string()),
             RawChunk::body("more text".to_string()),
         ];
-        let second_id = upsert_file(
+        let second_id = upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &second_chunks,
@@ -289,7 +318,7 @@ mod tests {
         record.state = "skipped";
         record.skip_reason = Some("too_large");
 
-        upsert_file(&mut conn, &record, &[], &[]).unwrap();
+        upsert(&mut conn, &record, &[], &[]).unwrap();
 
         let row = get_by_path(&conn, &path).unwrap().unwrap();
         assert_eq!(row.state, "skipped");
@@ -310,7 +339,7 @@ mod tests {
         };
 
         let chunks = [chunk];
-        upsert_file(
+        upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &chunks,
@@ -335,7 +364,7 @@ mod tests {
         ];
         let embeddings = fake_embeddings(&chunks);
 
-        upsert_file(&mut conn, &sample_record(&path, &rel), &chunks, &embeddings).unwrap();
+        upsert(&mut conn, &sample_record(&path, &rel), &chunks, &embeddings).unwrap();
 
         let vec_rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM vec_text", [], |row| row.get(0))
@@ -350,7 +379,7 @@ mod tests {
         let rel = PathBuf::from("notes.txt");
 
         let first_chunks = vec![RawChunk::body("version one".to_string())];
-        upsert_file(
+        upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &first_chunks,
@@ -362,7 +391,7 @@ mod tests {
             RawChunk::body("version two".to_string()),
             RawChunk::body("more text".to_string()),
         ];
-        upsert_file(
+        upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &second_chunks,
@@ -389,7 +418,7 @@ mod tests {
             RawChunk::body("two".to_string()),
         ];
 
-        let err = upsert_file(
+        let err = upsert(
             &mut conn,
             &sample_record(&path, &rel),
             &chunks,
@@ -399,5 +428,36 @@ mod tests {
 
         assert!(matches!(err, crate::error::Error::Model(_)), "got {err:?}");
         assert_eq!(count_chunks(&conn).unwrap(), 0, "nothing partially written");
+    }
+
+    #[test]
+    fn hash_key_and_image_vector_round_trip_and_are_replaced_on_reindex() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/photo.jpg");
+        let rel = PathBuf::from("photo.jpg");
+        let mut record = sample_record(&path, &rel);
+        let hash = [7u8; 32];
+        record.content_hash = Some(&hash);
+        record.thumb_key = Some("abc");
+
+        upsert_file(&mut conn, &record, &[], &[], Some(&[0.5; 768])).unwrap();
+        upsert_file(&mut conn, &record, &[], &[], Some(&[0.25; 768])).unwrap();
+
+        let (stored, key): (Vec<u8>, String) = conn
+            .query_row("SELECT content_hash, thumb_key FROM files", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((stored, key.as_str()), (hash.to_vec(), "abc"));
+        let vectors: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vec_image", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(vectors, 1);
+
+        upsert_file(&mut conn, &record, &[], &[], None).unwrap();
+        let vectors: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vec_image", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(vectors, 0);
     }
 }

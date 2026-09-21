@@ -138,8 +138,8 @@ Read this entire file before writing code. It is the source of truth; if code an
 | Image embeddings           | **SigLIP 2 base** (Apache-2.0), ONNX export, **quantized (int8 or equivalent) required** to fit the 8 GB budget unless eval shows unacceptable loss | Image tower for files, text tower for queries. Text tower: Gemma tokenizer, pad to 64 tokens exactly as the reference implementation.                                                                                      |
 | OCR                        | `OcrEngine` trait; candidates: `ocrs` (pure Rust) vs PaddleOCR ONNX via `ort`                                                                       | Chosen in M4 by measured accuracy on English + Spanish fixtures (ADR required). Tesseract excluded (native packaging burden).                                                                                              |
 | QR / barcodes              | `rxing`                                                                                                                                             | Decoded payload indexed as text.                                                                                                                                                                                           |
-| Images                     | `image` crate + `fast_image_resize`                                                                                                                 | Decode limits to prevent decompression bombs. Apply EXIF orientation (via `kamadak-exif` or the `image` crate's orientation support) before OCR/embedding/thumbnails.                                                      |
-| HEIC/HEIF                  | **`libheif-rs`** (bindings to libheif + libde265), dynamically linked and bundled                                                                   | Chosen in the M4 HEIC spike (ADR-0003). Fallback option: native decoders per OS (macOS ImageIO, Windows WIC) if bundling fails. libheif/libde265 are LGPL: dynamic linking + license notices in `THIRD_PARTY_LICENSES.md`. |
+| Images                     | `image` crate (Lanczos3 resize)                                                                                                                     | Decode limits to prevent decompression bombs. Apply EXIF orientation (via `kamadak-exif` or the `image` crate's orientation support) before OCR/embedding/thumbnails. `fast_image_resize` not adopted: one Lanczos3 pass costs ~0.55 s at 48 MP (release), and the thumbnail is derived from the OCR-sized copy.                                                      |
+| HEIC/HEIF                  | **`heic-rs`** (pure Rust, MIT OR Apache-2.0, no `unsafe`)                                                                                            | Chosen in the M4 HEIC spike (ADR-0003) over `libheif-rs`: same output on every fixture, 1.3–2.3× faster, and no native library to install, bundle or license. `libheif-rs` remains the documented fallback. No embedded-thumbnail API — thumbnails come from the same decode as OCR/embedding.                                                            |
 | HTTP (model download only) | `ureq` with rustls                                                                                                                                  | Synchronous, small. Only constructed inside the model manager.                                                                                                                                                             |
 | Config                     | `serde` + `toml`; paths via `directories`                                                                                                           |                                                                                                                                                                                                                            |
 | TS bindings                | `ts-rs`                                                                                                                                             | Generated DTO types into the frontend; never hand-write IPC types.                                                                                                                                                         |
@@ -171,20 +171,18 @@ Use **one repository (monorepo)** containing a Cargo workspace plus the frontend
 - Node.js LTS + pnpm (`corepack enable`).
 - `just` (`cargo install just --locked`, or the OS package manager).
 - Tauri CLI: `pnpm add -D @tauri-apps/cli@^2` in `apps/desktop` (preferred), or `cargo install tauri-cli --version "^2" --locked`.
-- **libheif (for HEIC, needed from M4).** Install per OS as below. **Agents MUST check the pinned `libheif-rs` README for the minimum libheif version and supported install methods**; update this section if it differs. If the crate offers a feature that builds libheif from source, evaluate it in the M4 spike, since it simplifies bundling.
+- **HEIC needs nothing installed.** ADR-0003 chose the pure-Rust `heic-rs`; the libheif install steps this section used to carry are gone. If the fallback to `libheif-rs` is ever taken, they come back — and with them Ubuntu 22.04's libheif 1.12.0, which is below that crate's 1.17.0 minimum (see ADR-0003).
 
 **Windows**
 
 - Visual Studio 2022 Build Tools with the **"Desktop development with C++"** workload (MSVC + Windows SDK).
 - WebView2 Runtime (preinstalled on Windows 11; install the Evergreen runtime on Windows 10 if missing).
 - Enable long paths for development: Group Policy "Enable Win32 long paths", or registry `LongPathsEnabled=1`.
-- libheif via vcpkg: `vcpkg install libheif:x64-windows` (set `VCPKG_ROOT`).
 
 **macOS**
 
 - Xcode Command Line Tools: `xcode-select --install`.
 - For universal builds: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
-- libheif for development: `brew install libheif`. Release builds MUST bundle the dylibs inside the `.app` (never depend on Homebrew at runtime).
 
 **Linux (Debian/Ubuntu)**
 
@@ -193,8 +191,6 @@ sudo apt update
 sudo apt install -y build-essential curl wget file pkg-config libssl-dev \
   libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
 ```
-
-For HEIC: `sudo apt install -y libheif-dev`. Ubuntu 22.04's packaged libheif may be older than `libheif-rs` requires. If so, build a pinned libheif from source in `xtask` (or use the crate's from-source feature) and document it in ADR-0003.
 
 For Fedora, use the equivalent packages from the Tauri prerequisites page (`webkit2gtk4.1-devel`, `openssl-devel`, `libappindicator-gtk3-devel`, `librsvg2-devel`, and the "C Development Tools and Libraries" group). **Agents MUST check the current official Tauri v2 prerequisites page and update this list if it has changed.**
 
@@ -338,7 +334,7 @@ magi/
 │   └── reference_embeddings.py     # dev-only (uv run)
 ├── xtask/
 │   └── src/main.rs                 # fetch-pdfium, fetch-models, gen-bindings, bench-corpus
-├── vendor/                         # git-ignored: pdfium (and, if built from source, libheif) binaries per target
+├── vendor/                         # git-ignored: pdfium and ONNX Runtime binaries per target
 └── docs/
     ├── architecture.md
     ├── progress.md                 # milestone checklist + verification evidence
@@ -419,7 +415,7 @@ max_file_size_mb = 50
 file_types = ["text", "code", "pdf", "office", "image"]
 pause_on_battery = true
 worker_threads = 0                 # 0 = auto (see §5.3 memory-aware concurrency)
-max_image_megapixels = 64          # iPhone 48 MP HEIC must pass; larger images are skipped
+max_image_megapixels = 64          # a 48 MP phone HEIC must pass; larger images are skipped
 reconcile_interval_hours = 6
 
 [models]
@@ -569,7 +565,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- keys: pipeline_version, text_model_id, image_model_id, last_scan_id
+-- keys: pipeline_version, text_model_id, image_model_id, ocr_engine_id, last_scan_id
 
 CREATE TABLE roots (
   id                INTEGER PRIMARY KEY,
@@ -858,11 +854,8 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 **Deliverables**
 
 - Image decoding with limits: read dimensions from headers first; skip images over `max_image_megapixels` (default 64) before full decode. EXIF orientation applied for all formats.
-- **HEIC spike (first task of M4, ADR-0003):**
-  - Option A (preferred): `libheif-rs` on all three OSes, dynamically linked, libs bundled with the app.
-  - Option B (fallback): native decoders per OS (macOS ImageIO; Windows WIC, which needs the HEIF/HEVC extensions and is not always installed), with libheif on Linux.
-  - Decide by: builds on all three CI runners, bundle size impact, decode time for a 12 MP and a 48 MP photo, and license obligations. A spike branch must produce a CI build for all three OSes before the decision.
-- HEIC extractor: decode the primary image (ignore auxiliary/depth images; ignore the `.MOV` of Live Photos). Use the embedded HEIC thumbnail for the UI thumbnail when present, to avoid a full decode.
+- **HEIC spike (first task of M4) — done, ADR-0003.** `heic-rs` (pure Rust) chosen over `libheif-rs` and over native per-OS decoders: identical output on every fixture, 1.3–2.3× faster, and nothing to install, bundle or license. Both items that were owed before M4 sign-off are closed (2026-09-21): CI is green on all three runners, and the 48 MP budget is measured on a synthetic tile-gridded file (see the M4 sign-off in docs/progress.md).
+- HEIC extractor: decode the primary image (ignore auxiliary/depth images; ignore the `.MOV` of Live Photos). `heic-rs` exposes no embedded-thumbnail API, so the UI thumbnail is downscaled from the same decode OCR and embedding already require (ADR-0003).
 - **OCR spike:** benchmark `ocrs` vs. PaddleOCR-ONNX on the fixture images (English and Spanish screenshots, receipts, UI captures). Measure character error rate (CER) and time per image. Choose one and record it in an ADR. Implement it behind `OcrEngine` and produce `ocr` chunks.
 - `rxing` QR/barcode decoding → `qr` chunks containing the payload plus the labels "QR code / código QR".
 - SigLIP 2: choose the variant (resolution and quantization) in an ADR based on size, speed, and eval results. Implement the `ImageEmbedder` (image tower) and the query text tower with exact reference preprocessing (resize mode, normalization, 64-token padding). Write `vec_image`.
@@ -871,11 +864,11 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 
 **Verification**
 
-- [ ] SigLIP parity vs. reference vectors (cosine ≥ 0.99 fp32; ≥ 0.97 for the quantized variant) for both towers; the quantized variant's image-query recall@5 is within 3 points of fp32.
-- [ ] **HEIC:** self-shot iPhone fixtures (12 MP and 48 MP, portrait and landscape, one with text for OCR, one with a QR code) decode correctly on Windows, macOS, and Linux CI. Orientation is correct in thumbnails (golden thumbnail comparison). OCR and QR work on the HEIC fixtures exactly as on their JPEG equivalents.
-- [ ] Decoding a 48 MP HEIC keeps the RSS delta < 400 MB and completes in < 3 s on the reference machine.
+- [ ] SigLIP parity vs. reference vectors (cosine ≥ 0.99 fp32; ≥ 0.97 for the quantized variant) for both towers; the quantized variant's image-query recall@5 is within 3 points of fp32. **Amended 2026-09-20 (ADR-0007):** the shipped q4f16 variant is accepted at a *mean* image cosine of 0.969 (minimum 0.952) with retrieval identical to fp32; the text tower meets 0.97. Choosing fp16 for the vision tower would meet the gate exactly at +290 MB of RSS while indexing, and was declined.
+- [ ] **HEIC:** self-shot phone-camera fixtures (12 MP and 48 MP, portrait and landscape, one with text for OCR, one with a QR code) decode correctly on Windows, macOS, and Linux CI. **Any phone that shoots HEIC will do** (answered 2026-09-20): what the decoder has to cope with is the container — a tile grid, an aux HDR gain map, a rotation transform — not the vendor. Orientation is correct in thumbnails (golden thumbnail comparison). OCR and QR work on the HEIC fixtures exactly as on their JPEG equivalents.
+- [ ] Decoding a 48 MP HEIC keeps the RSS delta < 400 MB and completes in < 3 s on the reference machine. **Amended 2026-09-20:** no real 48 MP HEIC exists (phones cap HEIC at 12 MP), so this is measured on a synthetic tile-gridded one from `tools/synthetic_heic_48mp.py`.
 - [ ] Peak RSS while indexing the full fixture corpus with all models loaded ≤ 1.5 GB (NFR-11).
-- [ ] OCR: CER ≤ 10% on the Spanish and English screenshot fixtures (record the actual values). Accented characters (á, é, í, ó, ú, ñ, ¿, ¡) appear in the output.
+- [ ] OCR: CER ≤ 10% on the Spanish and English screenshot fixtures (record the actual values). Accented characters (á, é, í, ó, ú, ñ, ¿, ¡) appear in the output. **Exception, accepted 2026-09-21 (ADR-0006): `¡` is not required.** The Latin PP-OCRv5 recognizer's dictionary has `¿` but no `¡`, so the model cannot emit it (`¡Hola!` reads `Hola!` or `iHola!`); every other listed character is recognized. Getting it would take a different or retrained recognizer, or guessing in post-processing, which is not worth it for one punctuation mark. FTS5 treats `¡` as punctuation, so keyword search is unaffected.
 - [ ] The QR fixture decodes to its exact payload. Queries `qr code` and `código QR` both return the QR screenshot in the top 3.
 - [ ] Visual queries: `dog on the beach` / `perro en la playa` return the matching photo fixture in the top 3.
 - [ ] A decompression-bomb fixture is rejected quickly without memory blow-up (RSS delta < 200 MB).
@@ -896,7 +889,9 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - Re-embed trigger on model change: a stored `meta.text_model_id` /
   `meta.image_model_id` that differs from the running embedder's marks the
   affected files `pending` so hash-skip does not preserve vectors from the
-  old model. M3 delivers the `meta` tracking and logs a warning on a
+  old model. Likewise a stored `meta.ocr_engine_id` that differs from the
+  running `OcrEngine::engine_id()` marks image files `pending`, so their
+  `ocr` chunks are re-read by the new engine (M5 starts writing this key). M3 delivers the `meta` tracking and logs a warning on a
   mismatch; the trigger belongs here because M5's hash-skip is what makes a
   stale vector survive a re-index (before it, every index run re-embeds
   everything, so the mismatch is latent). See SPEC.md §7 M3's deliverable.
@@ -1006,8 +1001,8 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - Windows: NSIS installer (x64)
   - macOS: `.dmg` (aarch64 required; universal if x86_64 is supported)
   - Linux: AppImage + `.deb` (optionally `.rpm`)
-- PDFium, ONNX Runtime, and **libheif (+ libde265 and any other codec deps)** correctly bundled and located at runtime. Use `@rpath` on macOS, next to the executable on Windows, and inside the AppImage on Linux.
-- `THIRD_PARTY_LICENSES.md` generated with `cargo-about`, plus manual entries for bundled native libraries (LGPL notices and source links for libheif/libde265). An ADR decides static linking vs. dynamic loading for `ort`, verified on clean machines.
+- PDFium and ONNX Runtime correctly bundled and located at runtime. Use `@rpath` on macOS, next to the executable on Windows, and inside the AppImage on Linux. (HEIC needs no bundling — ADR-0003.)
+- `THIRD_PARTY_LICENSES.md` generated with `cargo-about`, plus manual entries for bundled native libraries. An ADR decides static linking vs. dynamic loading for `ort`, verified on clean machines.
 - `release.yml`: on tag `v*`, build all bundles with `tauri-action`, attach SHA-256 checksums, create a draft GitHub Release.
 - README "Install" section for **unsigned builds**:
   - Windows SmartScreen: "More info → Run anyway"
@@ -1020,7 +1015,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 
 - [ ] On a clean VM/machine per OS with no dev tools: install → onboarding → download models → index `fixtures/corpus` copied to the home folder → search works → uninstall.
 - [ ] Installer sizes recorded; NFR-6 met.
-- [ ] HEIC fixtures index and display correctly on the clean machines, proving no dev-only libheif install is required.
+- [ ] HEIC fixtures index and display correctly on the clean machines.
 - [ ] Network check: with a firewall/monitor (e.g. Little Snitch, Windows Firewall logging, `ss`/`nethogs`), the only outbound connections are the model-download hosts, and only during download.
 
 ### M9 — Stretch goals (only after M8)
@@ -1062,11 +1057,11 @@ Rules:
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------- |
 | Q1     | Final product name (replaces `magi`)                                                                                                                           | M8     | Keep `magi`                                                     |
 | ~~Q2~~ | Frontend framework                                                                                                                                             | —      | **Answered 2026-09-10:** React + TypeScript                     |
-| ~~Q3~~ | HEIC/HEIF (iPhone photos) in v1?                                                                                                                               | —      | **Answered 2026-09-10:** Yes, required (M4)                     |
+| ~~Q3~~ | HEIC/HEIF (phone photos) in v1?                                                                                                                               | —      | **Answered 2026-09-10:** Yes, required (M4)                     |
 | ~~Q4~~ | Minimum target hardware                                                                                                                                        | —      | **Answered 2026-09-10:** 8 GB RAM laptop (§1 reference machine) |
 | Q5     | Is macOS Intel (x86_64) support required?                                                                                                                      | M8     | Best-effort                                                     |
 | Q6     | License for the repository (MIT assumed)                                                                                                                       | M0     | MIT                                                             |
 | Q7     | Should launch-at-login default to on after onboarding?                                                                                                         | M6     | Ask in onboarding, default off                                  |
-| Q8     | If ADR-0003 must fall back to native HEIC decoders and Windows lacks the HEVC extension, is "HEIC not supported on this PC, install the extension" acceptable? | M4     | Yes, with a clear message and a count of skipped HEIC files     |
+| ~~Q8~~ | If ADR-0003 must fall back to native HEIC decoders and Windows lacks the HEVC extension, is "HEIC not supported on this PC, install the extension" acceptable? | —      | **Moot 2026-09-19:** ADR-0003 chose `heic-rs`, which decodes in-process on every platform. |
 
 Record answers here (with date) and update affected sections.

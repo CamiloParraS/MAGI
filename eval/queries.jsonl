@@ -68,3 +68,97 @@
 {"query": "Quarterly Kickoff", "lang": "kw", "expected": ["office/kickoff.pptx"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "circuit breaker grounding wire", "lang": "kw", "expected": ["en/electrician_invoice.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "five day grace period", "lang": "kw", "expected": ["en/lease_agreement.txt"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
+{"query": "a dog on the beach", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query"}
+{"query": "dog on the beach", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query"}
+{"query": "perro en la playa", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual, SPEC M4 query (Spanish)"}
+{"query": "a golden retriever lying on sand", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg"], "notes": "visual"}
+{"query": "a dog with a tennis ball", "lang": "img", "expected": ["images/dog_on_beach2.jpg"], "notes": "visual"}
+{"query": "a cat on the beach", "lang": "img", "expected": ["images/cat_on_beach.jpg"], "notes": "visual"}
+{"query": "gato en la playa", "lang": "img", "expected": ["images/cat_on_beach.jpg"], "notes": "visual (Spanish)"}
+{"query": "a yellow sports car", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "un coche deportivo amarillo", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual (Spanish)"}
+{"query": "a car parked in a parking lot", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "a photo of a mustang", "lang": "img", "expected": ["images/mustang_landscape.jpg"], "notes": "visual"}
+{"query": "mountain sunset", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual"}
+{"query": "atardecer en las montañas", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual (Spanish)"}
+{"query": "a hiking trail along a grassy ridge", "lang": "img", "expected": ["images/mountain_sunset.jpg"], "notes": "visual"}
+{"query": "mountain sunrise", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual"}
+{"query": "amanecer en la montaña", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual (Spanish)"}
+{"query": "snowy mountain peaks at dawn", "lang": "img", "expected": ["images/mountain_sunrise.jpg"], "notes": "visual"}
+{"query": "christmas decorations on a shelf", "lang": "img", "expected": ["images/shelf_christmas.heic"], "notes": "visual, HEIC"}
+{"query": "decoración navideña en un estante", "lang": "img", "expected": ["images/shelf_christmas.heic"], "notes": "visual (Spanish), HEIC"}
+{"query": "an anime character with pink hair", "lang": "img", "expected": ["images/screenshot_en.png"], "notes": "visual"}
+{"query": "Dororong meme mascot", "lang": "img", "expected": ["images/screenshot_en.png"], "notes": "OCR text"}
+{"query": "letras con tilde vocales acento", "lang": "img", "expected": ["images/screenshot_es.png"], "notes": "OCR text (Spanish)"}
+{"query": "pingüino vergüenza diéresis", "lang": "img", "expected": ["images/screenshot_es.png"], "notes": "OCR text, accented"}
+{"query": "qr code", "lang": "img", "expected": ["images/phone_qr.jpg", "images/phone_qr.heic", "qr/qr_url.png", "qr/qr_text_es.png"], "notes": "QR chunk, SPEC M4 query: any QR fixture"}
+{"query": "código QR", "lang": "img", "expected": ["images/phone_qr.jpg", "images/phone_qr.heic", "qr/qr_url.png", "qr/qr_text_es.png"], "notes": "QR chunk, SPEC M4 query (Spanish): any QR fixture"}
+{"query": "código QR de prueba", "lang": "img", "expected": ["qr/qr_text_es.png"], "notes": "QR payload"}
+{"query": "example.com magi-test", "lang": "img", "expected": ["qr/qr_url.png"], "notes": "QR payload"}
+{"query": "an anime figurine with spiky orange hair", "lang": "img", "expected": ["images/phone_figurine.heif"], "notes": "visual, iPhone .heif"}
+{"query": "figura de anime con el pelo naranja", "lang": "img", "expected": ["images/phone_figurine.heif"], "notes": "visual (Spanish), iPhone .heif"}
+{"query": "a hamburger with lettuce, tomato and cheese", "lang": "img2", "expected": ["local/amirali-mirhashemian-burger.jpg", "local/amirali-mirhashemian-burguer2.jpg"], "notes": ""}
+{"query": "a juicy cheeseburger on a wooden board", "lang": "img2", "expected": ["local/amirali-mirhashemian-burger.jpg", "local/amirali-mirhashemian-burguer2.jpg"], "notes": ""}
+{"query": "hamburguesa con queso", "lang": "img2", "expected": ["local/amirali-mirhashemian-burger.jpg", "local/amirali-mirhashemian-burguer2.jpg"], "notes": "Spanish"}
+{"query": "a stack of pancakes with syrup and walnuts", "lang": "img2", "expected": ["local/mae-mu-burguer.jpg"], "notes": "file is named burguer but shows pancakes"}
+{"query": "panqueques con sirope", "lang": "img2", "expected": ["local/mae-mu-burguer.jpg"], "notes": "Spanish"}
+{"query": "two hot dogs with ketchup and chives", "lang": "img2", "expected": ["local/mateusz-feliksik-hot-dog.jpg"], "notes": ""}
+{"query": "a pepperoni pizza", "lang": "img2", "expected": ["local/pizza.jpg"], "notes": ""}
+{"query": "pizza de pepperoni", "lang": "img2", "expected": ["local/pizza.jpg"], "notes": "Spanish"}
+{"query": "spaghetti twirled on a fork above a white bowl", "lang": "img2", "expected": ["local/krista-stucchio-pasta.jpg"], "notes": ""}
+{"query": "a sandwich", "lang": "img2", "expected": ["local/orkun-orcan-sadwich.jpg", "local/pixzolo-photography-sandwich.jpg"], "notes": ""}
+{"query": "a can of soda", "lang": "img2", "expected": ["local/mae-mu-coca-cola-redbackground.jpg", "local/QR_code_on_Pepsi_Diet_can.jpg"], "notes": ""}
+{"query": "a red Coca-Cola can", "lang": "img2", "expected": ["local/mae-mu-coca-cola-redbackground.jpg"], "notes": ""}
+{"query": "a freight train beside a turquoise river", "lang": "img2", "expected": ["local/andy-holmes-train.jpg"], "notes": ""}
+{"query": "a high-speed train at a station platform", "lang": "img2", "expected": ["local/daniel-abadia-train.jpg"], "notes": ""}
+{"query": "a train", "lang": "img2", "expected": ["local/andy-holmes-train.jpg", "local/daniel-abadia-train.jpg"], "notes": ""}
+{"query": "un tren", "lang": "img2", "expected": ["local/andy-holmes-train.jpg", "local/daniel-abadia-train.jpg"], "notes": "Spanish"}
+{"query": "a double-decker bus", "lang": "img2", "expected": ["local/jonathan-borba-bus.jpg"], "notes": ""}
+{"query": "a bus", "lang": "img2", "expected": ["local/jonathan-borba-bus.jpg", "local/juan-encalada-bus.jpg", "local/mitchell-johnson-bus-inside.jpg"], "notes": ""}
+{"query": "the inside of a bus with passengers", "lang": "img2", "expected": ["local/mitchell-johnson-bus-inside.jpg"], "notes": ""}
+{"query": "a semi truck driving on a highway", "lang": "img2", "expected": ["local/artem-balashevsky-euro-truck.jpg", "local/gabriel-santos-euro-truck.jpg", "local/josiah-farrow-truck.jpg"], "notes": ""}
+{"query": "a big red truck with chrome grille", "lang": "img2", "expected": ["local/esteban-zapata-truck.jpg"], "notes": ""}
+{"query": "a yellow mining dump truck", "lang": "img2", "expected": ["local/HeavyTruck.jpg"], "notes": ""}
+{"query": "un camión", "lang": "img2", "expected": ["local/artem-balashevsky-euro-truck.jpg", "local/gabriel-santos-euro-truck.jpg", "local/josiah-farrow-truck.jpg", "local/esteban-zapata-truck.jpg", "local/HeavyTruck.jpg"], "notes": "Spanish"}
+{"query": "a motorcycle parked in front of a wall", "lang": "img2", "expected": ["local/harley-davidson-motorbike.jpg"], "notes": ""}
+{"query": "una moto", "lang": "img2", "expected": ["local/harley-davidson-motorbike.jpg"], "notes": "Spanish"}
+{"query": "a bicycle leaning against a blue wall", "lang": "img2", "expected": ["local/carl-nenzen-loven-bike.jpg"], "notes": ""}
+{"query": "an electric guitar", "lang": "img2", "expected": ["local/apolo-photographer-guitar.jpg", "local/wes-hicks-MEL-guitars.jpg"], "notes": "bass excluded, ambiguous"}
+{"query": "a red electric bass guitar on a stand", "lang": "img2", "expected": ["local/polygon-group-bass.jpg"], "notes": ""}
+{"query": "acoustic guitars in a music room", "lang": "img2", "expected": ["local/wes-hicks-MEL-guitars.jpg"], "notes": ""}
+{"query": "a wolf", "lang": "img2", "expected": ["local/wolf.jpg", "local/wolf_sillouthe.jpg"], "notes": "confusable with the dog photos"}
+{"query": "a wolf in the snow", "lang": "img2", "expected": ["local/wolf.jpg"], "notes": ""}
+{"query": "a deer standing in a forest", "lang": "img2", "expected": ["local/deer-enyoing-sun-marko-brecic.jpg"], "notes": ""}
+{"query": "un ciervo", "lang": "img2", "expected": ["local/deer-enyoing-sun-marko-brecic.jpg"], "notes": "Spanish"}
+{"query": "a snowy pine forest", "lang": "img2", "expected": ["local/madara-parma-snowy-forest.jpg", "local/piotr-szajewski-snowy-forest.jpg"], "notes": ""}
+{"query": "bosque nevado", "lang": "img2", "expected": ["local/madara-parma-snowy-forest.jpg", "local/piotr-szajewski-snowy-forest.jpg"], "notes": "Spanish"}
+{"query": "a road through a forest with sunbeams", "lang": "img2", "expected": ["local/john-towner-forest.jpg"], "notes": ""}
+{"query": "a hiking trail in a dark green forest", "lang": "img2", "expected": ["local/degleex-ganzorig-forest.jpg"], "notes": ""}
+{"query": "city lights at night seen from above", "lang": "img2", "expected": ["local/night-city-landscape.jpg"], "notes": ""}
+{"query": "an empty city street at night with tram tracks", "lang": "img2", "expected": ["local/patrick-tomasso-night-city.jpg"], "notes": ""}
+{"query": "a suspension bridge at sunset", "lang": "img2", "expected": ["local/city_landscape2.jpg"], "notes": ""}
+{"query": "a pile of grey rocks", "lang": "img2", "expected": ["local/rocks.jpg"], "notes": ""}
+{"query": "an empty room with a wooden floor and a window", "lang": "img2", "expected": ["local/empty-room.jpg"], "notes": ""}
+{"query": "a living room with an orange sofa and a plant", "lang": "img2", "expected": ["local/living_room.jpg"], "notes": ""}
+{"query": "una sala con un sillón naranja y una planta", "lang": "img2", "expected": ["local/living_room.jpg"], "notes": "Spanish"}
+{"query": "a bedroom with blue walls", "lang": "img2", "expected": ["local/room.jpg"], "notes": ""}
+{"query": "a whiteboard", "lang": "img2", "expected": ["local/walls-io-whiteboard.jpg", "local/studio-vix-whiteboard-books-background.jpg"], "notes": ""}
+{"query": "a weekly schedule with sticky notes on a whiteboard", "lang": "img2", "expected": ["local/walls-io-whiteboard.jpg"], "notes": ""}
+{"query": "scattered pages of old books", "lang": "img2", "expected": ["local/annie-spratt-paper-pages.jpg", "local/brett-jordan-paper-page.jpg"], "notes": ""}
+{"query": "a headstone in a war cemetery", "lang": "img2", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": ""}
+{"query": "an anime girl with silver hair pointing at the viewer", "lang": "img2", "expected": ["local/animePicture.png"], "notes": ""}
+{"query": "die-cast toy cars", "lang": "img2", "expected": ["images/Frontphoto.heic", "images/Portrait_photo.jpg", "images/Upsidedown.heic"], "notes": "own phone shots"}
+{"query": "a Hot Wheels package", "lang": "img2", "expected": ["images/Upsidedown.heic"], "notes": "HEIC, 90-degree irot; also printed text"}
+{"query": "a small yellow toy car", "lang": "img2", "expected": ["images/Portrait_photo.jpg"], "notes": "EXIF orientation 6"}
+{"query": "a row of colorful toy sports cars", "lang": "img2", "expected": ["images/Frontphoto.heic"], "notes": "HEIC, 90-degree irot"}
+{"query": "PER ARDUA AD ASTRA Wing Commander Warburton", "lang": "ocr", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": "headstone text"}
+{"query": "Hello World!", "lang": "ocr", "expected": ["local/barcode-Hello World!.png"], "notes": "text under a 1D barcode"}
+{"query": "Hot Wheels Nissan Z Proto", "lang": "ocr", "expected": ["images/Upsidedown.heic"], "notes": "printed on the package"}
+{"query": "GET A KICK HERE WANNA KNOW MORE pepsi.co.uk", "lang": "ocr", "expected": ["local/QR_code_on_Pepsi_Diet_can.jpg"], "notes": "text on a curved can"}
+{"query": "Qué tal Hola Adiós español verduras", "lang": "ocr", "expected": ["local/spanish-printed-page.jpg"], "notes": "handwriting-style, accents and inverted marks"}
+{"query": "upside-down question mark and exclamation mark in Spanish", "lang": "ocr", "expected": ["local/inverted_exclamation_screenshot.png"], "notes": ""}
+{"query": "AiIsEven ANTHROPIC_API_KEY is_even", "lang": "ocr", "expected": ["local/code_screenshot.png"], "notes": "syntax-highlighted code"}
+{"query": "porsche car", "lang": "skip", "expected": ["local/porsche_car.jpg"], "notes": "147 MP: skipped as image_too_large, so findable by file name only"}
+{"query": "Version 2", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 2nd of 3 QR codes; not in the file name. Verified with OpenCV (independent decoder), not just ours"}
+{"query": "Version 3 QR Code", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 3rd QR code; verified with OpenCV"}
+{"query": "qrwp", "lang": "qr", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": "payload http://en.qrwp.org/Adrian_Warburton (OpenCV, from a crop). A ~100 px code in a 1600x2035 photo: needs the tiled scan, the shrink-only ladder cannot see it"}

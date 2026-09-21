@@ -14,11 +14,17 @@
       {
         "title": "magi",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "transparent": true,
+        "shadow": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
     }
   },
   "bundle": {

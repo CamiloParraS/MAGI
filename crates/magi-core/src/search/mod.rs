@@ -10,12 +10,22 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use crate::embed::TextEmbedder;
+use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::Result;
 use crate::search::fuse::{RankedList, filename_boost, recency_boost, reciprocal_rank_fusion};
 
 pub const FTS_FETCH_LIMIT: u32 = 100;
 pub const VECTOR_FETCH_LIMIT: u32 = 100;
+/// SPEC.md §5.6 step 2c: the visual list is shorter than the text ones.
+pub const IMAGE_FETCH_LIMIT: u32 = 50;
+/// Least query-image cosine that counts as a visual match for SigLIP 2
+/// (ADR-0007). Measured on the fixture eval: text-only queries never exceed
+/// 0.117 against any image, genuine visual matches have a median of 0.139 and
+/// the weakest non-OCR one is ~0.105. Tied to the model: recalibrate when the
+/// image model changes.
+pub const IMAGE_MIN_COSINE: f32 = 0.10;
+/// SPEC.md §5.6 step 4: the visual list counts for less than text.
+const IMAGE_WEIGHT: f64 = 0.8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {
@@ -83,10 +93,12 @@ pub fn rank_and_boost(
     query: &str,
     fts_hits: &[FileHit],
     vector_hits: &[FileHit],
+    image_hits: &[FileHit],
     limit: u32,
 ) -> Vec<SearchHit> {
     let fts_ids: Vec<i64> = fts_hits.iter().map(|h| h.file_id).collect();
     let vector_ids: Vec<i64> = vector_hits.iter().map(|h| h.file_id).collect();
+    let image_ids: Vec<i64> = image_hits.iter().map(|h| h.file_id).collect();
     let fused = reciprocal_rank_fusion(&[
         RankedList {
             file_ids: &fts_ids,
@@ -95,6 +107,10 @@ pub fn rank_and_boost(
         RankedList {
             file_ids: &vector_ids,
             weight: 1.0,
+        },
+        RankedList {
+            file_ids: &image_ids,
+            weight: IMAGE_WEIGHT,
         },
     ]);
 
@@ -105,22 +121,26 @@ pub fn rank_and_boost(
         .collect();
     let now = now_unix();
 
-    let mut by_id: HashMap<i64, (Option<&FileHit>, Option<&FileHit>)> = HashMap::new();
+    let mut by_id: HashMap<i64, [Option<&FileHit>; 3]> = HashMap::new();
     for hit in fts_hits {
-        by_id.entry(hit.file_id).or_default().0 = Some(hit);
+        by_id.entry(hit.file_id).or_default()[0] = Some(hit);
     }
     for hit in vector_hits {
-        by_id.entry(hit.file_id).or_default().1 = Some(hit);
+        by_id.entry(hit.file_id).or_default()[1] = Some(hit);
+    }
+    for hit in image_hits {
+        by_id.entry(hit.file_id).or_default()[2] = Some(hit);
     }
 
-    // `fused`'s ids are the union of the two lists, so every lookup here
+    // `fused`'s ids are the union of the lists, so every lookup here
     // resolves. Preferring the FTS side keeps the snippet that carries the
-    // `[...]` match highlights.
+    // `[...]` match highlights, and the visual side (a bare file name) is
+    // the last resort.
     let mut hits: Vec<SearchHit> = fused
         .into_iter()
         .filter_map(|(file_id, base_score)| {
-            let (fts, vector) = by_id.get(&file_id)?;
-            let hit = fts.or(*vector)?;
+            let [fts, vector, image] = *by_id.get(&file_id)?;
+            let hit = fts.or(vector).or(image)?;
             let boost = filename_boost(&query_tokens, &hit.file_name)
                 * recency_boost(hit.mtime_ns / 1_000_000_000, now);
             let mut match_sources = Vec::new();
@@ -129,6 +149,9 @@ pub fn rank_and_boost(
             }
             if vector.is_some() {
                 match_sources.push("semantic");
+            }
+            if image.is_some() {
+                match_sources.push("visual");
             }
             Some(SearchHit {
                 file_id,
@@ -148,7 +171,8 @@ pub fn rank_and_boost(
     hits
 }
 
-/// Runs FTS5 and `vec_text` search, fuses them with Reciprocal Rank
+/// Runs FTS5, `vec_text` and (when `image_embedder` is given) `vec_image`
+/// search, fuses them with Reciprocal Rank
 /// Fusion, applies filename/recency boosts, and returns the top `limit`
 /// files (SPEC.md §5.6).
 ///
@@ -160,6 +184,7 @@ pub fn rank_and_boost(
 pub fn hybrid_search(
     conn: &Connection,
     embedder: &dyn TextEmbedder,
+    image_embedder: Option<&dyn ImageEmbedder>,
     query: &str,
     limit: u32,
 ) -> Result<Vec<SearchHit>> {
@@ -171,7 +196,26 @@ pub fn hybrid_search(
     let query_embedding = embedder.embed_query(query)?;
     let vector_hits = vector::search_vector_text(conn, &query_embedding, VECTOR_FETCH_LIMIT)?;
 
-    Ok(rank_and_boost(query, &fts_hits, &vector_hits, limit))
+    // A missing or broken visual model degrades to text-only search rather
+    // than failing the query.
+    let image_hits = match image_embedder.map(|e| e.embed_query(query)) {
+        Some(Ok(embedding)) => {
+            vector::search_vector_image(conn, &embedding, IMAGE_FETCH_LIMIT, IMAGE_MIN_COSINE)?
+        }
+        Some(Err(e)) => {
+            tracing::warn!(error = %e, "visual search unavailable");
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+
+    Ok(rank_and_boost(
+        query,
+        &fts_hits,
+        &vector_hits,
+        &image_hits,
+        limit,
+    ))
 }
 
 #[cfg(test)]
@@ -208,10 +252,77 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
+    }
+
+    #[test]
+    fn visual_match_is_found_through_vec_image_and_labelled() {
+        use crate::embed::FakeImageEmbedder;
+        let (_dir, mut conn) = open_test_db();
+        // A photo with no text at all: only its planted vector can match.
+        let path = PathBuf::from("/roots/a/IMG_0042.jpg");
+        let rel = PathBuf::from("IMG_0042.jpg");
+        let record = FileRecord {
+            root_id: 1,
+            path: &path,
+            rel_path: &rel,
+            file_name: "IMG_0042.jpg",
+            ext: Some("jpg"),
+            kind: "image",
+            size: 1,
+            mtime_ns: 0,
+            lang: None,
+            state: "indexed",
+            skip_reason: None,
+            error: None,
+            seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
+        };
+        let name_chunk = vec![RawChunk::body("IMG 0042 jpg".to_string())];
+        let embeddings = FakeEmbedder.embed_passages(&["IMG 0042 jpg"]).unwrap();
+        let visual = FakeImageEmbedder.embed_query("dog on the beach").unwrap();
+        upsert_file(&mut conn, &record, &name_chunk, &embeddings, Some(&visual)).unwrap();
+        index_text(&mut conn, "/roots/a/tax.txt", "quarterly tax filing", 0);
+
+        let hits = hybrid_search(
+            &conn,
+            &FakeEmbedder,
+            Some(&FakeImageEmbedder),
+            "dog on the beach",
+            10,
+        )
+        .unwrap();
+        let photo = hits.iter().find(|h| h.path == path).expect("photo found");
+        assert!(photo.match_sources.contains(&"visual"));
+        // An unrelated query is below the cosine floor: the photo is not
+        // dragged into every search.
+        let unrelated = hybrid_search(
+            &conn,
+            &FakeEmbedder,
+            Some(&FakeImageEmbedder),
+            "quarterly tax filing",
+            10,
+        )
+        .unwrap();
+        assert!(
+            !unrelated
+                .iter()
+                .any(|h| h.match_sources.contains(&"visual")),
+            "{unrelated:?}"
+        );
+        // Without the image embedder the same query cannot reach it.
+        let text_only = hybrid_search(&conn, &FakeEmbedder, None, "dog on the beach", 10).unwrap();
+        assert!(
+            !text_only
+                .iter()
+                .any(|h| h.match_sources.contains(&"visual"))
+        );
     }
 
     #[test]
@@ -220,9 +331,13 @@ mod tests {
         index_text(&mut conn, "/roots/a/notes.txt", "hello world", 0);
         let embedder = FakeEmbedder;
 
-        assert!(hybrid_search(&conn, &embedder, "", 10).unwrap().is_empty());
         assert!(
-            hybrid_search(&conn, &embedder, "hello", 0)
+            hybrid_search(&conn, &embedder, None, "", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            hybrid_search(&conn, &embedder, None, "hello", 0)
                 .unwrap()
                 .is_empty()
         );
@@ -239,7 +354,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, "arepas", 10).unwrap();
+        let hits = hybrid_search(&conn, &embedder, None, "arepas", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/recipe.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
@@ -259,7 +374,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, "cat sat mat", 10).unwrap();
+        let hits = hybrid_search(&conn, &embedder, None, "cat sat mat", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/cats.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
         assert!(hits[0].match_sources.contains(&"semantic"));
@@ -288,7 +403,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, "budget quarterly", 10).unwrap();
+        let hits = hybrid_search(&conn, &embedder, None, "budget quarterly", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/budget_report.txt"));
     }
 }

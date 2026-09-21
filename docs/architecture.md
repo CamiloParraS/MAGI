@@ -74,7 +74,7 @@ padding plus int8 kernels make a vector depend slightly on what it was
 batched with (measured worst case 0.9956 cosine against the same text
 embedded alone — the same band as int8-vs-fp32 parity).
 
-`search::hybrid_search(conn, embedder, query, limit)` runs `search::fts`
+`search::hybrid_search(conn, embedder, image_embedder, query, limit)` runs `search::fts`
 (BM25, unchanged from M2) and `search::vector::search_vector_text` (a
 `vec_text` KNN query), fuses their per-file-deduplicated results with
 `search::fuse::reciprocal_rank_fusion` (SPEC.md §5.6's
@@ -85,8 +85,16 @@ Both searches return `search::FileHit`, which carries `path`, `file_name`,
 `hybrid_search` computes the boosts from the hits it has instead of issuing
 a metadata query per fused result. They also share
 `search::chunk_fetch_limit` (over-fetch factor before dedup) and
-`search::first_hit_per_file` (per-file dedup). `vec_image`/the SigLIP visual
-list are not wired in yet (M4). `magi-cli search --mode hybrid` and `index`
+`search::first_hit_per_file` (per-file dedup). When `image_embedder` is
+given, a third list joins the fusion: `search::vector::search_vector_image` (a
+`vec_image` KNN, top 50, weight 0.8) using the SigLIP text tower, reported as
+match source `"visual"`. It only keeps images whose query-image cosine is at
+least `search::IMAGE_MIN_COSINE` (0.10): a KNN always returns its nearest rows,
+so without a floor every text query pulled the whole photo library into the
+ranking and collapsed text recall to keyword-only (docs/eval.md). The floor is
+calibrated to SigLIP 2 on the fixture set, so recalibrate it with the model. A
+missing or broken visual model degrades to text-only search rather than
+failing the query. `magi-cli search --mode hybrid` and `index`
 (which needs an embedder — set `MAGI_FAKE_EMBEDDER=1` to skip the model)
 exercise this path from the CLI.
 
@@ -165,7 +173,9 @@ not its default `download-binaries`, which would fetch a third-party CDN
 mirror at build time — see ADR-0001) from `vendor/onnxruntime/<target>/lib/`,
 vendored and SHA-256-verified by `cargo xtask fetch-onnxruntime` the same
 way `xtask fetch-pdfium` vendors PDFium. `MAGI_ONNXRUNTIME_PATH` overrides
-the resolved path, mirroring `MAGI_PDFIUM_PATH`.
+the resolved path, mirroring `MAGI_PDFIUM_PATH`. Loading it and building a
+session (CPU, arena off) live in `crate::onnx`, shared by the text embedder,
+the SigLIP towers and OCR.
 
 Verified end to end on the developer machine (Windows x86_64): real
 `model.onnx`/`tokenizer.json` (downloaded from Hugging Face) plus the real
@@ -196,3 +206,59 @@ downloads and SHA-256-verifies each `models/manifest.toml` file into
 CLI wiring for that manifest-driven download/verify logic, which existed
 and was unit-tested since the first M3 slice but had no way to actually
 run outside tests until now.
+
+## Images (M4)
+
+**One decode point.** `extract::image::decode_bounded` is the only place an
+image is decoded (HEIC routes to `extract::heic`, everything else to the
+`image` crate), so the decompression-bomb defence (header dimensions checked
+against `max_image_megapixels` before any allocation) and the EXIF/`irot`
+orientation fix run exactly once. `extract::image::extract_image` decodes once
+and derives everything from that buffer, in this order: QR/barcode payloads
+(`qr::decode_barcodes`: a shrink-only scale ladder, then, for images up to 6 MP, overlapping native-resolution tiles so a small code in a big busy photo is found), the visual embedding
+(`ImageEmbedder::embed_image`, from the full-resolution decode), then the
+full buffer is dropped, a 2048 px copy goes to OCR, and a 256 px copy becomes
+the thumbnail. A failed embedding or OCR-less run costs the file that signal,
+never its index entry. Everything comes back in one `extract::ExtractedDoc`
+(chunks, language, `thumbnail`, `image_embedding`), the same type every
+extractor returns; the PDF path fills only its `thumbnail`.
+
+**OCR** is `ocr::OcrEngine`: `paddle::PaddleOcr` (PaddleOCR PP-OCRv5 mobile
+detection + Latin recognition over `ort`, ADR-0006) or `NoOcr` when its
+models are absent. Detection fits rotated rectangles to the probability map's
+components and straightens each line; recognition is a CTC decode over the
+dictionary read from `rec.yml`. OCR adds ~310 MB of peak RSS. Known gap: the
+recognizer's dictionary has no inverted exclamation mark. Output shorter than 6 letters and digits is discarded
+(`extract::image::MIN_OCR_ALNUM`): PaddleOCR emits stray glyphs for photos with no
+text, and as `ocr` chunks they crowd real documents out of the text-vector list
+(docs/eval.md).
+
+**SigLIP 2** is `embed::ImageEmbedder` (`embed::siglip::SigLipEmbedder`, 256 px
+q4f16, ADR-0007). Each tower is its own lazy, idle-unloadable `ModelSlot`, so
+indexing only loads the ~80 MB vision tower and search only the ~450 MB text
+tower. Vectors are L2-normalized 768-d and stored in `vec_image` (one per
+file, replaced in the same transaction as the file's chunks). Preprocessing is
+the reference's: bilinear squash to 256 x 256, scaled to [-1, 1]; queries are
+Gemma-tokenized with EOS, padded to 64.
+
+**Pipeline wiring.** `index::pipeline::IndexContext` carries `embedder`, `ocr`
+(`Arc<dyn OcrEngine>`) and an optional `image_embedder`
+(`Arc<dyn ImageEmbedder>`; `None` leaves `vec_image` empty). `IndexContext::new`
+uses `NoOcr` and no image embedder. After a run `meta.image_model_id` records
+the image model, like `meta.text_model_id`. `files.content_hash` (blake3, every
+file whose bytes are read) and `files.thumb_key` are filled by the pipeline.
+`indexing.file_types` deserializes straight into `discovery::Kind`, so an
+unknown name fails config loading with serde's list of valid ones. Extraction
+runs under `index::isolate::run` (timeout, panic containment, stuck-thread cap).
+
+**Thumbnails** are 256 px JPEGs at `<cache_dir>/thumbs/<first two hex>/<key>.jpg`
+(`thumbs::store`), keyed by content hash, for images and PDF first pages.
+The desktop app enables Tauri's asset protocol with an empty static scope and
+grants exactly `thumbs::thumbs_dir()` at startup, so the webview can read
+thumbnails and nothing else. It is granted at runtime because the cache lives
+under the magi data directory, which the Tauri identifier cannot name.
+
+**Model manifest.** Two slots were added: `ocr` (`det.onnx`, `rec.onnx`,
+`rec.yml`) and `image` (`vision_model.onnx`, `text_model.onnx`,
+`tokenizer.json`), both pinned by revision and SHA-256. `ModelEntry::dim` is
+optional (OCR has no embedding width).

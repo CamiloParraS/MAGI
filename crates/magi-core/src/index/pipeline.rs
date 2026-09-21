@@ -1,15 +1,13 @@
 //! hash -> extract -> chunk -> embed -> write. Implemented starting M2
 
-use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::Connection;
 
 use crate::db::files::{FileRecord, upsert_file};
 use crate::discovery::{self, Kind, WalkOptions};
-use crate::embed::TextEmbedder;
+use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::extract::code::CodeExtractor;
 use crate::extract::filename::filename_chunk;
@@ -17,8 +15,28 @@ use crate::extract::office::OfficeExtractor;
 use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
+use crate::ocr::{NoOcr, OcrEngine};
 
-pub const EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
+/// What an indexing run needs beyond the walk options: the models.
+pub struct IndexContext<'a> {
+    pub embedder: &'a dyn TextEmbedder,
+    /// `Arc` because extraction runs on a detached thread that must own it.
+    pub ocr: Arc<dyn OcrEngine>,
+    /// `None` leaves `vec_image` empty: images are still found by their text.
+    pub image_embedder: Option<Arc<dyn ImageEmbedder>>,
+}
+
+impl<'a> IndexContext<'a> {
+    /// A context with no OCR engine and no image embedder; images still get
+    /// QR payloads and a thumbnail.
+    pub fn new(embedder: &'a dyn TextEmbedder) -> Self {
+        Self {
+            embedder,
+            ocr: Arc::new(NoOcr),
+            image_embedder: None,
+        }
+    }
+}
 
 const SNIFF_HEADER_LEN: usize = 8192;
 
@@ -27,6 +45,9 @@ pub struct IndexRootOptions {
     pub include_hidden: bool,
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
+    pub max_image_megapixels: u32,
+    /// Kinds that get content extraction; others are indexed by filename only.
+    pub file_types: Vec<Kind>,
 }
 
 impl IndexRootOptions {
@@ -48,6 +69,8 @@ impl IndexRootOptions {
             include_hidden: config.include_hidden,
             follow_symlinks: config.follow_symlinks,
             max_file_size_mb: config.max_file_size_mb,
+            max_image_megapixels: config.max_image_megapixels,
+            file_types: config.file_types.clone(),
         })
     }
 }
@@ -68,8 +91,9 @@ pub fn index_root(
     root_path: &Path,
     options: &IndexRootOptions,
     scan_id: i64,
-    embedder: &dyn TextEmbedder,
+    ctx: &IndexContext,
 ) -> Result<IndexSummary> {
+    let embedder = ctx.embedder;
     let walk_options = WalkOptions {
         exclude_globs: options.exclude_globs.clone(),
         include_hidden: options.include_hidden,
@@ -89,13 +113,11 @@ pub fn index_root(
             .unwrap_or_default();
         let ext = entry.path.extension().and_then(|e| e.to_str());
 
-        let outcome = process_entry(&entry.path, entry.size, max_size_bytes);
-
-        let mut chunks = outcome.chunks;
+        let mut outcome = process_entry(&entry.path, entry.size, max_size_bytes, options, ctx);
+        let thumb_key = store_thumbnail(&entry.path, &outcome);
+        let mut chunks = std::mem::take(&mut outcome.doc.chunks);
         chunks.push(filename_chunk(rel_path));
-
-        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let embeddings = embedder.embed_passages(&texts)?;
+        let embeddings = embed_chunks(embedder, &entry.path, &mut chunks, &mut outcome)?;
 
         let record = FileRecord {
             root_id,
@@ -106,13 +128,21 @@ pub fn index_root(
             kind: outcome.kind.as_str(),
             size: entry.size,
             mtime_ns: entry.mtime_ns,
-            lang: outcome.lang.as_deref(),
+            lang: outcome.doc.lang.as_deref(),
             state: outcome.state,
             skip_reason: outcome.skip_reason,
             error: outcome.error.as_deref(),
             seen_scan_id: scan_id,
+            content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
+            thumb_key: thumb_key.as_deref(),
         };
-        upsert_file(conn, &record, &chunks, &embeddings)?;
+        upsert_file(
+            conn,
+            &record,
+            &chunks,
+            &embeddings,
+            outcome.doc.image_embedding.as_deref(),
+        )?;
 
         match outcome.state {
             "indexed" => summary.indexed += 1,
@@ -131,7 +161,47 @@ pub fn index_root(
         );
     }
     crate::db::meta::set(conn, "text_model_id", embedder.model_id())?;
+    if let Some(image_embedder) = &ctx.image_embedder {
+        crate::db::meta::set(conn, "image_model_id", image_embedder.model_id())?;
+    }
     Ok(summary)
+}
+
+/// Embeds `chunks` (content chunks, filename chunk last). One bad file must
+/// not abort the run: if embedding fails, the file keeps only its filename
+/// chunk (still searchable by name) and is marked `error`. If even that
+/// fails, the embedder itself is broken and the error propagates rather than
+/// erroring every remaining file.
+fn embed_chunks(
+    embedder: &dyn TextEmbedder,
+    path: &Path,
+    chunks: &mut Vec<RawChunk>,
+    outcome: &mut FileOutcome,
+) -> Result<Vec<Vec<f32>>> {
+    let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+    match embedder.embed_passages(&texts) {
+        Ok(embeddings) => Ok(embeddings),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "embedding failed");
+            outcome.state = "error";
+            outcome.error = Some(e.to_string());
+            chunks.drain(..chunks.len() - 1);
+            embedder.embed_passages(&[chunks[0].text.as_str()])
+        }
+    }
+}
+
+/// A failed write costs the file its thumbnail, never its index entry.
+fn store_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
+    let (hash, image) = outcome
+        .content_hash
+        .as_ref()
+        .zip(outcome.doc.thumbnail.as_ref())?;
+    crate::thumbs::store(hash, image)
+        .inspect_err(
+            |e| tracing::warn!(path = %path.display(), error = %e, "thumbnail not written"),
+        )
+        .ok()
 }
 
 struct FileOutcome {
@@ -139,8 +209,8 @@ struct FileOutcome {
     state: &'static str,
     skip_reason: Option<&'static str>,
     error: Option<String>,
-    chunks: Vec<RawChunk>,
-    lang: Option<String>,
+    content_hash: Option<[u8; 32]>,
+    doc: ExtractedDoc,
 }
 
 fn indexed_no_chunks(kind: Kind) -> FileOutcome {
@@ -149,53 +219,26 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
         state: "indexed",
         skip_reason: None,
         error: None,
-        chunks: Vec::new(),
-        lang: None,
+        content_hash: None,
+        doc: ExtractedDoc::default(),
+    }
+}
+
+/// Not broken, just outside what is indexed: SPEC.md section 5.4's `skipped`.
+fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
+    FileOutcome {
+        state: "skipped",
+        skip_reason: Some(reason),
+        ..indexed_no_chunks(kind)
     }
 }
 
 fn errored(kind: Kind, message: String) -> FileOutcome {
     FileOutcome {
-        kind,
         state: "error",
-        skip_reason: None,
         error: Some(message),
-        chunks: Vec::new(),
-        lang: None,
+        ..indexed_no_chunks(kind)
     }
-}
-
-/// Which extractor (if any) handles a [`Kind`]. A single exhaustive match
-/// over `Kind` here — rather than separate `has_extractor` and
-/// `extract_for_kind` matches — means the compiler forces both "should we
-/// read this file's bytes" and "how do we extract it" to stay in sync
-/// whenever a `Kind` variant is added.
-enum Dispatch {
-    Text,
-    Pdf,
-    Office,
-    Code,
-    /// Image extraction (OCR/QR/embeddings) lands in M4; until then it
-    /// falls back to filename-only indexing, same as an unsupported
-    /// (`Other`) file.
-    None,
-}
-
-fn dispatch_for(kind: Kind) -> Dispatch {
-    match kind {
-        Kind::Text => Dispatch::Text,
-        Kind::Pdf => Dispatch::Pdf,
-        Kind::Office => Dispatch::Office,
-        Kind::Code => Dispatch::Code,
-        Kind::Image | Kind::Other => Dispatch::None,
-    }
-}
-
-/// Whether `extract_for_kind` does real content extraction for `kind`.
-/// Kinds without one fall back to filename-only indexing, so there's no
-/// point reading their full file content.
-fn has_extractor(kind: Kind) -> bool {
-    !matches!(dispatch_for(kind), Dispatch::None)
 }
 
 fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
@@ -207,16 +250,15 @@ fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
+fn process_entry(
+    path: &Path,
+    size: u64,
+    max_size_bytes: u64,
+    options: &IndexRootOptions,
+    ctx: &IndexContext,
+) -> FileOutcome {
     if size > max_size_bytes {
-        return FileOutcome {
-            kind: discovery::classify(path, &[]),
-            state: "skipped",
-            skip_reason: Some("too_large"),
-            error: None,
-            chunks: Vec::new(),
-            lang: None,
-        };
+        return skipped(discovery::classify(path, &[]), "too_large");
     }
 
     // Classification from the extension alone needs no I/O; only sniff a
@@ -229,9 +271,10 @@ fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
         }
     }
 
-    // No extractor for this kind yet: skip reading the rest of the file,
-    // since the bytes would just be discarded (see `has_extractor`).
-    if !has_extractor(kind) {
+    // `Other` has no extractor, and a kind the user disabled in `file_types`
+    // is indexed by filename only: either way the bytes would be discarded,
+    // so don't read them.
+    if kind == Kind::Other || !options.file_types.contains(&kind) {
         return indexed_no_chunks(kind);
     }
 
@@ -239,63 +282,57 @@ fn process_entry(path: &Path, size: u64, max_size_bytes: u64) -> FileOutcome {
         Ok(b) => b,
         Err(e) => return errored(kind, e.to_string()),
     };
+    let content_hash = Some(*blake3::hash(&bytes).as_bytes());
 
-    match extract_with_isolation(kind, path.to_path_buf(), bytes) {
-        Ok(doc) => FileOutcome {
-            kind,
-            state: "indexed",
-            skip_reason: None,
-            error: None,
-            chunks: doc.chunks,
-            lang: doc.lang,
-        },
-        Err(e) => errored(kind, e.to_string()),
-    }
-}
-
-fn extract_for_kind(kind: Kind, path: &Path, bytes: &[u8]) -> Result<ExtractedDoc> {
-    match dispatch_for(kind) {
-        Dispatch::Text => TextExtractor.extract(path, bytes),
-        Dispatch::Pdf => PdfExtractor.extract(path, bytes),
-        Dispatch::Office => OfficeExtractor.extract(path, bytes),
-        Dispatch::Code => CodeExtractor.extract(path, bytes),
-        Dispatch::None => Ok(ExtractedDoc::default()),
-    }
-}
-
-/// Runs extraction on a worker thread so a hang can be treated as a
-/// timeout, and contains panics so one bad file never kills the engine
-/// (see SPEC.md §7 M2 "Extraction isolation").
-fn extract_with_isolation(kind: Kind, path: PathBuf, bytes: Vec<u8>) -> Result<ExtractedDoc> {
-    let (tx, rx) = mpsc::channel();
-    let thread_path = path.clone();
-    std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            extract_for_kind(kind, &thread_path, &bytes)
-        }));
-        let _ = tx.send(result);
+    let (path_buf, ocr, image_embedder, max_megapixels) = (
+        path.to_path_buf(),
+        Arc::clone(&ctx.ocr),
+        ctx.image_embedder.clone(),
+        options.max_image_megapixels,
+    );
+    let extracted = super::isolate::run(path.to_path_buf(), move || {
+        let (path, bytes) = (path_buf.as_path(), bytes.as_slice());
+        match kind {
+            Kind::Text => TextExtractor.extract(path, bytes),
+            Kind::Code => CodeExtractor.extract(path, bytes),
+            Kind::Office => OfficeExtractor.extract(path, bytes),
+            Kind::Pdf => {
+                let mut doc = PdfExtractor.extract(path, bytes)?;
+                // A PDF we can read but not render is still searchable.
+                doc.thumbnail = crate::extract::pdf::first_page_thumbnail(bytes)
+                    .inspect_err(
+                        |e| tracing::warn!(path = %path.display(), error = %e, "no PDF thumbnail"),
+                    )
+                    .ok();
+                Ok(doc)
+            }
+            Kind::Image => crate::extract::image::extract_image(
+                path,
+                bytes,
+                max_megapixels,
+                &*ocr,
+                image_embedder.as_deref(),
+            ),
+            Kind::Other => Ok(ExtractedDoc::default()),
+        }
     });
 
-    match rx.recv_timeout(EXTRACTION_TIMEOUT) {
-        Ok(Ok(doc_result)) => doc_result,
-        Ok(Err(panic_payload)) => Err(Error::ExtractionPanicked {
-            path,
-            message: panic_message(&panic_payload),
-        }),
-        Err(_timed_out) => Err(Error::ExtractionTimeout {
-            path,
-            seconds: EXTRACTION_TIMEOUT.as_secs(),
-        }),
-    }
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".to_string()
+    match extracted {
+        Ok(doc) => FileOutcome {
+            content_hash,
+            doc,
+            ..indexed_no_chunks(kind)
+        },
+        // SPEC.md section 5.2: images over `max_image_megapixels` are
+        // skipped. A real 75 MP panorama is not an error to retry.
+        Err(Error::ImageTooLarge { .. }) => FileOutcome {
+            content_hash,
+            ..skipped(kind, "image_too_large")
+        },
+        Err(e) => FileOutcome {
+            content_hash,
+            ..errored(kind, e.to_string())
+        },
     }
 }
 
@@ -324,7 +361,7 @@ mod tests {
             root_path,
             &default_options(),
             1,
-            &FakeEmbedder,
+            &IndexContext::new(&FakeEmbedder),
         )
         .unwrap()
     }
@@ -335,6 +372,8 @@ mod tests {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size_mb: 1,
+            max_image_megapixels: 64,
+            file_types: vec![Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image],
         }
     }
 
@@ -362,6 +401,40 @@ mod tests {
 
         let hits = crate::search::fts::search_fts(&conn, "murciélago", 10).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn image_over_the_megapixel_cap_is_skipped_not_errored() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        // Declares 20000 x 20000 (400 MP) in 1.1 MB, so it is over the default
+        // 64 MP cap and refused from its header.
+        let bomb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/bomb.png");
+        fs::copy(bomb, root_path.join("panorama.png")).unwrap();
+
+        // The test default caps files at 1 MB and the bomb is 1.1 MB: raise it
+        // so the image, not the file-size check, is what refuses it.
+        let options = IndexRootOptions {
+            max_file_size_mb: 10,
+            ..default_options()
+        };
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &options,
+            1,
+            &IndexContext::new(&FakeEmbedder),
+        )
+        .unwrap();
+
+        assert_eq!((summary.skipped, summary.errored), (1, 0));
+        let row = db::files::get_by_path(&conn, &root_path.join("panorama.png"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "skipped");
+        assert_eq!(row.skip_reason.as_deref(), Some("image_too_large"));
     }
 
     #[test]
@@ -441,7 +514,7 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &FakeEmbedder,
+            &IndexContext::new(&FakeEmbedder),
         )
         .unwrap();
         let second_count = db::files::count_files(&conn).unwrap();
@@ -696,6 +769,80 @@ mod tests {
         }
     }
 
+    /// Fails any batch containing a content chunk (more than one text);
+    /// filename-only batches succeed.
+    struct FlakyEmbedder;
+
+    impl TextEmbedder for FlakyEmbedder {
+        fn model_id(&self) -> &str {
+            FakeEmbedder.model_id()
+        }
+
+        fn dim(&self) -> usize {
+            FakeEmbedder.dim()
+        }
+
+        fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            if texts.len() > 1 {
+                return Err(Error::Model("boom".into()));
+            }
+            FakeEmbedder.embed_passages(texts)
+        }
+
+        fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+            FakeEmbedder.embed_query(text)
+        }
+    }
+
+    #[test]
+    fn disabled_file_type_is_indexed_by_filename_only() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root_path.join("a.txt"), "zebrafish").unwrap();
+
+        let mut options = default_options();
+        options.file_types.retain(|&k| k != Kind::Text);
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &options,
+            1,
+            &IndexContext::new(&FakeEmbedder),
+        )
+        .unwrap();
+
+        assert_eq!(summary.indexed, 1);
+        let fts = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
+        assert_eq!(fts("zebrafish"), 0);
+        assert_eq!(fts("a"), 1);
+    }
+
+    #[test]
+    fn embedding_failure_marks_file_errored_and_run_continues() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root_path.join("a.txt"), "hello there").unwrap();
+        fs::write(root_path.join("b.bin"), [0u8; 4]).unwrap(); // filename-only: embeds fine
+
+        let summary = index_root(
+            &mut conn,
+            root_id,
+            &root_path,
+            &default_options(),
+            1,
+            &IndexContext::new(&FlakyEmbedder),
+        )
+        .unwrap();
+
+        assert_eq!(summary.errored, 1);
+        assert_eq!(summary.indexed, 1);
+        let row = db::files::get_by_path(&conn, &root_path.join("a.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "error");
+    }
+
     #[test]
     fn reindexing_with_a_different_embedder_overwrites_the_recorded_model_id() {
         let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
@@ -719,7 +866,7 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &OtherFakeEmbedder,
+            &IndexContext::new(&OtherFakeEmbedder),
         )
         .unwrap();
         assert_eq!(

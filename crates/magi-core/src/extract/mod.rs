@@ -4,6 +4,8 @@
 
 pub mod code;
 pub mod filename;
+pub mod heic;
+pub mod image;
 pub mod lang;
 pub mod office;
 pub mod pdf;
@@ -57,13 +59,19 @@ impl RawChunk {
 }
 
 /// Output of extracting one file's content: chunks plus the detected
-/// language (from the concatenated body text, where detectable). Does not
-/// include the filename chunk — the pipeline adds that for every file
-/// regardless of kind (see [`filename::filename_chunk`]).
+/// language (from the concatenated body text, where detectable), and for
+/// images and PDFs whatever else came from the same read. Does not include
+/// the filename chunk — the pipeline adds that for every file regardless of
+/// kind (see [`filename::filename_chunk`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExtractedDoc {
     pub chunks: Vec<RawChunk>,
     pub lang: Option<String>,
+    /// Already at most [`crate::thumbs::THUMB_LONG_SIDE`] on its long edge.
+    pub thumbnail: Option<::image::RgbImage>,
+    /// The `vec_image` vector, or `None` without an image embedder or when
+    /// embedding failed (the file is still searchable by its text).
+    pub image_embedding: Option<Vec<f32>>,
 }
 
 pub trait Extractor {
@@ -102,5 +110,9 @@ pub fn paginated_doc(pages: impl IntoIterator<Item = String>) -> ExtractedDoc {
         }
     }
     let lang = lang::detect_lang(full_text.trim());
-    ExtractedDoc { chunks, lang }
+    ExtractedDoc {
+        chunks,
+        lang,
+        ..Default::default()
+    }
 }

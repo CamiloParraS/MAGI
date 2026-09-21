@@ -4,8 +4,10 @@
 
 use std::path::Path;
 
-/// Matches the `files.kind` column in `migrations/0001_init.sql`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Matches the `files.kind` column in `migrations/0001_init.sql`; the serde
+/// names are the same strings, used by `indexing.file_types`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     Text,
     Code,
@@ -47,6 +49,15 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif",
 ];
 
+/// Camera RAW formats. Not supported in v1 (filename-only indexing), but
+/// they must be named here: most are TIFF containers, so magic-byte sniffing
+/// would otherwise call them images and hand them to a TIFF decoder that
+/// cannot read them, turning every RAW file into an index error.
+const RAW_EXTENSIONS: &[&str] = &[
+    "arw", "cr2", "cr3", "crw", "dng", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "srw",
+    "x3f",
+];
+
 /// Classifies `path`, using `bytes` (a small header read, not the whole
 /// file) for magic-byte sniffing when the extension doesn't resolve.
 pub fn classify(path: &Path, bytes: &[u8]) -> Kind {
@@ -74,6 +85,9 @@ fn classify_extension(ext: &str) -> Option<Kind> {
         Some(Kind::Office)
     } else if IMAGE_EXTENSIONS.contains(&ext) {
         Some(Kind::Image)
+    } else if RAW_EXTENSIONS.contains(&ext) {
+        // `Some`, so `classify` stops here instead of sniffing.
+        Some(Kind::Other)
     } else {
         None
     }
@@ -92,6 +106,17 @@ mod tests {
         assert_eq!(classify(&PathBuf::from("sheet.xlsx"), b""), Kind::Office);
         assert_eq!(classify(&PathBuf::from("photo.png"), b""), Kind::Image);
         assert_eq!(classify(&PathBuf::from("archive.zip"), b""), Kind::Other);
+    }
+
+    #[test]
+    fn camera_raw_is_not_sniffed_into_an_image() {
+        // A TIFF header, which is what an ARW/CR2/NEF starts with.
+        let tiff = b"II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        for name in ["shot.arw", "SHOT.CR2", "shot.nef", "shot.dng"] {
+            assert_eq!(classify(&PathBuf::from(name), tiff), Kind::Other, "{name}");
+        }
+        // The same bytes with no extension really are a TIFF.
+        assert_eq!(classify(&PathBuf::from("shot"), tiff), Kind::Image);
     }
 
     #[test]

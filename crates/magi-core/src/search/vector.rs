@@ -1,4 +1,4 @@
-//! Vector KNN search over `vec_text` / `vec_image`. Implemented in M3/M4.
+//! Vector KNN search over `vec_text` / `vec_image` (SPEC.md §5.6).
 
 use std::path::PathBuf;
 
@@ -73,6 +73,59 @@ pub fn search_vector_text(
     ))
 }
 
+/// Runs a `vec_image` KNN search (SPEC.md §5.6 step 2c) and keeps only images
+/// whose cosine similarity to the query is at least `min_cosine`. An image has
+/// one vector per file, so there is no chunk dedup; the snippet is the file
+/// name since a visual match has no matching text to show.
+///
+/// The cosine floor matters: a KNN always returns its `k` nearest rows, so
+/// without it every text query would pull the whole photo library into the
+/// fused ranking. `vec_image` uses L2 on unit vectors, so `cos = 1 - d^2 / 2`.
+pub fn search_vector_image(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: u32,
+    min_cosine: f32,
+) -> Result<Vec<FileHit>> {
+    if query_embedding.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "WITH knn_matches AS (
+            SELECT file_id, distance
+            FROM vec_image
+            WHERE embedding MATCH vec_f32(?1) AND k = ?2
+         )
+         SELECT f.id, f.path, f.file_name, f.mtime_ns, knn_matches.distance
+         FROM knn_matches
+         JOIN files f ON f.id = knn_matches.file_id
+         ORDER BY knn_matches.distance",
+    )?;
+    let mut rows = stmt
+        .query_map(params![embedding_to_json(query_embedding), limit], |row| {
+            let file_name: String = row.get(2)?;
+            Ok((
+                FileHit {
+                    file_id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    snippet: file_name.clone(),
+                    file_name,
+                    mtime_ns: row.get(3)?,
+                },
+                row.get::<_, f64>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.retain(|(_, distance)| 1.0 - distance * distance / 2.0 >= f64::from(min_cosine));
+    // Ties broken by file id, in Rust, for the same reason as the text search.
+    rows.sort_by(|(a, a_distance), (b, b_distance)| {
+        a_distance
+            .total_cmp(b_distance)
+            .then_with(|| a.file_id.cmp(&b.file_id))
+    });
+    Ok(rows.into_iter().map(|(hit, _)| hit).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,10 +159,12 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
     }
 
     #[test]
@@ -161,6 +216,8 @@ mod tests {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
         let chunks = vec![
             RawChunk::body("apple banana".to_string()),
@@ -169,7 +226,7 @@ mod tests {
         let embeddings = FakeEmbedder
             .embed_passages(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())
             .unwrap();
-        upsert_file(&mut conn, &record, &chunks, &embeddings).unwrap();
+        upsert_file(&mut conn, &record, &chunks, &embeddings, None).unwrap();
 
         let query = FakeEmbedder.embed_query("apple").unwrap();
         let hits = search_vector_text(&conn, &query, 10).unwrap();

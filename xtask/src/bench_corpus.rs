@@ -165,8 +165,10 @@ pub fn bench_corpus() -> Result<()> {
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: None,
         };
-        upsert_file(&mut conn, &record, &chunks, &embeddings)?;
+        upsert_file(&mut conn, &record, &chunks, &embeddings, None)?;
         if i > 0 && i % 1000 == 0 {
             println!("  ... {i}/{FILE_COUNT} files");
         }
@@ -188,7 +190,7 @@ pub fn bench_corpus() -> Result<()> {
     println!("\nloading real E5Embedder (cold: model not yet in memory)...");
     let cold_start = Instant::now();
     let embedder = E5Embedder::load()?;
-    let first_hits = search::hybrid_search(&conn, &embedder, QUERIES[0], 30)?;
+    let first_hits = search::hybrid_search(&conn, &embedder, None, QUERIES[0], 30)?;
     let cold_ms = cold_start.elapsed().as_secs_f64() * 1000.0;
     println!(
         "cold latency (model load + first search): {cold_ms:.1} ms  [{} hits]  -- NFR-3 target: <= 3000 ms",
@@ -199,7 +201,7 @@ pub fn bench_corpus() -> Result<()> {
     for i in 0..WARM_QUERIES {
         let query = QUERIES[i % QUERIES.len()];
         let t = Instant::now();
-        search::hybrid_search(&conn, &embedder, query, 30)?;
+        search::hybrid_search(&conn, &embedder, None, query, 30)?;
         warm_ms.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     warm_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());

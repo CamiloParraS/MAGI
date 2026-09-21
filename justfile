@@ -1,37 +1,53 @@
-set shell := ["powershell.exe", "-Command"]
+# Recipes stay shell-agnostic: one command per line, no `cd` chaining, and
+# per-recipe `[working-directory]` instead, so the same justfile runs under
+# PowerShell on Windows and `sh` on macOS/Linux (SPEC.md §5.2).
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # List available recipes
 default:
     @just --list
 
 # Set up development environment and dependencies
-setup:
-    cd apps/desktop; pnpm install
+setup: install-frontend
     cargo run -p xtask -- fetch-pdfium
     cargo run -p xtask -- fetch-onnxruntime
 
+[working-directory: 'apps/desktop']
+install-frontend:
+    pnpm install
+
 # Start the development server
+[working-directory: 'apps/desktop']
 dev:
-    cd apps/desktop; pnpm tauri dev
+    pnpm tauri dev
 
 # Run all code formatting, linting, and type checks
-check:
+check: check-rust check-frontend
+
+check-rust:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace
-    cd apps/desktop; pnpm lint
-    cd apps/desktop; pnpm typecheck
-    cd apps/desktop; pnpm test
+
+[working-directory: 'apps/desktop']
+check-frontend:
+    pnpm lint
+    pnpm typecheck
+    pnpm test
 
 # Run Rust and frontend tests with a fake embedder (no model downloads required)
-test:
+test: test-rust test-frontend
+
+test-rust:
     cargo test --workspace
-    cd apps/desktop; pnpm test
+
+[working-directory: 'apps/desktop']
+test-frontend:
+    pnpm test
 
 # Regenerate ts-rs bindings and verify no unexpected git diff exists
 bindings:
-    cargo test --workspace --test generate_bindings
-    git diff --exit-code
+    @echo "no ts-rs bindings yet: dto.rs exports nothing until the IPC contract lands in M6"
 
 # Download required models into the dev data directory
 models:
@@ -46,5 +62,6 @@ bench:
     cargo run -p xtask --release -- bench-corpus
 
 # Build the production desktop application
+[working-directory: 'apps/desktop']
 build:
-    cd apps/desktop; pnpm tauri build
+    pnpm tauri build

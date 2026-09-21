@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::discovery::Kind;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,7 +22,9 @@ pub struct IndexingConfig {
     pub include_hidden: bool,
     pub follow_symlinks: bool,
     pub max_file_size_mb: u64,
-    pub file_types: Vec<String>,
+    /// Kinds that get content extraction; others are indexed by filename
+    /// only. An unknown name fails deserialization, listing the valid ones.
+    pub file_types: Vec<Kind>,
     pub pause_on_battery: bool,
     pub worker_threads: u32,
     pub max_image_megapixels: u32,
@@ -46,13 +49,7 @@ impl Default for IndexingConfig {
             include_hidden: false,
             follow_symlinks: false,
             max_file_size_mb: 50,
-            file_types: vec![
-                "text".into(),
-                "code".into(),
-                "pdf".into(),
-                "office".into(),
-                "image".into(),
-            ],
+            file_types: vec![Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image],
             pause_on_battery: true,
             worker_threads: 0,
             max_image_megapixels: 64,
@@ -218,6 +215,21 @@ mod tests {
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded, Config::default());
         assert!(path.exists());
+    }
+
+    #[test]
+    fn unknown_file_type_is_rejected_at_load() {
+        // A typo would otherwise silently stop indexing that kind's content.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[indexing]
+file_types = [\"text\", \"pdfs\"]
+",
+        )
+        .unwrap();
+        assert!(matches!(load_from(&path), Err(Error::ConfigParse(_))));
     }
 
     #[test]

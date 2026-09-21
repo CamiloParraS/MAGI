@@ -850,3 +850,680 @@ were re-run manually against the actual downloaded int8 model.
       preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
       green; the 5 `#[ignore]`d real-model tests were run manually against
       the actual downloaded int8 model.
+
+### Pre-M4 review pass
+
+A full-repo review before starting M4. Three blocking findings were fixed in
+`crates/magi-core` (embedding-failure isolation, code-chunk re-splitting,
+`indexing.file_types` wiring); the smaller items below were closed in the
+same pass. `just check` green afterwards: 142 unit + 9 golden + 1 idempotence
+tests, `cargo fmt --check` and `cargo clippy --workspace --all-targets
+--all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+
+- [x] **Golden re-blessed after the code-chunk fix.** Routing code chunks
+      through `chunk::chunk_text` trims each piece, so three comment chunks in
+      `fixtures/golden/code_sample_rs.txt` lost a trailing `\n` — the only
+      drift in the file, and it matches what every other extractor already
+      produced. No eval query targets a code file (verified: 0 of 70), so the
+      M3 recall baseline in `docs/eval.md` is unaffected and was not re-run.
+- [x] **`indexing.file_types` names are validated.** An unknown name (a typo
+      like `"pdfs"`) used to silently stop indexing that kind's content.
+      `Config::validate` now rejects it as `Error::UnknownFileType`, checked
+      against `discovery::ALL_KINDS` rather than a second hand-written list.
+      Two tests: `unknown_file_type_is_rejected`,
+      `every_default_file_type_is_a_real_kind`.
+- [x] **`justfile` is cross-platform again.** It hard-coded
+      `set shell := ["powershell.exe", "-Command"]` and `cd x; y` bodies, so
+      every recipe failed on macOS/Linux — invisible in CI, which runs the raw
+      commands rather than `just`. Now `set windows-shell` plus per-recipe
+      `[working-directory:]` attributes, with `check`/`test` split into
+      `-rust`/`-frontend` halves so no recipe needs to change directory
+      mid-body. M4's HEIC spike needs all three OSes, hence fixing it now.
+- [x] **`just bindings` no longer references a nonexistent test target.** It
+      ran `cargo test --test generate_bindings`; there is no such target, no
+      `ts_rs` dependency and no `apps/desktop/src/bindings/`. The recipe (still
+      required by SPEC.md §5.2) now says bindings land with the M6 IPC
+      contract; CLAUDE.md and AGENTS.md updated to match.
+- [x] **Two `.unwrap()`s on a mutex removed** (`discovery/walk.rs`), per
+      CLAUDE.md's no-`unwrap` rule: `unwrap_or_else(|poisoned|
+      poisoned.into_inner())` — nothing in that closure breaks an invariant
+      when a walk panics.
+- [x] **Crate-wide `#![allow(dead_code)]` deleted** (`lib.rs`). An M0 stub
+      leftover: removing it produces zero warnings with or without
+      `--all-targets`. It was why an unused config field (`file_types`) looked
+      identical to a deliberately-unwired stub for three milestones.
+
+Open items from the same review, deliberately **not** fixed here because they
+belong to a later milestone's spec text: timed-out extraction threads are
+never reclaimed (`index/pipeline.rs` — matters for M4's HEIC/bomb RSS budgets),
+`discovery::walk` materializes every entry before indexing begins (M5's
+scheduler wants a stream), per-OS default exclusions from SPEC.md §5.2 are
+unimplemented (`%WINDIR%`, `~/Library`, `/proc`), and `config::save_to` does
+not `fsync` before rename.
+
+## M4 — Images: OCR, QR codes, visual embeddings, thumbnails
+
+### Slice 0 — fixture corpus, and what is not committed
+
+The image fixtures were shot by hand (SPEC.md §7 M4 requires self-shot iPhone
+photos). Three problems surfaced when they were about to be committed, all
+recorded in the new `fixtures/README.md`:
+
+- [x] **Personal data kept out of the repo.** `receipt_es.jpg` photographs a
+      real receipt carrying a full name, national ID number, phone, email and
+      address, and `phone_12mp_portrait/landscape.heic` photograph a card
+      addressed to the repo owner by name. All three, plus their transcribed
+      OCR ground truth (`fixtures/golden/ocr/personal.md`), are git-ignored.
+      **CI loses nothing measurable:** `phone_text_es.heic` (3000 × 4000) and
+      `shelf_christmas.heic` (4000 × 3000) are 12 MP iPhone HEICs in both
+      orientations, and SPEC.md §7 M4 only requires OCR CER on the English and
+      Spanish *screenshot* fixtures, which are committed. Redaction, not Git
+      LFS, is the answer if one of these ever has to ship.
+- [x] **`phone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
+      export (5492 × 3672, 16-bit) behind the name — both decoders reject it at
+      the container (`NoFtypBox` / `BoxTooLarge`). Renamed and git-ignored.
+      **SPEC.md §7 M4's "48 MP HEIC in < 3 s with RSS Δ < 400 MB" is therefore
+      still unverifiable**; it needs a real 48 MP shot (iPhone 14 Pro or later,
+      Resolution Control on).
+- [x] **Identifying metadata stripped, losslessly.** Every camera fixture
+      carried GPS coordinates (down to the neighbourhood), device make, model
+      and firmware build, and capture timestamps; the Samsung HEICs also
+      carried a proprietary `sefd` trailer with the network's mobile country
+      code and an on-device file path from the photo editor. New
+      `fixtures/scrub_metadata.py` removes all of it without re-encoding a
+      pixel — JPEG metadata segments dropped from the marker stream (and the
+      file truncated at the primary image's EOI, because a phone JPEG appends
+      a *second* complete JPEG after it, MPF-style, carrying its own EXIF and
+      XMP), HEIF metadata item payloads overwritten in place with a valid
+      empty replacement of the same length so no `iloc` offset moves, and the
+      `sefd` box truncated. **Nothing that a test needs was lost:** HEIC
+      orientation is the container's `irot` transform, not EXIF, and no
+      committed JPEG had a non-trivial EXIF `Orientation`. Verified after the
+      scrub: identical dimensions and container rotation, and byte-identical
+      decoded pixels from both `heic-rs` and `libheif-rs` on all five HEICs,
+      plus identical decoded pixels on all nine JPEGs. `--check` mode reports
+      identifying strings (not metadata structure) and is the gate to run
+      before committing a new image fixture.
+- [x] **The "iPhone" fixtures are not iPhone photos.** EXIF named a Samsung
+      Galaxy S24 FE, and a Galaxy A32 for `shelf_christmas.heic`. SPEC.md §7
+      M4 asks for self-shot *iPhone* HEICs. The filenames were kept so a real
+      iPhone shot can replace a file in place; structurally these are close
+      (tile grid, HEVC, aux HDR gain map) but Apple's Live Photo `.MOV`
+      sibling and 10-bit variants stay untested. Either supply iPhone shots
+      or amend SPEC.md §7 M4 — tracked in `fixtures/README.md`.
+- [x] **Housekeeping:** two byte-identical duplicate screenshots removed,
+      filenames normalized to the stems the M4 plan and the golden file use
+      (`screenshot_en.png`, `truncated.jpg`, `shelf_christmas.heic`, …), and
+      `*.ARW binary` dropped from `.gitattributes` since RAW is not a
+      supported kind (`discovery::classify` has no `arw`).
+
+### Slice 1 — HEIC decode spike → ADR-0003
+
+- [x] **A third option beat both the spec's.** The spike compared
+      `libheif-rs` 3.0.0 (Option A) against `heic-rs` 0.1.1, a pure-Rust
+      decoder first published 2026-09-12 and therefore absent from the spec.
+      Both produce identical dimensions on all five HEIC fixtures — including
+      the portrait ones, so both apply the container rotation — and their
+      4 × 4 mean-RGB fingerprints agree to within a few units per channel.
+      `heic-rs` is 1.3–2.3× faster and needs no native library, no LGPL
+      notice, no M8 bundling, and no per-OS CI install. Chosen; `libheif-rs`
+      is the documented fallback. SPEC.md §3, §4.3, §7 M4 and §9 Q8 updated.
+- [x] **Windows measurements** (release build, peak working set polled every
+      50 ms, one process per decode, ADR-0005's method; single run per cell):
+      12 MP decodes in 100–231 ms at 45–48 MB peak with `heic-rs`, versus
+      220–273 ms at 45–56 MB with `libheif-rs`. Full table in ADR-0003.
+- [x] **The Linux blocker that decided it.** `libheif-rs` 3.0.0 requires
+      libheif ≥ 1.17.0; Ubuntu 22.04 ships `libheif-dev 1.12.0-2build1`. On
+      the pinned `ubuntu-22.04` runner, Option A means either building libheif
+      from source in `xtask` or moving to `ubuntu-24.04` and raising the
+      AppImage's glibc floor — a spec change. Option C has neither problem.
+- [x] **`crates/magi-core/src/extract/heic.rs`** implements `is_heic` and
+      `decode_heic` (primary item only, rotation applied, rejected from the
+      header when over `max_megapixels`). Three tests, green: all committed
+      HEIC fixtures decode to the right size and are not uniform; a 1 MP
+      ceiling rejects a 12 MP photo as `ImageTooLarge`; non-HEIF bytes fail as
+      `Heic`. Local-only fixtures are skipped, never failed.
+- [x] `just check` green: 145 unit + 9 golden + 1 idempotence tests,
+      `cargo fmt --check` and `cargo clippy --workspace --all-targets
+      --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+
+- [x] **CI green on all three runners** (ubuntu-22.04, macos-14,
+      windows-latest), which is SPEC.md §7 M4's "a spike branch must produce a
+      CI build for all three OSes before the decision". Nothing had to be
+      installed on any runner — the point of choosing `heic-rs`.
+
+Open, carried into Slice 2:
+
+- **The 48 MP HEIC fixture could not be produced.** Two failures, logged here
+  so the next attempt does not repeat them:
+  1. Every high-resolution shot available came out as **JPEG, not HEIC**. The
+     phone is a Galaxy S24 FE, whose 50 MP mode appears to fall back to JPEG
+     even with "High efficiency pictures" enabled.
+  2. **Converting those JPEGs to HEIC produced corrupt files** (tool and error
+     text not captured — record them next time). This repo has no HEIF
+     *encoder* to do it properly either: `heic-rs` is decode-only, and the
+     vcpkg libheif install ships no `heif-enc`.
+
+  So SPEC.md §7 M4's "decoding a 48 MP HEIC keeps the RSS delta < 400 MB and
+  completes in < 3 s" is **unverified and currently unverifiable**. The
+  12 MP numbers (100–231 ms, 45–48 MB peak) extrapolate to roughly 180–220 MB
+  and under a second, but ADR-0003's 116 MB outlier shows thread count moves
+  that number more than pixel count does, so the extrapolation is not
+  evidence. Three ways out, in order of cost — **needs a human decision**:
+  a. Shoot 50 MP with HEIF forced on the Galaxy (Camera → Advanced picture
+     options → High efficiency pictures), or borrow an iPhone 14 Pro or later
+     with Resolution Control on. This also closes the separate "these are not
+     iPhone photos" gap.
+  b. ~~Generate one~~ — **rejected 2026-09-20.** It would mean building
+     libheif (and so cmake, libde265 and x265) from source purely to make one
+     test fixture, and the result would not be tile-gridded the way a phone's
+     is unless the encoder were told to tile it. High cost, and it would test
+     the budget against a decode path we do not actually ship against.
+  c. Amend SPEC.md §7 M4 to state the budget against the largest available
+     fixture, scaled by pixel count, and record why. Cheapest, and honest,
+     but it drops a real verification item.
+
+  **Parked as a known gap** (option a, deferred): the item stays open and
+  unmeasured, and the number gets filled in when a real 48 MP HEIC exists.
+  Nothing else in M4 is blocked on it.
+- **`embedded_thumbnail` was not written.** `heic-rs` decodes the primary item
+  only and exposes no way to select the `thmb` item, so the function could
+  only ever return `Ok(None)`. Slice 2 downscales the thumbnail from the
+  decode OCR and embedding already need. ADR-0003 records the trade.
+- **`rxing` 0.9.3 does not compile** against the `png` version it resolves to
+  today (six `E0599`s in its own `image` feature). Found while trying to
+  verify the QR fixture payloads; Slice 2 owns pinning or patching it.
+
+### Slice 2 (part 1) — the single image decode point
+
+- [x] **`crates/magi-core/src/extract/image.rs`.** Every image kind decodes
+      here and nowhere else, so the bomb defence and the orientation fix are
+      applied exactly once: `probe_dimensions` / `probe_megapixels` read the
+      header without allocating, `decode_bounded` refuses anything over
+      `max_megapixels` from that header, then decodes to RGB8 with the image
+      upright. HEIC is routed to `extract::heic`; everything else goes
+      through the `image` crate, which supplies orientation from EXIF for
+      JPEG and TIFF.
+- [x] **Decompression bomb rejected without allocating.** `bomb.png` declares
+      20000 × 20000 (1.2 GB as RGB) in 1.1 MB. It is refused as
+      `ImageTooLarge` from the header; the test asserts that takes under
+      250 ms, which it cannot if anything is being decoded. The RSS half of
+      SPEC.md §7 M4's budget follows from no decoder ever being constructed —
+      **the measured number is still owed**, and lands with Slice 6's other
+      budget measurements.
+- [x] **`fixtures/corpus/edge/rotated_exif.jpg`**, generated by the new
+      `fixtures/corpus/generate_images.py`. Stripping EXIF from the photo
+      fixtures removed the only JPEG that could exercise SPEC.md §7 M4's
+      "EXIF orientation applied for all formats"; this one is 64 × 32 stored,
+      tagged `Orientation = 6`, and must decode 32 × 64. Generated rather
+      than shot because a camera will not reliably produce a known
+      orientation, and it carries no metadata worth stripping.
+- [x] `image` 0.25.10 codec features pinned to exactly the extensions
+      `discovery::classify` accepts (png, jpeg, gif, bmp, tiff, webp), so no
+      decoder we never reach gets linked in. HEIC is deliberately absent —
+      that is `heic-rs`'s job (ADR-0003).
+- [x] `just check` green: 151 unit + 9 golden + 1 idempotence tests, fmt and
+      clippy clean, frontend lint/typecheck/test pass.
+
+- [x] **The metadata gate, extended, found a leak in an M2 fixture.**
+      Teaching `--check` about PDF `/Author`, `dc:creator` and
+      `xmpMM:DocumentID` — and scoping it to binary fixture formats so text
+      fixtures stop false-positiving — turned up
+      `fixtures/corpus/edge/huge_real.pdf`: a Microsoft PowerPoint 2019
+      export naming a real third party in three places, with a document UUID
+      and an embedded image's EXIF. It is also third-party content, which
+      SPEC.md §8 says the fixtures are not. **Committed since M2, so it is in
+      git history** — left in place pending a human decision (replace it with
+      a `generate_pdfs.py` equivalent, and separately decide whether the
+      history is worth rewriting). The three reportlab PDFs were checked and
+      are clean (`/Author (anonymous)`); `password_protected.pdf`'s author
+      field is ciphertext, which the gate now recognizes rather than reports.
+
+**The `IndexContext` refactor was deliberately not done yet.** The M4 plan
+puts it first in Slice 2, to keep the image-branch diff readable when
+`index_root` grows `image_embedder` and `ocr` parameters. Done now it is a
+pure-churn commit: a two-field struct wrapping arguments that already exist,
+with no behaviour change and nothing yet needing it. It lands in the commit
+that adds those parameters, where the churn is justified by what it carries.
+Only three call sites outside `pipeline.rs` (`magi-cli`'s `eval` and `main`,
+and `tests/idempotence.rs`), so it stays cheap either way.
+
+Next in Slice 2: `rxing` QR decode (blocked on the `png` version conflict
+logged above), `blake3` content hashing, the 256 px thumbnail cache, and the
+`Dispatch::Image` branch in `index::pipeline` with the `IndexContext`
+refactor alongside it.
+
+### Slice 2 (part 2) — QR decoding and the thumbnail cache
+
+- [x] **`rxing` wired without its `image` feature**, which also resolves the
+      `png` build failure logged above: the failure was inside rxing's own
+      `image` feature, which pulls a second image/png stack whose API it no
+      longer matches. We never needed it — `extract::image` has already
+      decoded and straightened the pixels, and letting rxing re-decode the
+      file would double both the work and the memory. `Luma8Source` takes the
+      buffer directly. Features pinned to `qrcode`, `decoders`,
+      `multi_barcode_readers` and `encoding_rs`; the last is not optional,
+      since without it rxing fails to compile and the Spanish payload would
+      have nowhere to come from. 1D barcodes are one more flag (`oned`) when
+      a fixture and an eval query ask for them.
+- [x] **A photographed QR does not decode at full resolution.** Measured
+      across scale × binarizer × hint combinations: at 1834 × 1546 every
+      combination returns `NotFoundException`; the JPEG fixture decodes once
+      shrunk 1/2 and the HEIC once shrunk 1/4. `TryHarder` made no difference
+      at any scale, so it is not enabled — it only costs time. `decode_barcodes`
+      therefore walks a scale ladder (1, 2, 4, 8, stopping when the short
+      edge drops below 100 px) and returns the first scale that reads
+      anything. Marked `ponytail:` — the real fix is estimating the module
+      size once and resampling to it, worth doing only if QR shows up in the
+      indexing profile.
+- [x] **SPEC.md §7 M4's QR payload item is closed on the decode side**: both
+      generated fixtures decode to their exact recorded payloads (including
+      the accented Spanish one), and the photographed QR decodes to the same
+      payload from the HEIC and the JPEG — the "OCR and QR work on the HEIC
+      fixtures exactly as on their JPEG equivalents" check, for QR. The two
+      search queries (`qr code` / `código QR`) still need the chunk text and
+      land with the pipeline wiring.
+- [x] **`thumbs`**: `thumb_key` (lowercase hex of the blake3 content hash),
+      `thumb_path` (`<cache_dir>/thumbs/<first two hex chars>/<key>.jpg`, so
+      no directory holds more than a few thousand entries) and
+      `write_thumbnail` (Lanczos3 down to a 256 px long side, never
+      upscaling, JPEG quality 80). Keyed by content rather than path, so two
+      copies of a photo share one thumbnail and a rename keeps its own.
+- [x] `just check` green: 157 unit + 9 golden + 1 idempotence tests, fmt and
+      clippy clean, frontend lint/typecheck/test pass.
+
+Still open in Slice 2: the `blake3` dependency and content hashing, the
+`files.content_hash` / `files.thumb_key` columns, `Dispatch::Image` in
+`index::pipeline` (with the `IndexContext` refactor alongside it), PDF
+first-page thumbnails through the existing `pdfium-render` path, `vec_image`
+deletion on re-index, and reclaiming timed-out extraction threads.
+
+### Slice 2 (part 3) — decisions closed, then the OCR seam and `extract_image`
+
+- [x] **`edge/huge_real.pdf` reviewed and kept** (2026-09-20). The names its
+      metadata and slides carry are example names, not sensitive. It is
+      allowlisted by name in `scrub_metadata.py` with that reason recorded
+      inline — a gate that always reports the same known finding is a gate
+      people learn to ignore, so the exemption is explicit and nothing else
+      is exempt. The gate is now clean over every tracked fixture.
+- [x] **SPEC.md §7 M4 no longer names a vendor** (2026-09-20). It asked for
+      self-shot *iPhone* HEICs; what the decoder actually has to cope with is
+      the container — a tile grid, an aux HDR gain map, a rotation transform
+      — not who made the phone. The fixtures were renamed `iphone_*` →
+      `phone_*` to stop the filenames claiming something untrue, and SPEC.md
+      §5.2's `max_image_megapixels` comment, ADR-0003 and
+      `fixtures/README.md` follow. The 48 MP gap is unaffected: it is about
+      resolution, not brand.
+- [x] **`ocr::OcrEngine` + `NoOcr`.** The seam ADR-0006's winner drops into,
+      so the losing candidate is never written and the pipeline does not
+      change when the real engine lands. `NoOcr` is also the permanent
+      fallback for when the OCR models are absent: the image still gets its
+      QR payloads, thumbnail and filename chunk.
+- [x] **`extract::image::extract_image`.** One decode, everything derived
+      from it, and the full-resolution buffer dropped before returning
+      (SPEC.md §5.3). Barcode detection runs at full resolution because the
+      scale ladder needs the detail; OCR gets a copy capped at 2048 px on the
+      long side (SPEC.md §5.3); the thumbnail comes out at 256 px. QR chunks
+      are written as `QR code / código QR: {payload}` so **both** of SPEC.md
+      §7 M4's required queries match the same chunk — asserted in the test
+      rather than left to the eval run.
+- [x] `just check` green: 159 unit + 9 golden + 1 idempotence tests, fmt and
+      clippy clean, frontend lint/typecheck/test pass.
+
+### Slice 3 - OCR engine (ADR-0006)
+
+- [x] **OCR spike decided: PaddleOCR PP-OCRv5 mobile det + Latin rec** over
+      `ocrs`, whose alphabet has no accented characters (ADR-0006). Official
+      `PaddlePaddle` ONNX exports, Apache-2.0, pinned by revision and SHA-256
+      in `models/manifest.toml` (`ocr` slot, ~12.9 MB).
+- [x] **`ocr::paddle::PaddleOcr`** implements `OcrEngine` over `ort`: DB
+      post-processing with rotated boxes, straightened crops, CTC decode with
+      the dictionary read from `rec.yml`. No new dependencies.
+      `E5Embedder`'s ONNX Runtime init is now `init_onnxruntime()`, shared.
+- [x] **CER (SPEC.md §7 M4, <= 10%):** EN screenshot 0.031, ES screenshot
+      0.000, phone photo 0.022 (JPEG) / 0.013 (HEIC). Accents and `¿ « » —`
+      recognized. **Known gap: `¡` is not in the model's dictionary.**
+- [x] `magi-cli` index/eval use the real engine unless `MAGI_FAKE_EMBEDDER=1`;
+      missing OCR models degrade to `NoOcr` with a warning.
+- [x] **Peak RSS measured:** OCR adds ~310 MB (885 MB with OCR vs. 576 MB
+      for the same image pipeline without it; 7 fixtures incl. 12 MP HEICs).
+      The 1.5 GB NFR-11 check with all models is still owed (needs SigLIP).
+- [x] **Receipt and phone-photo CER:** receipt 0.773, 12 MP portrait 0.401,
+      landscape 0.463 - the Python reference pipeline gets 0.784 / 0.339 /
+      0.451, so this is the model's limit on hard photos, not a port bug. Not
+      SPEC-required (only the two screenshots are).
+- [ ] The engine is not yet wired into the Tauri app / `Engine` (only the CLI);
+      `Engine` does not run `index_root` until M5.
+- [x] `cargo clippy --workspace --all-targets -D warnings` clean; workspace
+      tests pass (166 unit + integration; 5 ignored need real models).
+
+### Slice 4 - SigLIP 2 and the visual list (ADR-0007)
+
+- [x] **Variant chosen (ADR-0007): 256 px, q4f16 for both towers.** int8 is
+      rejected (image cosine 0.64 min, recall@1 0.96 -> 0.76); fp16 is exact
+      but its text tower costs 719 MB. q4f16 matches fp32's retrieval at
+      80 MB (vision) / 447 MB (text). Sources pinned by revision and SHA-256
+      in the manifest's `image` slot.
+- [ ] **SPEC gate missed by 0.001, needs a human call:** q4f16 image parity is
+      0.969 mean / 0.952 min against SPEC.md §7 M4's 0.97. Retrieval is
+      identical to fp32. Either accept it (amend the gate to compare
+      retrieval) or move the vision tower to fp16 (+290 MB while indexing).
+      It is a manifest edit either way.
+- [x] **Parity in Rust vs. the PyTorch reference (q4f16):** text cosine
+      0.994-0.998 on 25 EN/ES queries; image 0.954-0.984, mean 0.968.
+      `tools/siglip_reference.py` regenerates the reference vectors.
+- [x] `SigLipEmbedder` (per-tower lazy `ModelSlot`s), `vec_image` written by
+      the pipeline, `search_vector_image` fused as a third RRF list (weight
+      0.8) behind a cosine floor of 0.10.
+- [x] **Eval extended to 97 queries, 27 image queries (>= 20 required):**
+      hybrid recall@5 = 1.000 on `img`, MRR 0.963; overall hybrid recall@5
+      0.990. Recorded in docs/eval.md, which also records the floor finding.
+- [x] **The four SPEC.md §7 M4 search queries:** `qr code`, `código QR`,
+      `dog on the beach`, `perro en la playa` each return a matching fixture
+      in the top 3.
+- [x] **Peak RSS with all models loaded, whole fixture corpus: 1340 MB**
+      (limit 1.5 GB).
+- [x] `cargo clippy --workspace --all-targets -D warnings` clean; workspace
+      tests pass.
+
+Still open in M4: thumbnails through the scoped asset protocol; the 48 MP
+HEIC budget (no valid 48 MP fixture); the bomb-rejection RSS delta (< 200 MB)
+and a green three-OS CI run; the parity-gate call above.
+
+### Slice 5 - thumbnails over the asset protocol, and the image RSS budgets
+
+- [x] **Thumbnails are served through a scoped asset protocol.** `thumbs_dir()`
+      is the cache root; the Tauri app enables `assetProtocol` with an empty
+      static scope, the `protocol-asset` feature, and CSP
+      `img-src 'self' asset: http://asset.localhost`, then grants exactly
+      `thumbs_dir()` at startup (`app.asset_protocol_scope().allow_directory`).
+      The scope is granted at runtime because the cache lives under the magi
+      data directory (`directories` or `MAGI_DATA_DIR`), which the Tauri
+      identifier cannot name. **Compile- and clippy-verified only:** nothing in
+      the frontend requests a thumbnail until M6, so the protocol has not been
+      exercised end to end.
+- [x] **Decompression bomb (SPEC.md §7 M4, RSS delta < 200 MB):** rejecting
+      `edge/bomb.png` costs **0 MB** of RSS (6 MB baseline, 6 MB peak, polled at
+      5 ms over 30 repeats) and 51 microseconds each: refused from the header.
+- [x] **48 MP HEIC: measured on a synthetic file, see Slice 6.**
+
+### Slice 6 - decisions closed, HEIC goldens, and the 48 MP budget
+
+- [x] **SigLIP parity gate: accepted (2026-09-20).** q4f16's 0.969 mean image
+      cosine keeps retrieval identical to fp32; a <1% shortfall is not worth
+      +290 MB of RSS (fp16 vision). SPEC.md §7 M4 is amended and ADR-0007's
+      status updated.
+- [x] **Three-OS CI: green** (reported by the project owner after the push).
+- [x] **HEIC golden thumbnails** (`tests/thumb_golden.rs`,
+      `fixtures/golden/thumbs/`): the three committed HEIC fixtures, portrait
+      (`phone_text_es`), landscape (`shelf_christmas`) and a QR photo
+      (`phone_qr`). The goldens were viewed and are upright (status bar on
+      top, Santa standing, QR finder patterns top-left/top-right/bottom-left
+      with the plain corner bottom-right, i.e. unmirrored). The comparison
+      (mean abs diff <= 4/255) also asserts that a rotated-180, mirrored or
+      flipped copy of each thumbnail lands above 8/255, so it can actually
+      catch the bug it exists for. This is stronger than the existing
+      dimensions-only unit test, which a 180-degree rotation would pass.
+- [x] **48 MP HEIC budget: met, on a synthetic file.** Real ones could not be
+      found (a phone at minimum compression still writes ~4 MB HEICs at
+      12 MP; the largest non-RAW images found were ~19 MB JPEGs), and the
+      earlier objection to generating one (build libheif from source; might
+      not be tile-gridded) no longer applies: `pillow-heif` ships prebuilt
+      wheels and its output is a real tile grid (1 `grid` over 193 `hvc1`
+      tiles, the same structure as the phone fixtures, checked by reading the
+      item types). `tools/synthetic_heic_48mp.py` builds it; `tests/heic_budget.rs`
+      (ignored, needs `MAGI_HEIC_48MP`) checks the time. Release build, three
+      runs, RSS polled at 5 ms: **0.28-0.30 s, 291 MB delta** against 3 s and
+      400 MB. The 12 MP figure measured the same way is 0.09 s / 75 MB, so it
+      scales linearly. Caveat: smoother content than a real 48 MP photo, so time
+      may be slightly optimistic; memory is content-independent.
+
+- [x] **Fixed: unsupported RAW files were reported as errors.**
+      `images/mustang_landscape.arw` (Sony RAW) indexed as `error` ("required tag
+      `ImageWidth` not found"): `discovery::classify` has no `arw`, as
+      `fixtures/README.md` intends, but for an unknown extension it fell back to
+      `infer` magic-byte sniffing, which reads TIFF-based RAW containers (ARW,
+      CR2, NEF, DNG, ...) as TIFF, so they reached the TIFF decoder and failed.
+      `classify` now names the common RAW extensions and files them as `Other`
+      (filename-only) before sniffing; the same bytes with no extension are still
+      sniffed as a TIFF. Test: `camera_raw_is_not_sniffed_into_an_image`.
+- [x] **Fixed: an image over the megapixel cap was an `error`, SPEC says
+      `skipped`.** SPEC.md §5.2 and §7 M4 both say images over
+      `max_image_megapixels` are skipped, but the pipeline recorded
+      `ImageTooLarge` as `error`, so a real 75 MP panorama would sit in the error
+      list with a retry. It is now `skipped` with `skip_reason = image_too_large`.
+      Test: `image_over_the_megapixel_cap_is_skipped_not_errored` (via
+      `edge/bomb.png`). The eval now shows exactly the three intentional errors.
+- [x] **New fixtures (owner-supplied, 2026-09-21).** `phone_figurine.heif`
+      (12 MP iPhone photo, the only `.heif`-extension fixture; committed after
+      its GPS/vendor EXIF was removed with `fixtures/scrub_metadata.py`, since the
+      copy that arrived still carried it, and after being viewed) plus two
+      royalty-free stock JPEGs kept local-only like the RAW (`VW_beetle.jpg`,
+      45 MP, GPS EXIF scrubbed; `city_landscape.jpg`, 75 MP): 18 MB each is too
+      much to add to every clone. `fixtures/README.md` and `.gitignore` list them.
+      The original name `phone_48mp_landscape.heif` was wrong (12 MP, portrait),
+      so it was renamed. Two eval queries cover the figurine (`img` bucket is now
+      29).
+
+- Known gap (M4 review): the thumbnail cache has no garbage collection, so thumbnails of deleted files stay on disk. `write_thumbnail` no longer resizes (callers pass 256 px) and writes via a `.tmp` rename.
+
+### Slice 7 - the 2026-09-21 photo batch
+
+- [x] **Orientation is verified against an independent reference.** Six goldens
+      now cover it: the three earlier HEICs plus `Frontphoto.heic` and
+      `Upsidedown.heic` (both a 90-degree `irot`, alongside the earlier 270 and 0) and
+      `Portrait_photo.jpg` (EXIF `Orientation = 6` only). **The names are
+      misleading:** neither HEIC has an `imir` box or a 180-degree `irot`, so no
+      committed fixture covers a mirror or a half turn. The half turn is covered by
+      `every_irot_angle_decodes_as_the_same_picture_turned`, which patches the
+      one-byte `irot` angle of a real photo in memory and checks all four angles
+      decode as exact quarter turns of each other. Mirroring is still untested. Each golden is within 3-12/255 of a PIL
+      `exif_transpose` reference and 4-10x closer to it than to any of its
+      rotated, mirrored or flipped variants (35-89/255). Cost: 7.6 MB of new
+      fixtures, all the owner's own shots; drop the two HEICs and the JPEG if that
+      is too much for the repo.
+- [x] **Scrubbing kept the pixels and, where needed, the orientation.** The
+      three phone shots carried Samsung device strings and XMP. After
+      `scrub_metadata.py`, decoded pixels are bit-identical before and after.
+      The scrubber drops EXIF `Orientation`, which would have turned
+      `Portrait_photo.jpg` sideways, so an Orientation-only block was put back
+      (the checker allows that one tag).
+- [x] **Eval extended to 164 queries over 113 files** (docs/eval.md):
+      hybrid recall@5 0.957 overall, 0.981 on the 54 new visual queries (visual
+      list alone 0.963), OCR 1.000, peak RSS 1271-1348 MB.
+- [ ] **Open: `cross` text recall fell 0.900 to 0.750** as the corpus grew from
+      60 to 113 files (text-vector-only fell equally: image filename and OCR
+      chunks crowd `vec_text`). Diagnosed, not fixed; see docs/eval.md.
+- [ ] **Open: HEIC colour differs from libheif** by ~8-13 levels on every HEIC
+      fixture, with crushed blacks in `heic-rs`. Cause and correct side not
+      established; contradicts ADR-0003's identical-pixels claim. See the
+      correction appended to ADR-0003. Affects OCR and embedding inputs slightly,
+      not orientation.
+- [ ] **Open: a small QR in a large photo is not found** (the war-grave photo),
+      although both our decoder and OpenCV read it from a crop. The scale ladder
+      only downsizes; tiled native-resolution scanning is the likely fix.
+      Also undecoded: the Pepsi-can QR (curved) and the 1D barcode.
+- [ ] **Open: OCR on a curved can label** is CER 0.92 (read "PERS N"); the
+      handwriting-style Spanish page is 0.29 (`¡` still missing).
+- [x] **Fixture policy.** The 51 non-phone files (148 MB, provenance not recorded
+      per file, at least three look like Wikimedia Commons material) are in the
+      gitignored `fixtures/corpus/local/`. Promoting a file is a `git mv` plus a
+      provenance line in `fixtures/README.md`. `porsche_car.jpg` (147 MP) is a
+      real over-the-cap file: skipped as `image_too_large`, still findable by
+      name.
+- Notes on `fixtures/golden/ocr/fixture_stem.txt` (the owner's file, not edited):
+  five descriptions contain `[cite: 6]` paste artifacts, and the QR entry for
+  the three-code image says `ver1/ver2/ver3` where the decoded payloads are
+  `Ver1`, `Version 2`, `Version 3 QR Code`.
+- The working tree also holds an uncommitted refactor by someone else (OCR
+  failure keeps the QR chunks, atomic thumbnail writes, one dimension probe,
+  a fail-fast OCR lock). It was not made or committed here; fmt, clippy and all
+  172 unit tests pass with it applied.
+
+### Slice 8 - small QR codes in large photos
+
+- [x] **Fixed: the war-grave photo's QR is now decoded** (`http://en.qrwp.org/Adrian_Warburton`),
+      closing the open item in slice 7. After the shrink-only ladder finds nothing,
+      `qr::decode_barcodes` scans overlapping native-resolution square tiles (half
+      the short edge, half overlap) of any image up to 6 MP. The prototype found
+      the code with tiles at a half, a third and a quarter of the short edge; the
+      half (12-15 tiles) is the cheapest. Test:
+      `a_small_qr_in_a_large_busy_photo_is_found_by_tiling` (local-only fixture, a
+      skip when absent) and `tiles_cover_the_whole_axis_with_half_overlap`.
+- [x] **Cost, measured over the ~50 non-QR images in the corpus (release):** images
+      up to 6 MP with no code average 42 ms (0.9 MP) against 30 ms before; images
+      over 6 MP are unchanged (~40 ms per MP), because their codes are big enough
+      for the ladder. **No false positives:** every payload returned across the
+      corpus is a real code. The 6 MP cap is the ceiling: a code under ~100 px in a
+      larger frame is still missed (marked `ponytail:` in `qr.rs`).
+- [ ] Still undecoded: the Pepsi-can QR (curved label; ours and OpenCV fail even
+      on a crop) and the 1D barcode.
+
+### Slice 9 - the `cross` regression
+
+- [x] **Fixed: text cross-language recall is back to 0.900** (was 0.750 after the
+      photo batch). Cause: OCR on text-free photos emits stray glyphs that became
+      `ocr` chunks and crowded `vec_text` (23 of 60 OCR chunks had fewer than 6
+      letters and digits). `extract_image` now drops OCR output below
+      `MIN_OCR_ALNUM = 6`. Hybrid recall@5 0.957 -> 0.982 over 164 queries, no
+      bucket worse. Test: `stray_ocr_glyphs_from_a_photo_are_not_indexed_but_real_text_is`.
+      Closes the open item in slice 7.
+- [x] **Negative results recorded** (docs/eval.md): weighting image filename
+      chunks down did not help and hurt image recall; dropping all filename-only
+      semantic hits lost most cross-language text queries. The filename chunk stays
+      as the spec has it.
+- [ ] Trade-off to know: real 4-5 letter text alone in a photo is not indexed
+      (marked `ponytail:` in the code). Threshold 4 also recovers most of the loss
+      (cross 0.850) if that matters more.
+
+## M4 sign-off (images: OCR, QR codes, visual embeddings, thumbnails)
+
+Requested by the owner on 2026-09-21. Every SPEC.md §7 M4 verification item below
+either passes or has a recorded, owner-accepted exception. This is the one place
+that collects them; the evidence lives in the slices above, `docs/eval.md`, and
+ADR-0003 / 0006 / 0007. SPEC.md's own checkboxes are left as they are (M3's were
+too); this section is the record.
+
+### Verification items
+
+| # | SPEC.md item | Result | Evidence |
+| - | --- | --- | --- |
+| 1 | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32 | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries). | ADR-0007, slice 4 |
+| 2 | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7 |
+| 3 | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly. | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
+| 4 | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11) | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries. | docs/eval.md |
+| 5 | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why. | ADR-0006, slice 3 |
+| 6 | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3 | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3. | slices 2, 4 |
+| 7 | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3 | **Pass.** | slice 4 |
+| 8 | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error. | slice 5, slice 7 |
+| 9 | Eval extended with >= 20 image queries, results in `docs/eval.md` | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900. | docs/eval.md |
+
+Also true at sign-off: `cargo fmt` and `cargo clippy --workspace --all-targets
+--all-features -D warnings` clean; 175 unit tests plus the golden, idempotence,
+image-index and thumbnail tests pass.
+
+### Code-quality review before sign-off (2026-09-21)
+
+A strict structural review of the branch diff (`main...feat/image-search`, 36 Rust
+files). Behaviour is unchanged apart from the panic-message bug below. Net
+-300 lines.
+
+- **`index/pipeline.rs` had grown from 730 to 1,097 lines.** Extraction isolation
+  (timeout, panic containment, stuck-thread cap) moved to `index/isolate.rs`
+  along with its test. The file is now 877 lines.
+- **Three structs carried the same data.** `ImageArtifacts`, the pipeline's
+  private `Extracted`, and half of `FileOutcome` all held
+  chunks/lang/thumbnail/image embedding. `ExtractedDoc` now carries
+  `thumbnail` and `image_embedding` itself, so the other two are gone and
+  `FileOutcome` holds a `doc`. The nine extraction goldens were re-blessed: the
+  only change is two `None` lines each.
+- **`Dispatch` was a copy of `Kind`.** Once images had an extractor, the enum
+  matched `Kind` one to one. It is deleted, and extraction matches `Kind` directly.
+- **`indexing.file_types` was `Vec<String>`,** checked by hand against
+  `ALL_KINDS` and matched with string comparisons. It is now `Vec<Kind>`, so serde
+  rejects an unknown name at load time and lists the valid ones.
+  `ALL_KINDS`, `Error::UnknownFileType` and the validation loop are deleted. The
+  TOML format is unchanged.
+- **Shared ONNX Runtime setup lived in `embed::e5`.** OCR imported from the text
+  embedder, and `E5Embedder::load` still had its own inline copy of
+  `build_session`. It is now `crate::onnx::{init, session}`, used by e5, SigLIP
+  and PaddleOCR.
+- **Thumbnail storage** (content-hash key, skip if already cached, write) moved from
+  the pipeline to `thumbs::store`.
+- **The embedding-failure fallback** was an inline branch in the per-file loop. It
+  is now the `embed_chunks` helper.
+- **Bug, also on `main`:** a contained extraction panic was always recorded as
+  "unknown panic". `panic_message(&payload)` downcast the `Box` rather than its
+  contents. Fixed with `&*payload`, and a new `isolate` test covers it.
+- **`discovery/classify.rs` held raw NUL bytes** in a test's TIFF literal, so git
+  treated it as a binary file and showed no diffs for it. The bytes are now written
+  as ` ` escapes.
+- **`OcrEngine::engine_id`'s doc claimed a `meta.ocr_engine_id` key.** Nothing
+  writes that key, and SPEC.md §5.5 doesn't list it. The doc is corrected; see
+  "For M5".
+
+Considered and left alone: `rank_and_boost` takes three positional hit lists.
+That works, but a fourth source should become a list of `(source, hits, weight)`.
+`IndexContext::image_embedder` is an `Option`, while OCR uses the `NoOcr` null
+object. The two are inconsistent but both are clear.
+
+After the review: `just check` is green (fmt, clippy `-D warnings`, 175 unit tests
+plus the golden, idempotence, image-index, HEIC-budget and thumbnail tests, and the
+frontend checks).
+
+### Deliverables
+
+- Image decoding with limits and orientation (one decode point): done.
+- HEIC extractor (`heic-rs`, ADR-0003): done. On the disagreement with libheif's
+  colours see "Resolved" below.
+- OCR (`PaddleOcr` behind `OcrEngine`, ADR-0006): done.
+- `rxing` QR decoding into `qr` chunks: done, including tiled scanning of small
+  codes in images up to 6 MP.
+- SigLIP 2 image and text towers, `vec_image`, visual list in hybrid search
+  (ADR-0007): done, behind a cosine floor of 0.10 that the spec does not have.
+- Thumbnail cache (256 px, keyed by content hash) served through the scoped asset
+  protocol: **the cache is done and tested; the asset protocol is wired and
+  compile-checked only**, because nothing in the frontend requests a thumbnail
+  until M6.
+
+### Exceptions the owner accepted
+
+1. Image parity 0.969 mean against 0.97 (2026-09-20).
+2. 48 MP measured on a synthetic HEIC (2026-09-20).
+3. `¡` not recognized by OCR (2026-09-21).
+
+### Resolved
+
+- **HEIC colours.** `heic-rs` and libheif (via `pillow-heif`) disagree by ~8-13
+  levels. The owner, asked to check `Frontphoto.heic` in Windows Photos on 2026-09-21,
+  reported the dark shelf is **black**, as `heic-rs` renders it, not lifted as libheif renders
+  it. One file in one viewer, but it points at `heic-rs` being the right one, so
+  nothing changes. ADR-0003's correction is updated.
+
+### Known limits carried into M5 (none blocks it)
+
+- The 0.10 visual cosine floor was calibrated on 15 images; a real photo library
+  needs re-measuring. Some text queries already pull a related photo through it.
+- OCR: a curved can label reads CER 0.92, a handwriting-style page 0.29, a receipt
+  0.77. Real 4-5 letter text alone in a photo is not indexed (`MIN_OCR_ALNUM`).
+- QR: a code under ~100 px in an image over 6 MP, the curved Pepsi-can code, and
+  1D barcodes are not decoded.
+- `cross` text recall is 0.900 and rank-sensitive (the expected document is the
+  twin of the one ranked first); `informe de ingresos trimestrales` is a standing
+  miss.
+- No fixture covers an `imir` mirror box. The synthetic 48 MP file is smoother
+  than a real photo, so its time may be slightly optimistic.
+- The asset protocol is unexercised until M6.
+- The `fp32` recall comparison for SigLIP used 25 queries on 15 images; it was not
+  repeated on the 164-query eval.
+
+### For M5
+
+Not part of M4, but M5 inherits these from it: the `meta.image_model_id` and
+`meta.text_model_id` re-embed trigger (deliverable in M5), thumbnail garbage
+collection (deleted files' thumbnails stay on disk), and the OCR engine and
+SigLIP embedder not yet being owned by `Engine`. An OCR engine change does not
+re-queue images: that needs an `ocr_engine_id` `meta` key. The owner approved
+adding it on 2026-09-21; SPEC.md §5.5 and M5's re-embed trigger now list it. Also,
+`PaddleOcr::load` is eager. Unlike SigLIP, it is not a lazy `ModelSlot`, so it
+does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.

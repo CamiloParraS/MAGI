@@ -25,6 +25,9 @@ pdfium-render = { workspace = true }
 zip = { workspace = true }
 quick-xml = { workspace = true }
 calamine = { workspace = true }
+heic-rs = { workspace = true }
+image = { workspace = true }
+rxing = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
@@ -37,6 +40,7 @@ tree-sitter-go = { workspace = true }
 tree-sitter-c-sharp = { workspace = true }
 tokenizers = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
 ureq = { workspace = true }
 ort = { workspace = true }
 ndarray = { workspace = true }
