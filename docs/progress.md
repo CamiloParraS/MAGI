@@ -1304,3 +1304,56 @@ and a green three-OS CI run; the parity-gate call above.
       The original name `phone_48mp_landscape.heif` was wrong (12 MP, portrait),
       so it was renamed. Two eval queries cover the figurine (`img` bucket is now
       29).
+
+### Slice 7 - the 2026-09-21 photo batch
+
+- [x] **Orientation is verified against an independent reference.** Six goldens
+      now cover it: the three earlier HEICs plus `Frontphoto.heic` and
+      `Upsidedown.heic` (both a 90-degree `irot`, alongside the earlier 270 and 0) and
+      `Portrait_photo.jpg` (EXIF `Orientation = 6` only). **The names are
+      misleading:** neither HEIC has an `imir` box or a 180-degree `irot`, so no
+      committed fixture covers a mirror or a half turn. The half turn is covered by
+      `every_irot_angle_decodes_as_the_same_picture_turned`, which patches the
+      one-byte `irot` angle of a real photo in memory and checks all four angles
+      decode as exact quarter turns of each other. Mirroring is still untested. Each golden is within 3-12/255 of a PIL
+      `exif_transpose` reference and 4-10x closer to it than to any of its
+      rotated, mirrored or flipped variants (35-89/255). Cost: 7.6 MB of new
+      fixtures, all the owner's own shots; drop the two HEICs and the JPEG if that
+      is too much for the repo.
+- [x] **Scrubbing kept the pixels and, where needed, the orientation.** The
+      three phone shots carried Samsung device strings and XMP. After
+      `scrub_metadata.py`, decoded pixels are bit-identical before and after.
+      The scrubber drops EXIF `Orientation`, which would have turned
+      `Portrait_photo.jpg` sideways, so an Orientation-only block was put back
+      (the checker allows that one tag).
+- [x] **Eval extended to 164 queries over 113 files** (docs/eval.md):
+      hybrid recall@5 0.957 overall, 0.981 on the 54 new visual queries (visual
+      list alone 0.963), OCR 1.000, peak RSS 1271-1348 MB.
+- [ ] **Open: `cross` text recall fell 0.900 to 0.750** as the corpus grew from
+      60 to 113 files (text-vector-only fell equally: image filename and OCR
+      chunks crowd `vec_text`). Diagnosed, not fixed; see docs/eval.md.
+- [ ] **Open: HEIC colour differs from libheif** by ~8-13 levels on every HEIC
+      fixture, with crushed blacks in `heic-rs`. Cause and correct side not
+      established; contradicts ADR-0003's identical-pixels claim. See the
+      correction appended to ADR-0003. Affects OCR and embedding inputs slightly,
+      not orientation.
+- [ ] **Open: a small QR in a large photo is not found** (the war-grave photo),
+      although both our decoder and OpenCV read it from a crop. The scale ladder
+      only downsizes; tiled native-resolution scanning is the likely fix.
+      Also undecoded: the Pepsi-can QR (curved) and the 1D barcode.
+- [ ] **Open: OCR on a curved can label** is CER 0.92 (read "PERS N"); the
+      handwriting-style Spanish page is 0.29 (`¡` still missing).
+- [x] **Fixture policy.** The 51 non-phone files (148 MB, provenance not recorded
+      per file, at least three look like Wikimedia Commons material) are in the
+      gitignored `fixtures/corpus/local/`. Promoting a file is a `git mv` plus a
+      provenance line in `fixtures/README.md`. `porsche_car.jpg` (147 MP) is a
+      real over-the-cap file: skipped as `image_too_large`, still findable by
+      name.
+- Notes on `fixtures/golden/ocr/fixture_stem.txt` (the owner's file, not edited):
+  five descriptions contain `[cite: 6]` paste artifacts, and the QR entry for
+  the three-code image says `ver1/ver2/ver3` where the decoded payloads are
+  `Ver1`, `Version 2`, `Version 3 QR Code`.
+- The working tree also holds an uncommitted refactor by someone else (OCR
+  failure keeps the QR chunks, atomic thumbnail writes, one dimension probe,
+  a fail-fast OCR lock). It was not made or committed here; fmt, clippy and all
+  172 unit tests pass with it applied.

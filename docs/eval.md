@@ -373,6 +373,107 @@ including a real 45 MP JPEG) and all 99 x 4 queries (which loads the SigLIP text
 tower, the last +190 MB step). Wall time 1-2 minutes, and not stable between
 runs.
 
+## M4: the 2026-09-21 photo batch (113 files, 164 queries)
+
+**Method:** as above (`magi-cli eval`, release build, real models, fresh DB),
+now over 113 indexed files, 4 skips and the 3 intentional errors, with 164
+queries. New: 51 owner-supplied stock photos, screenshots and QR/barcode
+images in `fixtures/corpus/local/` (gitignored, so this only runs on a machine
+that has them), and three phone shots of toy cars. New buckets: `img2` (54
+visual queries), `ocr` (7), `qr` (3) and `skip` (1); see `eval/README.md`.
+Every expected answer was written from looking at the image, not its file name
+(`mae-mu-burguer.jpg` is pancakes). **File names leak into the results**: the
+`visual` row, which has no filename and no OCR, is the clean measure of the
+image model; hybrid is what a user sees.
+
+| Mode | n | recall@5 | recall@10 | MRR |
+| --- | -: | -: | -: | -: |
+| fts-only | 164 | 0.299 | 0.299 | 0.295 |
+| vector-only (text) | 164 | 0.866 | 0.933 | 0.710 |
+| visual-only | 164 | 0.494 | 0.494 | 0.486 |
+| **hybrid** | 164 | **0.957** | **0.988** | **0.867** |
+
+Hybrid by bucket:
+
+| bucket | n | recall@5 | MRR | visual-only recall@5 |
+| --- | -: | -: | -: | -: |
+| en | 20 | 1.000 | 0.967 | - |
+| es | 20 | 1.000 | 0.925 | - |
+| kw | 10 | 1.000 | 0.925 | - |
+| cross | 20 | **0.750** | 0.312 | - |
+| img (first batch) | 29 | 1.000 | 0.938 | 0.897 |
+| **img2 (new photos)** | 54 | **0.981** | 0.954 | **0.963** |
+| ocr | 7 | 1.000 | 1.000 | 0.429 |
+| qr | 3 | 0.667 | 0.700 | 0.000 |
+| skip | 1 | 1.000 | 1.000 | 0.000 |
+
+**The image model holds up on a bigger, more confusable set.** 53 of 54 new
+visual queries land in the top 5 through hybrid, and 52 of 54 through the
+visual list alone, with the confusable clusters in play: three burgers and
+pancakes and a hot dog, five trucks and three buses and two trains, a wolf
+beside dog photos, four forests, three rooms, three guitars. The Spanish
+queries (`hamburguesa con queso`, `un camión`, `bosque nevado`, ...) behave
+like the English ones. The one miss is `a Hot Wheels package` (rank > 100, top
+hit a hot dog): SigLIP does not know the brand from a photo, and the printed
+text is reached through OCR instead (`Hot Wheels Nissan Z Proto` finds it).
+The query was kept, not reworded after the fact.
+
+**A regression to look at: `cross` fell from 0.900 to 0.750.** Text-vector-only
+search fell by the same amount, so it is not the visual list. Growing the
+corpus from 60 to 113 files added 100+ chunks to `vec_text` (a filename chunk
+per file plus OCR text), and short ones such as `piotr-szajewski-snowy-forest.jpg`
+or `MON TUE WED THU FRI TWITTER...` sit at ranks 3-4 for unrelated queries,
+pushing the other-language twin from rank <= 5 to 6-10. The five misses are
+`cross` queries whose expected document is the twin of the one that ranks first
+(`team meeting notes` expects the Spanish notes while the English original is
+rank 1), so they are the most rank-sensitive queries in the set; recall@10 is
+unchanged at 0.950. The `en`, `es` and `kw` buckets are unaffected (1.000).
+Not fixed: it is a ranking-design question (weight filename chunks lower? skip
+them when a file has real text?) and the corpus is still small.
+
+**The 0.10 cosine floor is not as clean as it was on 15 images.**
+`team meeting notes` and `doctor appointment reminder` now pull
+`walls-io-whiteboard.jpg` (a weekly schedule on a whiteboard) into the results
+labelled `visual`. That is a defensible match, not a clear false positive, but
+it means "text queries never exceed the floor" no longer holds. The floor was
+not changed.
+
+**Peak RSS, all models loaded, the whole 113-file corpus: 1271-1348 MB across
+two runs** (limit 1.5 GB), including a 50 MP JPEG.
+
+### OCR quality against `fixtures/golden/ocr/fixture_stem.txt`
+
+Character error rate after collapsing whitespace, computed from the indexed
+`ocr` chunks:
+
+| image | CER | note |
+| --- | -: | --- |
+| barcode "Hello World!" | 0.00 | |
+| code screenshot (Rust) | 0.01 | |
+| Wikipedia article screenshot | 0.09 | `¿` `¡` lost in the running text |
+| war-grave headstone | 0.13 | engraved text on stone |
+| handwriting-style Spanish page | 0.29 | `¡Hola!` came back as `iHola!`: the known `¡` gap |
+| Pepsi can, curved label | **0.92** | read only "PERS N" |
+
+### QR and barcodes
+
+- `3_barcodes_ver1_ver2_ver3.png`: all three codes decode, to `Ver1`,
+  `Version 2` and `Version 3 QR Code`. OpenCV, an independent decoder, returns
+  the same three. The owner's note in `fixture_stem.txt` says `ver1/ver2/ver3`,
+  which is shorthand, not the payload.
+- **The grave photo's QR is not decoded.** OpenCV reads it from a cropped,
+  enlarged region (`http://en.qrwp.org/Adrian_Warburton`, a QRpedia link), and
+  so does our decoder on the same 640 x 306 crop, but neither finds it in the
+  full 1600 x 2035 frame. The code is ~100 px in a busy scene. `qr.rs`'s scale
+  ladder only downsizes (1, 1/2, 1/4, 1/8), which helps a large code and hurts a
+  small one. Tiled native-resolution scanning is the natural fix; not done.
+- The Pepsi can's QR is not decoded by ours or by OpenCV (curved, ~perspective).
+- The 1D barcode `barcode-Hello World!.png` decodes with neither rxing nor
+  OpenCV; only its printed text is found, by OCR.
+- The first version of the `qr` queries used `ver1`, `ver2`, `ver3` and
+  `wikipedia`, all of which are in the file names, and passed for the wrong
+  reason. They were replaced by payload-only words.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

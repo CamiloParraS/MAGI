@@ -164,6 +164,15 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                 .collect();
 
             let rank = first_match_rank(&hit_paths, &q.expected);
+            // Bucket averages hide which query failed; list the misses.
+            if mode == "hybrid" && rank.is_none_or(|r| r > 5) {
+                println!(
+                    "  miss [{}] {:?}: rank {rank:?}, top hit {}",
+                    q.lang,
+                    q.query,
+                    hit_paths.first().map_or("-", String::as_str)
+                );
+            }
             overall.add(rank);
             by_lang.entry(q.lang.clone()).or_default().add(rank);
         }

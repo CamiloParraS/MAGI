@@ -200,3 +200,24 @@ before shipping the "HEIC not supported on this PC" message.
   than a real 48 MP photo, so time may be slightly optimistic; memory is
   pixel-buffer-bound and content-independent.
 - **The three-OS CI build is green** (reported by the project owner).
+
+## Correction (2026-09-21): pixels are not identical to libheif's
+
+The claim above that `heic-rs` and `libheif-rs` produce byte-identical pixels
+does not reproduce against the libheif inside `pillow-heif`. On the six HEIC and
+HEIF fixtures `heic-rs`'s decode differs from libheif's by a mean of 7.7 to
+13.1 levels (0-255) with almost no identical pixels, and the sign varies per
+file (`shelf_christmas.heic` is darker, `phone_qr.heic` brighter). The
+difference is very close to a 16-235 to 0-255 range stretch of libheif's output
+(residual 1.1-1.8), and `heic-rs` crushes 12-13% of the pixels in two files to
+black where libheif crushes under 2%. Pillow-heif's build may not be the libheif
+version used for the original comparison, and it may not be the reference.
+
+Not established: *which* is right (no ground truth, and the camera JPEGs in the
+corpus appear to be libheif conversions), and *why*. The obvious cause, a
+missing `nclx` box making `heic-rs` default to "BT.709 limited range", is
+contradicted by two Samsung files that carry `nclx` with `full_range = 1` and
+`matrix = 2` (unspecified) and still differ. `DecodeOptions` has no colour
+override. Orientation is unaffected (verified against PIL, see docs/progress.md).
+The blessed golden thumbnails record `heic-rs`'s rendering, so they will need
+re-blessing if this is ever fixed.

@@ -16,11 +16,17 @@
   literally appear in the document, `"semantic paraphrase"` means they
   don't (only a real embedder can find it), `"cross-lingual"` self-explains.
 
-70 queries: 20 `en`, 20 `es`, 20 `cross`, 10 `kw`, covering 13 topics under
+The original 70 queries: 20 `en`, 20 `es`, 20 `cross`, 10 `kw`, covering 13 topics under
 `fixtures/corpus/{en,es}/` plus two of the existing PDF fixtures
 (`pdf/report.pdf`, `pdf/factura_electricista.pdf`) reused as cross-lingual
 targets. Two of SPEC.md §7 M3's own smoke-test queries (`electrician
 invoice`, `receta de arepas`) are included verbatim under `lang: "cross"`.
+
+The `img`, `img2`, `ocr`, `qr` and `skip` buckets are the image queries. `img` (29) is the first batch. `img2` (54) covers the 2026-09-21 photo batch: food, vehicles, animals, landscapes, rooms, instruments, toy cars. `ocr` (7) is text printed in a picture, scored against `fixtures/golden/ocr/fixture_stem.txt`. `qr` (3) is text that exists only in a decoded QR payload, so the words are deliberately absent from file names (an earlier version used `ver1` and `wikipedia`, which are in the file names, and passed for the wrong reason). `skip` (1) checks that an image skipped for size is still found by name.
+
+**File names leak.** A file called `pizza.jpg` is found for `pizza` by its filename chunk alone. The `visual` row in `magi-cli eval` output (no filename, no OCR) is the clean measure of the image model; hybrid is what a user sees. Expected answers for the photo batch were written from looking at every image, not from its file name: `mae-mu-burguer.jpg`, for example, is a stack of pancakes.
+
+The `local/` images are gitignored (`fixtures/README.md`), so the image buckets only run on a machine that has them.
 
 The 10 `kw` queries target code, Office and exact-phrase fixtures
 (`code/muestra.py`, `code/sample.rs`, the deep `calculateRequest.java`,
