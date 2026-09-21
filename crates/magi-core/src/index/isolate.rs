@@ -85,7 +85,7 @@ fn run_with<T: Send + 'static>(
                 Ok(work_result) => work_result,
                 Err(panic_payload) => Err(Error::ExtractionPanicked {
                     path,
-                    message: panic_message(&panic_payload),
+                    message: panic_message(&*panic_payload),
                 }),
             }
         }
@@ -115,6 +115,18 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
+
+    #[test]
+    fn panic_is_contained_as_an_error() {
+        let err = run(PathBuf::from("boom.bin"), || -> Result<()> {
+            panic!("kaboom")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::ExtractionPanicked { message, .. } if message == "kaboom"),
+            "{err:?}"
+        );
+    }
 
     #[test]
     fn timed_out_thread_is_reaped_once_it_finishes_and_new_work_is_refused_while_they_pile_up() {
