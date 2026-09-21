@@ -1,6 +1,7 @@
 # ADR-0007: SigLIP 2 variant - 256 px, q4f16 towers
 
-- **Status:** Accepted, with one SPEC gate missed by 0.001 (see "Decision")
+- **Status:** Accepted. The one SPEC gate it misses by 0.001 was accepted by the
+  project owner on 2026-09-20 and SPEC.md §7 M4 amended to match.
 - **Milestone:** M4
 
 ## Context
@@ -71,7 +72,8 @@ chunk text in FTS covers that query in production.
   parity is 0.969 mean / 0.952 min, 0.001 under the 0.97 gate**. Retrieval is
   unaffected on this eval, but the gate is not met as written.
 
-**Needs a human call:** accept the 0.001 miss (amend the gate to compare
+**Decided 2026-09-20: keep q4f16 for both towers** (a <1% parity shortfall is
+not worth 290 MB of RSS). The options were: accept the 0.001 miss (amend the gate to compare
 retrieval, or to 0.95), or switch the *vision* tower to fp16 at ~+290 MB of RSS
 during indexing, the phase with the least headroom. The choice is a manifest
 edit, not a code change: every variant has identical inputs and outputs.

@@ -143,8 +143,8 @@ Everything decoder-specific lives in `crates/magi-core/src/extract/heic.rs`
 rewrite. SPEC.md §3's HEIC row and §4.3's per-OS libheif install steps are
 updated to match.
 
-Two things this decision does **not** yet close, both tracked as M4 Slice 2
-work:
+Two things this decision did not close at the time, both now closed (see
+"Resolved" below):
 
 1. **The 48 MP budget.** No valid 48 MP HEIC fixture exists
    (`fixtures/README.md`), so SPEC.md §7 M4's "< 3 s, RSS Δ < 400 MB" is
@@ -184,3 +184,19 @@ pass. Revisit if the 48 MP numbers make it hurt.
 **If Option B had been chosen (native per-OS):** Windows machines without the HEVC extension
 cannot decode HEIC at all, which is SPEC.md §9 Q8 — it needs a human answer
 before shipping the "HEIC not supported on this PC" message.
+
+## Resolved (2026-09-20)
+
+- **The 48 MP budget is met**, on a synthetic file. No real 48 MP HEIC could be
+  obtained (a phone at minimum compression still writes ~4 MB HEICs at
+  12 MP; the largest non-RAW images found were ~19 MB JPEGs), so
+  `tools/synthetic_heic_48mp.py` upscales a committed 12 MP phone HEIC 2x and
+  re-encodes it with `pillow-heif`. The result is a real tile grid (1 `grid`
+  item over 193 `hvc1` tiles, the same structure as the phone fixtures), so it
+  exercises the shipped decode path. Release build, three runs: **0.28-0.30 s
+  and a 291 MB RSS delta** (limits: 3 s, 400 MB). The 12 MP figure measured the
+  same way is 0.09 s / 75 MB, so it scales linearly with pixels, and the
+  116 MB outlier worry above did not show up. Caveat: the content is smoother
+  than a real 48 MP photo, so time may be slightly optimistic; memory is
+  pixel-buffer-bound and content-independent.
+- **The three-OS CI build is green** (reported by the project owner).

@@ -1245,8 +1245,35 @@ and a green three-OS CI run; the parity-gate call above.
 - [x] **Decompression bomb (SPEC.md §7 M4, RSS delta < 200 MB):** rejecting
       `edge/bomb.png` costs **0 MB** of RSS (6 MB baseline, 6 MB peak, polled at
       5 ms over 30 repeats) and 51 microseconds each: refused from the header.
-- [ ] **48 MP HEIC (< 400 MB RSS delta, < 3 s): still not measured.** There is
-      no valid 48 MP fixture. What was measured: a 12 MP HEIC decodes in 80 ms
-      with a **74 MB** RSS delta (release). Scaling linearly by pixel count that
-      is ~300 MB and ~0.3 s at 48 MP, inside both budgets, but that is an
-      extrapolation.
+- [x] **48 MP HEIC: measured on a synthetic file, see Slice 6.**
+
+### Slice 6 - decisions closed, HEIC goldens, and the 48 MP budget
+
+- [x] **SigLIP parity gate: accepted (2026-09-20).** q4f16's 0.969 mean image
+      cosine keeps retrieval identical to fp32; a <1% shortfall is not worth
+      +290 MB of RSS (fp16 vision). SPEC.md §7 M4 is amended and ADR-0007's
+      status updated.
+- [x] **Three-OS CI: green** (reported by the project owner after the push).
+- [x] **HEIC golden thumbnails** (`tests/thumb_golden.rs`,
+      `fixtures/golden/thumbs/`): the three committed HEIC fixtures, portrait
+      (`phone_text_es`), landscape (`shelf_christmas`) and a QR photo
+      (`phone_qr`). The goldens were viewed and are upright (status bar on
+      top, Santa standing, QR finder patterns top-left/top-right/bottom-left
+      with the plain corner bottom-right, i.e. unmirrored). The comparison
+      (mean abs diff <= 4/255) also asserts that a rotated-180, mirrored or
+      flipped copy of each thumbnail lands above 8/255, so it can actually
+      catch the bug it exists for. This is stronger than the existing
+      dimensions-only unit test, which a 180-degree rotation would pass.
+- [x] **48 MP HEIC budget: met, on a synthetic file.** Real ones could not be
+      found (a phone at minimum compression still writes ~4 MB HEICs at
+      12 MP; the largest non-RAW images found were ~19 MB JPEGs), and the
+      earlier objection to generating one (build libheif from source; might
+      not be tile-gridded) no longer applies: `pillow-heif` ships prebuilt
+      wheels and its output is a real tile grid (1 `grid` over 193 `hvc1`
+      tiles, the same structure as the phone fixtures, checked by reading the
+      item types). `tools/synthetic_heic_48mp.py` builds it; `tests/heic_budget.rs`
+      (ignored, needs `MAGI_HEIC_48MP`) checks the time. Release build, three
+      runs, RSS polled at 5 ms: **0.28-0.30 s, 291 MB delta** against 3 s and
+      400 MB. The 12 MP figure measured the same way is 0.09 s / 75 MB, so it
+      scales linearly. Caveat: smoother content than a real 48 MP photo, so time
+      may be slightly optimistic; memory is content-independent.
