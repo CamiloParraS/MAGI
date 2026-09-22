@@ -2809,6 +2809,7 @@ dependencies = [
  "blake3",
  "calamine",
  "chardetng",
+ "crossbeam-channel",
  "directories",
  "dunce",
  "encoding_rs",

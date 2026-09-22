@@ -291,6 +291,7 @@ pub fn invalidate(conn: &Connection, kind: Option<&str>) -> Result<usize> {
     )?)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingFile {
     pub id: i64,
     pub root_id: i64,

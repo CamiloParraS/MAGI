@@ -116,11 +116,11 @@ fn roots(action: RootsAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn embedder_from_env() -> anyhow::Result<Box<dyn TextEmbedder>> {
+fn embedder_from_env() -> anyhow::Result<std::sync::Arc<dyn TextEmbedder>> {
     if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
-        Ok(Box::new(FakeEmbedder))
+        Ok(std::sync::Arc::new(FakeEmbedder))
     } else {
-        Ok(Box::new(E5Embedder::load().map_err(|e| {
+        Ok(std::sync::Arc::new(E5Embedder::load().map_err(|e| {
             anyhow::anyhow!(
                 "loading the real text embedder failed: {e}\n\
                  run `just models` and `cargo xtask fetch-onnxruntime` first, \
@@ -186,8 +186,9 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &options,
         scan_id,
         &IndexContext {
-            embedder: embedder.as_ref(),
+            embedder: embedder.clone(),
             ocr: ocr_from_env(),
+            image_gate: Default::default(),
             image_embedder: Some(image_embedder_from_env()),
         },
     )?;

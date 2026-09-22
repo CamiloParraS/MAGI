@@ -21,25 +21,33 @@ use crate::ocr::{NoOcr, OcrEngine};
 use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{reconcile_root, resolve_moves};
 
+use super::gate::ImageGate;
 use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
 
+/// Pixels above which an image counts as large for the decode gate (12 MP).
+const LARGE_IMAGE_PIXELS: u64 = 12_000_000;
+
 /// What an indexing run needs beyond the walk options: the models.
-pub struct IndexContext<'a> {
-    pub embedder: &'a dyn TextEmbedder,
+pub struct IndexContext {
+    /// `Arc` because the runtime shares the models between threads.
+    pub embedder: Arc<dyn TextEmbedder>,
     /// `Arc` because extraction runs on a detached thread that must own it.
     pub ocr: Arc<dyn OcrEngine>,
     /// `None` leaves `vec_image` empty: images are still found by their text.
     pub image_embedder: Option<Arc<dyn ImageEmbedder>>,
+    /// Bounds concurrent image decodes.
+    pub image_gate: Arc<ImageGate>,
 }
 
-impl<'a> IndexContext<'a> {
+impl IndexContext {
     /// A context with no OCR engine and no image embedder; images still get
     /// QR payloads and a thumbnail.
-    pub fn new(embedder: &'a dyn TextEmbedder) -> Self {
+    pub fn new(embedder: Arc<dyn TextEmbedder>) -> Self {
         Self {
             embedder,
             ocr: Arc::new(NoOcr),
             image_embedder: None,
+            image_gate: Arc::default(),
         }
     }
 }
@@ -191,17 +199,20 @@ fn drain_pending(
             let Some(root_path) = root_paths.get(&pending.root_id) else {
                 continue;
             };
-            let target = Target {
-                root_id: pending.root_id,
+            match index_file(
+                conn,
+                ctx,
+                options,
+                pending.root_id,
                 root_path,
-                entry: &entry,
+                &entry,
                 scan_id,
-            };
-            match index_file(conn, ctx, options, target)? {
+            )? {
                 Status::Indexed => summary.indexed += 1,
                 Status::Skipped => summary.skipped += 1,
                 Status::Errored => summary.errored += 1,
                 Status::Unchanged => summary.unchanged += 1,
+                Status::Retried => {}
             }
         }
     }
@@ -213,20 +224,47 @@ pub(crate) fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// One file to bring up to date, and where it was found.
-#[derive(Clone, Copy)]
-struct Target<'a> {
-    root_id: i64,
-    root_path: &'a Path,
-    entry: &'a WalkEntry,
-    scan_id: i64,
+/// One file to bring up to date, where it was found, and what the index knows
+/// of it. Owned, so it can cross threads.
+pub(crate) struct Job {
+    pub root_id: i64,
+    pub root_path: PathBuf,
+    pub entry: WalkEntry,
+    pub scan_id: i64,
+    /// The file's row, if it has one.
+    pub stored: Option<StoredFile>,
 }
 
-enum Status {
+pub(crate) enum Status {
     Indexed,
     Skipped,
     Errored,
     Unchanged,
+    /// Failed for a reason that may pass; back in the queue with a delay.
+    Retried,
+}
+
+/// What the extract stage decided. It touches no database: the writer applies
+/// the result.
+pub(crate) enum Extracted {
+    /// Nothing to redo: only size, mtime, scan and state are refreshed.
+    Keep { file_id: i64, state: String },
+    /// Read and extracted, ready to embed.
+    Fresh(Box<Fresh>),
+    /// Could not be read just now (I/O): try again later, with backoff.
+    Retry { file_id: i64, message: String },
+}
+
+pub(crate) struct Fresh {
+    outcome: FileOutcome,
+    /// Content chunks, filename chunk last.
+    chunks: Vec<RawChunk>,
+    thumb_key: Option<String>,
+}
+
+pub(crate) struct Embedded {
+    fresh: Fresh,
+    embeddings: Vec<Vec<f32>>,
 }
 
 /// What the file's stored row says about whether it can be kept as is.
@@ -255,81 +293,130 @@ fn content_is(stored: &StoredFile, hash: &[u8; 32]) -> bool {
         && stored.content_hash.as_deref() == Some(hash.as_slice())
 }
 
-/// The stages for one file, in order: is it unchanged? (size and mtime, then
-/// content hash) -> extract -> embed -> write in one transaction. The pieces
-/// are separate so the runtime can run them on different threads.
-fn index_file(
-    conn: &mut Connection,
-    ctx: &IndexContext,
-    options: &IndexRootOptions,
-    target: Target,
-) -> Result<Status> {
-    let Target {
-        root_id,
-        root_path,
-        entry,
-        scan_id,
-    } = target;
-    let stored = files::get_stored(conn, &entry.path)?;
-    let keep = |conn: &Connection, id: i64, state: &str| {
-        files::touch_unchanged(conn, id, entry.size, entry.mtime_ns, scan_id, state)
+/// Stage 1, extract: is it unchanged? (size and mtime, then content hash),
+/// otherwise read, extract and chunk it. CPU and I/O only, no database.
+pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job) -> Extracted {
+    let entry = &job.entry;
+    let stored = job.stored.as_ref();
+    // An I/O failure on a file with a row is retried; without one there is
+    // nothing to retry, so it is recorded as an error.
+    let unreadable = |kind: Kind, message: String| match stored {
+        Some(s) => Err(Extracted::Retry {
+            file_id: s.id,
+            message,
+        }),
+        None => Ok(errored(kind, message)),
     };
 
     // Same size and mtime as when it was indexed: nothing to read.
-    if let Some(s) = &stored
+    if let Some(s) = stored
         && is_settled(s)
-        && s.root_id == root_id
+        && s.root_id == job.root_id
         && s.size == entry.size
         && s.mtime_ns == entry.mtime_ns
     {
-        keep(conn, s.id, &s.state)?;
-        return Ok(Status::Unchanged);
+        return Extracted::Keep {
+            file_id: s.id,
+            state: s.state.clone(),
+        };
     }
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
-    let mut outcome = match plan_entry(&entry.path, entry.size, max_size_bytes, options) {
+    let outcome = match plan_entry(&entry.path, entry.size, max_size_bytes, options) {
+        Plan::Unreadable(message) => unreadable(Kind::Other, message),
         Plan::Done(outcome) => {
             let outcome = *outcome;
-            if let Some(s) = stored
-                .as_ref()
-                .filter(|s| unchanged_without_content(s, &outcome))
-            {
-                keep(conn, s.id, outcome.state)?;
-                return Ok(Status::Unchanged);
+            if let Some(s) = stored.filter(|s| unchanged_without_content(s, &outcome)) {
+                return Extracted::Keep {
+                    file_id: s.id,
+                    state: outcome.state.to_string(),
+                };
             }
-            outcome
+            Ok(outcome)
         }
         Plan::Extract(kind) => {
             // Only a file already in the index has a hash to compare with; a
             // new one goes straight to extraction, which hashes it anyway.
-            match stored.as_ref().map(|s| (s, hash_file(&entry.path))) {
+            match stored.map(|s| (s, hash_file(&entry.path))) {
                 // Touched or re-saved with the same content: keep the chunks
                 // and vectors, update only size and mtime (SPEC.md §5.4 step 4).
                 Some((s, Ok(hash))) if content_is(s, &hash) => {
-                    keep(conn, s.id, "indexed")?;
-                    return Ok(Status::Unchanged);
+                    return Extracted::Keep {
+                        file_id: s.id,
+                        state: "indexed".into(),
+                    };
                 }
-                Some((_, Err(e))) => errored(kind, e.to_string()),
-                _ => extract_entry(&entry.path, kind, options, ctx),
+                Some((_, Err(e))) => unreadable(kind, e.to_string()),
+                _ => extract_entry(&entry.path, kind, options, ctx)
+                    .map_err(|e| e.to_string())
+                    .or_else(|message| unreadable(kind, message)),
             }
         }
     };
+    let mut outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(retry) => return retry,
+    };
 
-    let rel_path = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
+    let rel_path = entry
+        .path
+        .strip_prefix(&job.root_path)
+        .unwrap_or(&entry.path);
+    let thumb_key = store_thumbnail(&entry.path, &outcome);
+    let mut chunks = std::mem::take(&mut outcome.doc.chunks);
+    chunks.push(filename_chunk(rel_path));
+    Extracted::Fresh(Box::new(Fresh {
+        outcome,
+        chunks,
+        thumb_key,
+    }))
+}
+
+/// Stage 2, embed. `before_batch` runs ahead of every batch: the runtime uses it
+/// to yield to a search that is waiting for the model.
+pub(crate) fn embed(
+    ctx: &IndexContext,
+    job: &Job,
+    mut fresh: Fresh,
+    before_batch: &dyn Fn(),
+) -> Result<Embedded> {
+    let embeddings = embed_chunks(
+        &*ctx.embedder,
+        &job.entry.path,
+        &mut fresh.chunks,
+        &mut fresh.outcome,
+        before_batch,
+    )?;
+    Ok(Embedded { fresh, embeddings })
+}
+
+/// Stage 3, store: one transaction per file.
+pub(crate) fn store_embedded(
+    conn: &mut Connection,
+    job: &Job,
+    embedded: Embedded,
+) -> Result<Status> {
+    let Embedded {
+        fresh: Fresh {
+            outcome,
+            chunks,
+            thumb_key,
+        },
+        embeddings,
+    } = embedded;
+    let entry = &job.entry;
+    let rel_path = entry
+        .path
+        .strip_prefix(&job.root_path)
+        .unwrap_or(&entry.path);
     let file_name = entry
         .path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     let ext = entry.path.extension().and_then(|e| e.to_str());
-
-    let thumb_key = store_thumbnail(&entry.path, &outcome);
-    let mut chunks = std::mem::take(&mut outcome.doc.chunks);
-    chunks.push(filename_chunk(rel_path));
-    let embeddings = embed_chunks(ctx.embedder, &entry.path, &mut chunks, &mut outcome)?;
-
     let record = FileRecord {
-        root_id,
+        root_id: job.root_id,
         path: &entry.path,
         rel_path,
         file_name,
@@ -341,7 +428,7 @@ fn index_file(
         state: outcome.state,
         skip_reason: outcome.skip_reason,
         error: outcome.error.as_deref(),
-        seen_scan_id: scan_id,
+        seen_scan_id: job.scan_id,
         content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
         thumb_key: thumb_key.as_deref(),
     };
@@ -352,7 +439,6 @@ fn index_file(
         &embeddings,
         outcome.doc.image_embedding.as_deref(),
     )?;
-
     Ok(match outcome.state {
         "indexed" => Status::Indexed,
         "skipped" => Status::Skipped,
@@ -360,29 +446,92 @@ fn index_file(
     })
 }
 
-/// Embeds `chunks` (content chunks, filename chunk last). One bad file must
-/// not abort the run: if embedding fails, the file keeps only its filename
-/// chunk (still searchable by name) and is marked `error`. If even that
-/// fails, the embedder itself is broken and the error propagates rather than
-/// erroring every remaining file.
+pub(crate) fn store_keep(
+    conn: &Connection,
+    job: &Job,
+    file_id: i64,
+    state: &str,
+) -> Result<Status> {
+    files::touch_unchanged(
+        conn,
+        file_id,
+        job.entry.size,
+        job.entry.mtime_ns,
+        job.scan_id,
+        state,
+    )?;
+    Ok(Status::Unchanged)
+}
+
+pub(crate) fn store_retry(conn: &Connection, file_id: i64, message: &str) -> Result<Status> {
+    Ok(
+        match files::record_failure(conn, file_id, message, unix_now())? {
+            files::Failure::Retry { .. } => Status::Retried,
+            files::Failure::GaveUp { .. } => Status::Errored,
+        },
+    )
+}
+
+/// The three stages for one file in a row, on the calling thread.
+fn index_file(
+    conn: &mut Connection,
+    ctx: &IndexContext,
+    options: &IndexRootOptions,
+    root_id: i64,
+    root_path: &Path,
+    entry: &WalkEntry,
+    scan_id: i64,
+) -> Result<Status> {
+    let job = Job {
+        root_id,
+        root_path: root_path.to_path_buf(),
+        entry: entry.clone(),
+        scan_id,
+        stored: files::get_stored(conn, &entry.path)?,
+    };
+    match prepare(ctx, options, &job) {
+        Extracted::Keep { file_id, state } => store_keep(conn, &job, file_id, &state),
+        Extracted::Retry { file_id, message } => store_retry(conn, file_id, &message),
+        Extracted::Fresh(fresh) => {
+            let embedded = embed(ctx, &job, *fresh, &|| {})?;
+            store_embedded(conn, &job, embedded)
+        }
+    }
+}
+
+/// Embeds `chunks` (content chunks, filename chunk last) in batches. One bad
+/// file must not abort the run: if embedding fails, the file keeps only its
+/// filename chunk (still searchable by name) and is marked `error`. If even
+/// that fails, the embedder itself is broken and the error propagates rather
+/// than erroring every remaining file.
 fn embed_chunks(
     embedder: &dyn TextEmbedder,
     path: &Path,
     chunks: &mut Vec<RawChunk>,
     outcome: &mut FileOutcome,
+    before_batch: &dyn Fn(),
 ) -> Result<Vec<Vec<f32>>> {
     let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-    match embedder.embed_passages(&texts) {
-        Ok(embeddings) => Ok(embeddings),
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "embedding failed");
-            outcome.state = "error";
-            outcome.error = Some(e.to_string());
-            chunks.drain(..chunks.len() - 1);
-            embedder.embed_passages(&[chunks[0].text.as_str()])
+    let mut embeddings = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(EMBED_BATCH) {
+        before_batch();
+        match embedder.embed_passages(batch) {
+            Ok(mut vectors) => embeddings.append(&mut vectors),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "embedding failed");
+                outcome.state = "error";
+                outcome.error = Some(e.to_string());
+                chunks.drain(..chunks.len() - 1);
+                return embedder.embed_passages(&[chunks[0].text.as_str()]);
+            }
         }
     }
+    Ok(embeddings)
 }
+
+/// Chunks per model call: small enough that a waiting search is served
+/// between batches (SPEC.md §5.3 priority lock).
+const EMBED_BATCH: usize = 16;
 
 /// A failed write costs the file its thumbnail, never its index entry.
 fn store_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
@@ -445,7 +594,9 @@ fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
 
 /// What to do with a file before reading its content.
 enum Plan {
-    /// Settled without reading it: too large, unsupported, or unreadable.
+    /// Could not be opened to tell what it is.
+    Unreadable(String),
+    /// Settled without reading it: too large or not extracted.
     Done(Box<FileOutcome>),
     /// Read it and run this kind's extractor.
     Extract(Kind),
@@ -465,7 +616,7 @@ fn plan_entry(path: &Path, size: u64, max_size_bytes: u64, options: &IndexRootOp
     if kind == Kind::Other {
         match read_header(path, SNIFF_HEADER_LEN) {
             Ok(header) => kind = discovery::classify(path, &header),
-            Err(e) => return Plan::Done(Box::new(errored(Kind::Other, e.to_string()))),
+            Err(e) => return Plan::Unreadable(e.to_string()),
         }
     }
 
@@ -491,15 +642,19 @@ fn extract_entry(
     kind: Kind,
     options: &IndexRootOptions,
     ctx: &IndexContext,
-) -> FileOutcome {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return errored(kind, e.to_string()),
-    };
+) -> std::io::Result<FileOutcome> {
+    let bytes = std::fs::read(path)?;
     // Hashed from the bytes about to be extracted, not carried over from the
     // skip check: the file may have changed in between.
     let content_hash = Some(*blake3::hash(&bytes).as_bytes());
 
+    // Decoding an image is the memory peak of indexing: bound how many run at
+    // once, and how many of them are large.
+    let _permit = (kind == Kind::Image).then(|| {
+        let large = crate::extract::image::probe_dimensions(path, &bytes)
+            .is_ok_and(|(w, h)| u64::from(w) * u64::from(h) > LARGE_IMAGE_PIXELS);
+        ctx.image_gate.acquire(large)
+    });
     let (path_buf, ocr, image_embedder, max_megapixels) = (
         path.to_path_buf(),
         Arc::clone(&ctx.ocr),
@@ -533,7 +688,7 @@ fn extract_entry(
         }
     });
 
-    match extracted {
+    Ok(match extracted {
         Ok(doc) => FileOutcome {
             content_hash,
             doc,
@@ -549,7 +704,7 @@ fn extract_entry(
             content_hash,
             ..errored(kind, e.to_string())
         },
-    }
+    })
 }
 
 #[cfg(test)]
@@ -577,7 +732,7 @@ mod tests {
             root_path,
             &default_options(),
             1,
-            &IndexContext::new(&FakeEmbedder),
+            &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap()
     }
@@ -641,7 +796,7 @@ mod tests {
             &root_path,
             &options,
             1,
-            &IndexContext::new(&FakeEmbedder),
+            &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
 
@@ -730,7 +885,7 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &IndexContext::new(&FakeEmbedder),
+            &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
         let second_count = db::files::count_files(&conn).unwrap();
@@ -1024,7 +1179,7 @@ mod tests {
             &root_path,
             &options,
             1,
-            &IndexContext::new(&FakeEmbedder),
+            &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
 
@@ -1047,7 +1202,7 @@ mod tests {
             &root_path,
             &default_options(),
             1,
-            &IndexContext::new(&FlakyEmbedder),
+            &IndexContext::new(Arc::new(FlakyEmbedder)),
         )
         .unwrap();
 
@@ -1082,7 +1237,7 @@ mod tests {
             &root_path,
             &default_options(),
             2,
-            &IndexContext::new(&OtherFakeEmbedder),
+            &IndexContext::new(Arc::new(OtherFakeEmbedder)),
         )
         .unwrap();
         assert_eq!(
@@ -1097,7 +1252,7 @@ mod tests {
         conn: &mut Connection,
         root_id: i64,
         root_path: &Path,
-        embedder: &dyn TextEmbedder,
+        embedder: Arc<dyn TextEmbedder>,
         scan_id: i64,
     ) -> IndexSummary {
         index_root(
@@ -1120,11 +1275,11 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = FakeEmbedder::counting();
+        let embedder = Arc::new(FakeEmbedder::counting());
 
-        let first = run(&mut conn, root_id, &root, &embedder, 1);
+        let first = run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
-        let second = run(&mut conn, root_id, &root, &embedder, 2);
+        let second = run(&mut conn, root_id, &root, embedder.clone(), 2);
 
         assert_eq!((first.indexed, first.unchanged), (1, 0));
         assert_eq!((second.indexed, second.unchanged), (0, 1));
@@ -1139,8 +1294,8 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         let file = root.join("notes.txt");
         fs::write(&file, "the same words").unwrap();
-        let embedder = FakeEmbedder::counting();
-        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedder = Arc::new(FakeEmbedder::counting());
+        run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
         let old_mtime = scalar(&conn, "SELECT mtime_ns FROM files");
 
@@ -1152,7 +1307,7 @@ mod tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
-        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
 
         assert_eq!((summary.indexed, summary.unchanged), (0, 1));
         assert_eq!(embedder.chunks(), embedded);
@@ -1169,12 +1324,12 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         let file = root.join("notes.txt");
         fs::write(&file, "alpha apple").unwrap();
-        let embedder = FakeEmbedder::counting();
-        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedder = Arc::new(FakeEmbedder::counting());
+        run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
 
         fs::write(&file, "beta banana and a longer second sentence").unwrap();
-        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
 
         assert_eq!(summary.indexed, 1);
         assert!(embedder.chunks() > embedded, "the new content is embedded");
@@ -1198,18 +1353,18 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let v1 = FakeEmbedder::counting();
-        run(&mut conn, root_id, &root, &v1, 1);
+        let v1 = Arc::new(FakeEmbedder::counting());
+        run(&mut conn, root_id, &root, v1.clone(), 1);
 
-        let same = run(&mut conn, root_id, &root, &v1, 2);
+        let same = run(&mut conn, root_id, &root, v1.clone(), 2);
         assert_eq!(
             (same.indexed, same.unchanged),
             (0, 1),
             "same id: hash-skip applies"
         );
 
-        let v2 = FakeEmbedder::counting().with_model_id("fake-v2");
-        let changed = run(&mut conn, root_id, &root, &v2, 3);
+        let v2 = Arc::new(FakeEmbedder::counting().with_model_id("fake-v2"));
+        let changed = run(&mut conn, root_id, &root, v2.clone(), 3);
         assert_eq!((changed.indexed, changed.unchanged), (1, 0));
         assert!(
             v2.chunks() > 0,
@@ -1220,7 +1375,7 @@ mod tests {
             Some("fake-v2")
         );
 
-        let after = run(&mut conn, root_id, &root, &v2, 4);
+        let after = run(&mut conn, root_id, &root, v2.clone(), 4);
         assert_eq!(
             (after.indexed, after.unchanged),
             (0, 1),
@@ -1233,12 +1388,12 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = FakeEmbedder::counting();
-        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedder = Arc::new(FakeEmbedder::counting());
+        run(&mut conn, root_id, &root, embedder.clone(), 1);
         conn.execute("UPDATE files SET pipeline_version = 0", [])
             .unwrap();
 
-        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
 
         assert_eq!((summary.indexed, summary.unchanged), (1, 0));
         assert_eq!(
@@ -1267,7 +1422,7 @@ mod tests {
         fs::copy(qr, root.join("code.png")).unwrap();
         let with = |ocr: &'static str| IndexContext {
             ocr: Arc::new(NamedOcr(ocr)),
-            ..IndexContext::new(&FakeEmbedder)
+            ..IndexContext::new(Arc::new(FakeEmbedder))
         };
         let go = |conn: &mut Connection, ctx: &IndexContext, scan| {
             index_root(conn, root_id, &root, &default_options(), scan, ctx).unwrap()
@@ -1300,7 +1455,7 @@ mod tests {
         fs::copy(truncated, root.join("a_broken.pdf")).unwrap();
         fs::write(root.join("z_fine.txt"), "still gets indexed").unwrap();
 
-        let summary = run(&mut conn, root_id, &root, &FakeEmbedder, 1);
+        let summary = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
 
         assert_eq!((summary.indexed, summary.errored), (1, 1));
         let broken = db::files::get_by_path(&conn, &root.join("a_broken.pdf"))
@@ -1320,15 +1475,15 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = FakeEmbedder::counting();
-        run(&mut conn, root_id, &root, &embedder, 1);
+        let embedder = Arc::new(FakeEmbedder::counting());
+        run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
         let id = scalar(&conn, "SELECT id FROM files");
         // What a reconciliation scan does when it sees a different mtime.
         db::files::mark_pending(&conn, id).unwrap();
         conn.execute("UPDATE files SET mtime_ns = 1", []).unwrap();
 
-        let summary = run(&mut conn, root_id, &root, &embedder, 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
 
         assert_eq!((summary.indexed, summary.unchanged), (0, 1));
         assert_eq!(embedder.chunks(), embedded);
@@ -1345,11 +1500,11 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        run(&mut conn, root_id, &root, &FakeEmbedder, 1);
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
         conn.execute("UPDATE files SET state = 'indexing'", [])
             .unwrap();
 
-        run(&mut conn, root_id, &root, &FakeEmbedder, 2);
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 2);
 
         let state: String = conn
             .query_row("SELECT state FROM files", [], |r| r.get(0))

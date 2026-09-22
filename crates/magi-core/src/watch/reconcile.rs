@@ -6,11 +6,12 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::db::{files, meta};
+use crate::db::{files, meta, roots};
 use crate::discovery;
 use crate::error::Result;
 use crate::index::PIPELINE_VERSION;
 use crate::index::pipeline::{IndexRootOptions, hash_file};
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 
 /// What a scan found. The `unseen` rows are deletion candidates, held for
 /// [`resolve_moves`] rather than deleted here, so a move between roots can be
@@ -91,6 +92,41 @@ pub fn reconcile_root(
     })
 }
 
+/// Totals from [`reconcile_all`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScanSummary {
+    pub inserted: u32,
+    pub changed: u32,
+    pub unchanged: u32,
+    pub moved: u32,
+    pub removed: u32,
+}
+
+/// One scan of every enabled root: probe it, reconcile it, then settle all the
+/// deletion candidates together so a move between roots is matched. A root that
+/// is missing or unreadable is skipped with its rows intact and its status set.
+pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Result<ScanSummary> {
+    let scan_id = next_scan_id(conn)?;
+    let mut summary = ScanSummary::default();
+    let mut unseen = Vec::new();
+    for root in roots::list(conn)?.into_iter().filter(|r| r.enabled) {
+        let access = FsProbe.probe(&root.path);
+        roots::set_access(conn, root.id, &access)?;
+        if access != RootAccess::Ok {
+            continue;
+        }
+        let report = reconcile_root(conn, root.id, &root.path, options, scan_id)?;
+        summary.inserted += report.inserted;
+        summary.changed += report.changed;
+        summary.unchanged += report.unchanged;
+        unseen.extend(report.unseen);
+    }
+    let resolved = resolve_moves(conn, unseen, scan_id)?;
+    summary.moved = resolved.moved;
+    summary.removed = resolved.removed;
+    Ok(summary)
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Resolved {
     pub moved: u32,
@@ -146,13 +182,14 @@ mod tests {
     use crate::index::pipeline::{IndexContext, IndexSummary, index_root};
     use crate::search::fts::search_fts;
     use std::fs;
+    use std::sync::Arc;
 
     struct Setup {
         _db_dir: tempfile::TempDir,
         root_dir: tempfile::TempDir,
         conn: Connection,
         root: roots::Root,
-        embedder: CountingEmbedder<FakeEmbedder>,
+        embedder: Arc<CountingEmbedder<FakeEmbedder>>,
         options: IndexRootOptions,
     }
 
@@ -167,7 +204,7 @@ mod tests {
                 root_dir,
                 conn,
                 root,
-                embedder: FakeEmbedder::counting(),
+                embedder: Arc::new(FakeEmbedder::counting()),
                 options: IndexRootOptions::from_config(&IndexingConfig::default()).unwrap(),
             }
         }
@@ -184,7 +221,7 @@ mod tests {
                 &self.root.path,
                 &self.options,
                 scan_id,
-                &IndexContext::new(&self.embedder),
+                &IndexContext::new(self.embedder.clone()),
             )
             .unwrap()
         }

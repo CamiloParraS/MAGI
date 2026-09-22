@@ -28,14 +28,14 @@ fn indexing_fixture_corpus_twice_is_idempotent() {
     let root = db::roots::add(&conn, &root_path).unwrap();
     let options = IndexRootOptions::from_config(&IndexingConfig::default()).unwrap();
 
-    let embedder = FakeEmbedder::counting();
+    let embedder = std::sync::Arc::new(FakeEmbedder::counting());
     let first_summary = index_root(
         &mut conn,
         root.id,
         &root_path,
         &options,
         1,
-        &IndexContext::new(&embedder),
+        &IndexContext::new(embedder.clone()),
     )
     .unwrap();
     let embedded_by_first = embedder.chunks();
@@ -48,7 +48,7 @@ fn indexing_fixture_corpus_twice_is_idempotent() {
         &root_path,
         &options,
         2,
-        &IndexContext::new(&embedder),
+        &IndexContext::new(embedder.clone()),
     )
     .unwrap();
     let second_files = db::files::count_files(&conn).unwrap();

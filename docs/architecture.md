@@ -325,3 +325,32 @@ rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`) and must increase.
 `permission_denied` or `missing`; `roots::set_access` stores it. A root that is
 not `ok` is not scanned and keeps its rows. Search ignores files of roots that
 are `missing` or `enabled = 0`.
+
+## Engine (M5 Slice 3)
+
+`Engine::start` runs SPEC §5.4 startup steps 1, 2, 4 and 6, then five kinds of
+thread:
+
+```
+scheduler ──► extract workers (N) ──► embed worker (1) ──► writer (1) ──► DB
+    ▲  │            │ unchanged / retry ─────────────────────▲              │
+    │  └ deletes, state changes ───────────────────────────►│              │
+    └──────────────────── done (file id) ◄───────────────────┴──────────────┘
+```
+
+- **Scheduler** (own read connection): `pending` rows are the queue. It holds
+  each file until it has been stable (mtime over 3 s old and unchanged size
+  across two stats 1 s apart), hands out newest first, and never has more than
+  `2 * workers + 2` files in the pipeline. A row is released when the writer
+  reports it done.
+- **Extract workers**: `pipeline::prepare`; unchanged files go straight to the
+  writer, the rest to the embed worker over a bounded channel.
+- **Embed worker**: batches of at most 16 chunks; before each batch it waits
+  while any `SearchGuard` is alive (the priority lock), at most 5 s.
+- **Writer**: the only thread that writes. Jobs: mark indexing, store, keep,
+  retry, delete, reconcile. One transaction per file.
+
+`EngineHandle` (clone) offers `stats()`, `rescan()`, `search_pending()` and
+`shutdown()`. Shutdown drops queued pipeline work (rows stay `indexing`; the
+next start resets them) and applies everything already handed to the writer.
+Thread and channel details: `engine.rs`.

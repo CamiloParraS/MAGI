@@ -1639,3 +1639,64 @@ renames and moves, and `magi-cli index` is incremental against a changing folder
   they are deleted and re-inserted, costing one filename chunk.
 - Vector search filters by root after the k-nearest step, so a hidden root can
   leave fewer than k results.
+
+### M5 Slice 3 - runtime, scheduler, writer, workers, `Engine` skeleton
+
+Plan: docs/m5-plan.md. Threads, no watcher yet. Done in three checked steps:
+`IndexContext` owns `Arc<dyn TextEmbedder>`; `index_file` split into
+extract -> embed -> store functions (tests unchanged and green); then the
+threads.
+
+- [x] **Stages.** `pipeline::prepare` (extract: unchanged? hash-skip, read,
+      extract, chunk; no database), `embed` (batches of 16 chunks, a hook runs
+      before each), `store_embedded` / `store_keep` / `store_retry` (writer).
+      `index_file` is these three in a row, so `index_root`, the CLI and `eval`
+      are unchanged in behaviour. An I/O failure on a file that has a row is now
+      `Retry` (backoff, `error` on the third failure) instead of an immediate
+      `error`; a parse failure of a readable file is still an immediate `error`.
+- [x] **`index/scheduler.rs`**: pure logic over a connection with the clock
+      passed in. Newest `mtime` first, dedupe by row, a bounded number in
+      flight, backoff rows untouched, a file that vanished is deleted. Stability
+      check: mtime under 3 s old, or size changed between two stats 1 s apart,
+      defers 5 s.
+- [x] **`index/writer.rs`**: the only writing thread. `WriteJob` = mark
+      indexing, store, keep, retry, delete, reconcile, stop; one transaction per
+      file; a failed store leaves the row retryable, not stuck `indexing`.
+- [x] **`engine.rs`**: `Engine::start(config, db_path, text, image, ocr)` ->
+      `EngineHandle` (startup steps 1, 2, 4, 6), `stats()`, `rescan()`,
+      `search_pending()` (`SearchPending` / `SearchGuard`, the priority lock the
+      embed worker waits on between batches, capped at 5 s), and a `shutdown()`
+      that stops the stages front to back, then the writer.
+- [x] **Extract pool** (`worker_threads`, or `available_parallelism()/2`) and
+      the **image decode gate** (`index/gate.rs`: at most 2 decodes, 1 over 12 MP).
+- [x] **`watch::reconcile::reconcile_all`**: probe, reconcile every enabled root,
+      settle moves across roots together (used by startup and `rescan`).
+- [x] **New dependency:** `crossbeam-channel` 0.5.17 (SPEC §3). `std::mpsc` has
+      no bounded multi-producer channel or `select`.
+- [x] **Verification** (`tests/incremental.rs`, real engine, fake embedder,
+      polling with deadlines, three consecutive runs all green):
+      9 (1,000 files: 1,000 distinct rows, every chunk embedded exactly once, a
+      restart embeds nothing), 10 (file written for 5 s: not indexed while it grows,
+      indexed once with its final content; with the stability check disabled the
+      test fails), 11 in process (rows left `indexing` are reset and completed,
+      `integrity_check` ok; and a shutdown mid-queue then restart completes with no
+      file embedded twice), 14 in part (a truncated PDF becomes `error`, the rest
+      carry on), plus a file deleted while queued. 209 unit tests (6 new:
+      scheduler 5, gate 1), clippy clean.
+
+**Deviations from the plan.**
+- Item 11's *real process kill* moves to Slice 7: it needs `magi-cli daemon`.
+  The in-process version above covers the recovery logic.
+- Image embedding still happens inside extraction (`extract_image` calls the
+  image embedder), so image vectors are computed on the extract workers, not the
+  embed worker. Only text embedding is on the embed thread. Moving it would mean
+  splitting `extract_image`; SigLIP serializes internally, so it is safe.
+- `Engine::start` blocks while the first reconciliation walk runs.
+- Threads run at normal priority (`ThreadPriority` is Slice 5).
+
+**Known limits.**
+- The scheduler polls every 250 ms even when idle; idle CPU is measured in
+  Slice 8.
+- A worker that panics is contained per file (`catch_unwind`), but the
+  extraction timeout thread cap from M2 still applies.
+- No watcher: new and changed files are found by `rescan()` only.

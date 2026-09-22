@@ -107,8 +107,9 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &options,
         1,
         &IndexContext {
-            embedder: embedder.as_ref(),
+            embedder: embedder.clone(),
             ocr: crate::ocr_from_env(),
+            image_gate: Default::default(),
             image_embedder: Some(image_embedder.clone()),
         },
     )?;
