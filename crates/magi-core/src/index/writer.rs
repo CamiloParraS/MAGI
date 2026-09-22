@@ -152,13 +152,12 @@ pub(crate) fn run(
                 continue;
             }
             WriteJob::Paths(paths) => {
-                match scan_paths(&mut conn, &current(&options), &paths, &held) {
+                match scan_paths(&mut conn, &current(&options), &paths) {
                     Ok(scan) => {
-                        held.retain(|h| !scan.resolved.contains(&h.gone.id));
-                        for gone in scan.unseen {
-                            if !held.iter().any(|h| h.gone.id == gone.id) {
+                        for id in scan.unseen {
+                            if !held.iter().any(|h| h.id == id) {
                                 held.push(Held {
-                                    gone,
+                                    id,
                                     scan_id: scan.scan_id,
                                     until: Instant::now() + HOLD,
                                 });
@@ -227,10 +226,10 @@ pub(crate) fn run(
 
 fn settle(conn: &mut Connection, held: &mut Vec<Held>, stats: &Stats) {
     match settle_held(conn, held, Instant::now()) {
-        Ok(resolved) => {
+        Ok(removed) => {
             stats
                 .removed
-                .fetch_add(u64::from(resolved.removed), Ordering::Relaxed);
+                .fetch_add(u64::from(removed), Ordering::Relaxed);
         }
         Err(e) => tracing::error!(error = %e, "could not settle removed files"),
     }

@@ -421,39 +421,21 @@ pub fn mark_changed(
     Ok(())
 }
 
-/// A file the last scan no longer found, and what move detection needs to know
-/// about it.
-pub struct Missing {
-    pub id: i64,
-    pub kind: String,
-    pub size: u64,
-    pub content_hash: Option<Vec<u8>>,
-}
-
 /// Rows of `root_id` that scan `scan_id` did not see.
-pub fn unseen(conn: &Connection, root_id: i64, scan_id: i64) -> Result<Vec<Missing>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, kind, size, content_hash FROM files
-         WHERE root_id = ?1 AND seen_scan_id < ?2",
-    )?;
+pub fn unseen(conn: &Connection, root_id: i64, scan_id: i64) -> Result<Vec<i64>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT id FROM files WHERE root_id = ?1 AND seen_scan_id < ?2")?;
     let rows = stmt
-        .query_map(params![root_id, scan_id], |row| {
-            Ok(Missing {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                size: row.get::<_, i64>(2)? as u64,
-                content_hash: row.get(3)?,
-            })
-        })?
+        .query_map(params![root_id, scan_id], |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 /// Rows at `prefix` or below it that scan `scan_id` did not see: what a
 /// removed file or folder left behind, or what is no longer wanted.
-pub fn unseen_under(conn: &Connection, prefix: &Path, scan_id: i64) -> Result<Vec<Missing>> {
+pub fn unseen_under(conn: &Connection, prefix: &Path, scan_id: i64) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, kind, size, content_hash FROM files
+        "SELECT id FROM files
          WHERE seen_scan_id < ?2
            AND (path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || ?3)",
     )?;
@@ -464,14 +446,7 @@ pub fn unseen_under(conn: &Connection, prefix: &Path, scan_id: i64) -> Result<Ve
                 scan_id,
                 std::path::MAIN_SEPARATOR.to_string()
             ],
-            |row| {
-                Ok(Missing {
-                    id: row.get(0)?,
-                    kind: row.get(1)?,
-                    size: row.get::<_, i64>(2)? as u64,
-                    content_hash: row.get(3)?,
-                })
-            },
+            |row| row.get(0),
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
@@ -498,60 +473,30 @@ pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<String>> {
         .optional()?)
 }
 
-/// Brand-new `pending` rows (no hash yet) of exactly `size` bytes: the only
-/// places a moved file can have turned up.
-pub fn new_pending_of_size(conn: &Connection, size: u64) -> Result<Vec<(i64, PathBuf)>> {
+/// Hashed rows of exactly `size` bytes and `kind` in a usable root, with their
+/// path and hash: what a newly found file may have been moved from.
+// ponytail: no index on size, so one scan of `files` per new path; add
+// `idx_files_size` if scans over large indexes get slow.
+pub fn hashed_of_size(
+    conn: &Connection,
+    size: u64,
+    kind: &str,
+) -> Result<Vec<(i64, PathBuf, Vec<u8>)>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, path FROM files
-         WHERE state = 'pending' AND content_hash IS NULL AND size = ?1",
+        "SELECT f.id, f.path, f.content_hash FROM files f JOIN roots r ON r.id = f.root_id
+         WHERE f.size = ?1 AND f.kind = ?2 AND f.content_hash IS NOT NULL
+           AND r.enabled = 1 AND r.status IN ('ok', 'watch_failed')",
     )?;
     let rows = stmt
-        .query_map(params![size as i64], |row| {
-            Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?)))
+        .query_map(params![size as i64, kind], |row| {
+            Ok((
+                row.get(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+                row.get(2)?,
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
-}
-
-/// A move or rename: `keep_id` (already indexed) takes over the location of
-/// `new_id` (the fresh `pending` row for the same bytes), which is dropped.
-/// Chunks and vectors are kept, not recomputed (SPEC.md §5.4 step 4). The
-/// filename chunk's text follows the new name so it stays findable by it; its
-/// vector still describes the old name.
-pub fn rename_file(conn: &mut Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
-    let tx = conn.transaction()?;
-    rename_pending(&tx, keep_id, new_id, scan_id)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// The same move as [`rename_file`], but within a transaction the caller
-/// already holds: lets a reconciliation scan claim a `pending` row it just
-/// inserted (or an older one still pending from an earlier scan) as the
-/// other half of a rename before ever committing it as an unclaimed new
-/// file — closing the window where the scheduler could pick up that row and
-/// re-embed it as a brand-new one before anyone recognized the rename
-/// (SPEC.md §5.4 step 4).
-pub fn rename_pending(conn: &Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
-    let (root_id, path, rel_path, size, mtime_ns): (i64, String, String, i64, i64) = conn
-        .query_row(
-            "SELECT root_id, path, rel_path, size, mtime_ns FROM files WHERE id = ?1",
-            params![new_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )?;
-    delete_files(conn, &[new_id])?;
-    rename_file_to(
-        conn,
-        keep_id,
-        root_id,
-        MoveTarget {
-            path: Path::new(&path),
-            rel_path: Path::new(&rel_path),
-            size: size as u64,
-            mtime_ns,
-        },
-        scan_id,
-    )
 }
 
 /// Where a move lands, for [`rename_file_to`].
@@ -562,11 +507,10 @@ pub struct MoveTarget<'a> {
     pub mtime_ns: i64,
 }
 
-/// The same move as [`rename_file`], sourced directly from a freshly walked
-/// entry instead of an already-inserted `pending` row: lets a scan match a
-/// held deletion candidate and move it in place without ever exposing an
-/// unclaimed `pending` row at the new path for the scheduler to pick up
-/// (SPEC.md §5.4 step 4). Runs inside the caller's transaction.
+/// A move or rename: `keep_id` (already indexed) takes over the new location.
+/// Chunks and vectors are kept, not recomputed (SPEC.md §5.4 step 4). The
+/// filename chunk's text follows the new name so it stays findable by it; its
+/// vector still describes the old name. Runs inside the caller's transaction.
 pub fn rename_file_to(
     conn: &Connection,
     keep_id: i64,

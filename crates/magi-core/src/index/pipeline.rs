@@ -19,7 +19,7 @@ use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
 use crate::platform::{FsProbe, PermissionProbe, RootAccess};
-use crate::watch::reconcile::{reconcile_root, resolve_moves};
+use crate::watch::reconcile::{reconcile_root, remove_unseen};
 
 use super::gate::ImageGate;
 use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
@@ -152,11 +152,10 @@ pub fn index_root(
     }
 
     let report = reconcile_root(conn, root_id, root_path, options, scan_id)?;
-    let moves = resolve_moves(conn, report.unseen, scan_id)?;
     let mut summary = IndexSummary {
         unchanged: report.unchanged,
-        moved: moves.moved,
-        removed: moves.removed,
+        moved: report.moved,
+        removed: remove_unseen(conn, report.unseen, scan_id)?,
         ..IndexSummary::default()
     };
     drain_pending(conn, ctx, options, scan_id, &mut summary)?;

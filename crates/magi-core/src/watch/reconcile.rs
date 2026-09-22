@@ -13,14 +13,15 @@ use crate::index::PIPELINE_VERSION;
 use crate::index::pipeline::{IndexRootOptions, hash_file};
 use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 
-/// What a scan found. The `unseen` rows are deletion candidates, held for
-/// [`resolve_moves`] rather than deleted here, so a move between roots can be
-/// matched by scanning both roots first.
+/// What a scan found. The `unseen` rows are deletion candidates, left for
+/// [`remove_unseen`] rather than deleted here, so a move into a root scanned
+/// later can still claim them.
 pub struct Reconciled {
     pub inserted: u32,
     pub changed: u32,
     pub unchanged: u32,
-    pub unseen: Vec<files::Missing>,
+    pub moved: u32,
+    pub unseen: Vec<i64>,
 }
 
 /// The id for the next scan, one more than the last (`meta.last_scan_id`).
@@ -38,6 +39,7 @@ enum EntryOutcome {
     Inserted,
     Changed,
     Unchanged,
+    Moved,
 }
 
 /// Brings one file's row in line with what was found on disk.
@@ -51,6 +53,16 @@ fn reconcile_entry(
     Ok(match files::get_stored(conn, &entry.path)? {
         None => {
             let rel = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
+            if let Some(id) = find_old_home(conn, entry)? {
+                let to = files::MoveTarget {
+                    path: &entry.path,
+                    rel_path: rel,
+                    size: entry.size,
+                    mtime_ns: entry.mtime_ns,
+                };
+                files::rename_file_to(conn, id, root_id, to, scan_id)?;
+                return Ok(EntryOutcome::Moved);
+            }
             files::insert_pending(
                 conn,
                 root_id,
@@ -78,22 +90,46 @@ fn reconcile_entry(
     })
 }
 
+/// An unknown path whose bytes match an indexed row whose own path is gone is
+/// that row, renamed or moved (SPEC.md §5.4 step 4): it takes the new location
+/// and keeps its chunks and vectors. Matching from the new side means the old
+/// path never has to be reported, which matters: `notify-debouncer-full` folds
+/// a rename of a just-created file into a plain create of the new path.
+///
+/// Only same-size rows whose path is gone are candidates, so the new file is
+/// read only when a move is plausible. A row never hashed (filename-only
+/// kinds) cannot be matched; its replacement costs one filename chunk.
+fn find_old_home(conn: &Connection, entry: &discovery::WalkEntry) -> Result<Option<i64>> {
+    let kind = discovery::classify(&entry.path, &[]);
+    let candidates: Vec<_> = files::hashed_of_size(conn, entry.size, kind.as_str())?
+        .into_iter()
+        .filter(|(_, path, _)| !path.exists())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let Ok(hash) = hash_file(&entry.path) else {
+        return Ok(None);
+    };
+    Ok(candidates
+        .into_iter()
+        .find(|(_, _, h)| h.as_slice() == hash)
+        .map(|(id, ..)| id))
+}
+
 /// Reconciles only `paths` (what the watcher reported): each is looked at on
 /// disk, a folder is walked, and whatever was at or under a path but is no
-/// longer found there (deleted, moved away, now excluded) is settled by
-/// [`resolve_moves`], so a rename is matched by content instead of re-embedded.
-/// A path outside every usable root is ignored; one that is a root itself
-/// triggers a full [`reconcile_all`], which probes it.
+/// longer found there (deleted, moved away, now excluded) is removed. A path
+/// outside every usable root is ignored; one that is a root itself triggers a
+/// full [`reconcile_all`], which probes it.
 pub fn reconcile_paths(
     conn: &mut Connection,
     options: &IndexRootOptions,
     paths: &[PathBuf],
 ) -> Result<ScanSummary> {
-    let scan = scan_paths(conn, options, paths, &[])?;
+    let scan = scan_paths(conn, options, paths)?;
     let mut summary = scan.summary;
-    let resolved = resolve_moves(conn, scan.unseen, scan.scan_id)?;
-    summary.moved += resolved.moved;
-    summary.removed += resolved.removed;
+    summary.removed += remove_unseen(conn, scan.unseen, scan.scan_id)?;
     Ok(summary)
 }
 
@@ -101,29 +137,18 @@ pub fn reconcile_paths(
 pub struct PathScan {
     pub summary: ScanSummary,
     /// Rows at or under the paths that were not found there.
-    pub unseen: Vec<files::Missing>,
-    /// `held` candidates this scan matched and moved in place; the caller
-    /// drops them from its held list.
-    pub resolved: Vec<i64>,
+    pub unseen: Vec<i64>,
     pub scan_id: i64,
 }
 
-/// The scanning half of [`reconcile_paths`]: queues what is new or changed and
-/// returns what disappeared without deciding it, so the caller can hold it for
-/// a moment. A move between roots is reported by two watchers that debounce
-/// independently, so the removal can arrive before the creation; a rename
-/// within one root commonly arrives as both halves in the very same batch.
-/// Either way, before this scan's transaction commits, every deletion
-/// candidate — `held` from earlier batches, and whatever this scan just found
-/// gone — is tried against [`find_new_home`] and, if matched, moved in place
-/// right there. That means a new location is never committed as an unclaimed
-/// `pending` row the scheduler could pick up and re-embed as a fresh file
-/// before anyone recognized it as the other half of a rename.
+/// The scanning half of [`reconcile_paths`]: queues what is new or changed,
+/// follows moves, and returns what disappeared without deciding it, so the
+/// caller can hold it for a moment: a move between roots is reported by two
+/// watchers that debounce independently, so the removal can arrive first.
 pub fn scan_paths(
     conn: &mut Connection,
     options: &IndexRootOptions,
     paths: &[PathBuf],
-    held: &[Held],
 ) -> Result<PathScan> {
     let usable: Vec<_> = roots::list(conn)?
         .into_iter()
@@ -134,7 +159,6 @@ pub fn scan_paths(
         return Ok(PathScan {
             summary: reconcile_all(conn, options)?,
             unseen: Vec::new(),
-            resolved: Vec::new(),
             scan_id,
         });
     }
@@ -158,97 +182,61 @@ pub fn scan_paths(
             }
         };
         for entry in &entries {
-            match reconcile_entry(&tx, root.id, &root.path, entry, scan_id)? {
-                EntryOutcome::Inserted => summary.inserted += 1,
-                EntryOutcome::Changed => summary.changed += 1,
-                EntryOutcome::Unchanged => summary.unchanged += 1,
-            }
+            summary.count(reconcile_entry(&tx, root.id, &root.path, entry, scan_id)?);
         }
         scanned.push(path);
     }
     // After every path is marked, so a file that turned up under one path is
     // not mistaken for a deletion under another.
-    let mut seen = std::collections::HashSet::new();
     let mut unseen = Vec::new();
     for path in scanned {
-        for gone in files::unseen_under(&tx, path, scan_id)? {
-            if seen.insert(gone.id) {
-                unseen.push(gone);
-            }
-        }
+        unseen.extend(files::unseen_under(&tx, path, scan_id)?);
     }
-
-    // Try every deletion candidate (this scan's own, plus whatever earlier
-    // batches left held) against what this scan just saw, before committing
-    // any of it: a match found now is applied in place, right here, so it is
-    // never visible to another thread as an unresolved `pending` row.
-    let mut resolved = Vec::new();
-    let mut still_unseen = Vec::new();
-    for gone in unseen {
-        match find_new_home(&tx, &gone)? {
-            Some(new_id) => {
-                files::rename_pending(&tx, gone.id, new_id, scan_id)?;
-                summary.moved += 1;
-            }
-            None => still_unseen.push(gone),
-        }
-    }
-    for h in held {
-        if let Some(new_id) = find_new_home(&tx, &h.gone)? {
-            files::rename_pending(&tx, h.gone.id, new_id, scan_id)?;
-            summary.moved += 1;
-            resolved.push(h.gone.id);
-        }
-    }
-    let unseen = still_unseen;
-
+    unseen.sort_unstable();
+    unseen.dedup();
     tx.commit()?;
     Ok(PathScan {
         summary,
         unseen,
-        resolved,
         scan_id,
     })
 }
 
 /// A deletion candidate waiting to see whether its bytes turn up elsewhere.
 pub struct Held {
-    pub gone: files::Missing,
+    pub id: i64,
     pub scan_id: i64,
     pub until: std::time::Instant,
 }
 
-/// Settles held candidates. One whose bytes have turned up (a new `pending`
-/// row of the same size, kind and hash) is renamed in place; one seen again
-/// (recreated, as an editor's save does) is dropped from the list; one still
-/// unmatched when its time is up is deleted.
+/// Settles held candidates. One seen again since (claimed by a move, or
+/// recreated, as an editor's save does) is dropped from the list; one still
+/// unseen when its time is up is deleted. Returns how many were deleted.
 pub fn settle_held(
     conn: &mut Connection,
     held: &mut Vec<Held>,
     now: std::time::Instant,
-) -> Result<Resolved> {
-    let mut out = Resolved::default();
+) -> Result<u32> {
+    let mut removed = 0;
     for item in std::mem::take(held) {
-        if !files::is_unseen_since(conn, item.gone.id, item.scan_id)? {
+        if !files::is_unseen_since(conn, item.id, item.scan_id)? {
             continue;
         }
-        if let Some(new_id) = find_new_home(conn, &item.gone)? {
-            files::rename_file(conn, item.gone.id, new_id, item.scan_id)?;
-            out.moved += 1;
-        } else if item.until <= now {
-            files::delete_file(conn, item.gone.id)?;
-            out.removed += 1;
+        if item.until <= now {
+            files::delete_file(conn, item.id)?;
+            removed += 1;
         } else {
             held.push(item);
         }
     }
-    Ok(out)
+    Ok(removed)
 }
 
 /// Walks `root_path` and brings its rows in line, in one transaction: an
-/// unknown file is inserted `pending`; one whose size or mtime differ, or that
-/// was indexed by an older pipeline, is marked `pending` with its new stat;
-/// anything else is only marked seen. Nothing is extracted or deleted.
+/// unknown file is a move (see [`find_old_home`]) or is inserted `pending`;
+/// one whose size or mtime differ, or that was indexed by an older pipeline,
+/// is marked `pending` with its new stat; anything else is only marked seen.
+/// Nothing is extracted or deleted.
 pub fn reconcile_root(
     conn: &mut Connection,
     root_id: i64,
@@ -258,13 +246,9 @@ pub fn reconcile_root(
 ) -> Result<Reconciled> {
     let entries = discovery::walk(root_path, &options.walk_options())?;
     let tx = conn.transaction()?;
-    let (mut inserted, mut changed, mut unchanged) = (0, 0, 0);
+    let mut summary = ScanSummary::default();
     for entry in &entries {
-        match reconcile_entry(&tx, root_id, root_path, entry, scan_id)? {
-            EntryOutcome::Inserted => inserted += 1,
-            EntryOutcome::Changed => changed += 1,
-            EntryOutcome::Unchanged => unchanged += 1,
-        }
+        summary.count(reconcile_entry(&tx, root_id, root_path, entry, scan_id)?);
     }
     tx.execute(
         "UPDATE roots SET last_full_scan_at = unixepoch() WHERE id = ?1",
@@ -273,9 +257,10 @@ pub fn reconcile_root(
     let unseen = files::unseen(&tx, root_id, scan_id)?;
     tx.commit()?;
     Ok(Reconciled {
-        inserted,
-        changed,
-        unchanged,
+        inserted: summary.inserted,
+        changed: summary.changed,
+        unchanged: summary.unchanged,
+        moved: summary.moved,
         unseen,
     })
 }
@@ -290,9 +275,21 @@ pub struct ScanSummary {
     pub removed: u32,
 }
 
-/// One scan of every enabled root: probe it, reconcile it, then settle all the
-/// deletion candidates together so a move between roots is matched. A root that
-/// is missing or unreadable is skipped with its rows intact and its status set.
+impl ScanSummary {
+    fn count(&mut self, outcome: EntryOutcome) {
+        *match outcome {
+            EntryOutcome::Inserted => &mut self.inserted,
+            EntryOutcome::Changed => &mut self.changed,
+            EntryOutcome::Unchanged => &mut self.unchanged,
+            EntryOutcome::Moved => &mut self.moved,
+        } += 1;
+    }
+}
+
+/// One scan of every enabled root: probe it, reconcile it, then remove what no
+/// root has claimed, so a move between roots is followed whichever root is
+/// walked first. A root that is missing or unreadable is skipped with its rows
+/// intact and its status set.
 pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Result<ScanSummary> {
     let scan_id = next_scan_id(conn)?;
     let mut summary = ScanSummary::default();
@@ -307,58 +304,25 @@ pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Resul
         summary.inserted += report.inserted;
         summary.changed += report.changed;
         summary.unchanged += report.unchanged;
+        summary.moved += report.moved;
         unseen.extend(report.unseen);
     }
-    let resolved = resolve_moves(conn, unseen, scan_id)?;
-    summary.moved = resolved.moved;
-    summary.removed = resolved.removed;
+    summary.removed = remove_unseen(conn, unseen, scan_id)?;
     Ok(summary)
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Resolved {
-    pub moved: u32,
-    pub removed: u32,
-}
-
-/// Settles deletion candidates. One whose bytes turned up under a new path (a
-/// brand-new `pending` row of the same size, kind and blake3 hash) is renamed
-/// in place, keeping its chunks and vectors; the rest are deleted with
-/// everything derived from them.
-///
-/// Only same-size new rows are hashed, so a scan with no deletions reads
-/// nothing. A candidate that was never hashed (filename-only kinds) cannot be
-/// matched and is deleted; its replacement costs one filename chunk.
-pub fn resolve_moves(
-    conn: &mut Connection,
-    unseen: Vec<files::Missing>,
-    scan_id: i64,
-) -> Result<Resolved> {
-    let mut out = Resolved::default();
-    for gone in unseen {
-        if let Some(new_id) = find_new_home(conn, &gone)? {
-            files::rename_file(conn, gone.id, new_id, scan_id)?;
-            out.moved += 1;
-        } else {
-            files::delete_file(conn, gone.id)?;
-            out.removed += 1;
+/// Deletes the candidates still unseen by `scan_id` (a later root's walk may
+/// have claimed one as a move) with everything derived from them. Returns how
+/// many were deleted.
+pub fn remove_unseen(conn: &mut Connection, unseen: Vec<i64>, scan_id: i64) -> Result<u32> {
+    let mut removed = 0;
+    for id in unseen {
+        if files::is_unseen_since(conn, id, scan_id)? {
+            files::delete_file(conn, id)?;
+            removed += 1;
         }
     }
-    Ok(out)
-}
-
-fn find_new_home(conn: &Connection, gone: &files::Missing) -> Result<Option<i64>> {
-    let Some(hash) = gone.content_hash.as_deref() else {
-        return Ok(None);
-    };
-    for (id, path) in files::new_pending_of_size(conn, gone.size)? {
-        if discovery::classify(&path, &[]).as_str() == gone.kind
-            && hash_file(&path).is_ok_and(|h| h.as_slice() == hash)
-        {
-            return Ok(Some(id));
-        }
-    }
-    Ok(None)
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -504,20 +468,15 @@ mod tests {
         )
         .unwrap();
         let scan_id = next_scan_id(&s.conn).unwrap();
-        let mut unseen = Vec::new();
+        let (mut unseen, mut moved) = (Vec::new(), 0);
         for r in [&s.root, &other] {
             let report = reconcile_root(&mut s.conn, r.id, &r.path, &s.options, scan_id).unwrap();
             unseen.extend(report.unseen);
+            moved += report.moved;
         }
-        let resolved = resolve_moves(&mut s.conn, unseen, scan_id).unwrap();
+        let removed = remove_unseen(&mut s.conn, unseen, scan_id).unwrap();
 
-        assert_eq!(
-            resolved,
-            Resolved {
-                moved: 1,
-                removed: 0
-            }
-        );
+        assert_eq!((moved, removed), (1, 0));
         assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
         assert_eq!(s.count("SELECT id FROM files"), id);
         assert_eq!(
@@ -691,7 +650,6 @@ mod tests {
                 s.root.path.join("before.txt"),
                 s.root.path.join("after.txt"),
             ],
-            &[],
         )
         .unwrap();
 
@@ -811,8 +769,8 @@ mod tests {
     fn held_from(scan: PathScan, until: std::time::Instant) -> Vec<Held> {
         scan.unseen
             .into_iter()
-            .map(|gone| Held {
-                gone,
+            .map(|id| Held {
+                id,
                 scan_id: scan.scan_id,
                 until,
             })
@@ -839,21 +797,16 @@ mod tests {
             s.root_dir.path().join("moved.txt"),
         )
         .unwrap();
-        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("a.txt")], &[]).unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("a.txt")]).unwrap();
         let mut held = held_from(scan, hold);
         let r = settle_held(&mut s.conn, &mut held, now).unwrap();
-        assert_eq!((r.moved, r.removed, held.len()), (0, 0, 1));
+        assert_eq!((r, held.len()), (0, 1));
 
-        // Batch 2: the creation arrives and claims it.
-        scan_paths(
-            &mut s.conn,
-            &s.options,
-            &[s.root.path.join("moved.txt")],
-            &[],
-        )
-        .unwrap();
+        // Batch 2: the creation arrives and claims it; the hold just lets go.
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("moved.txt")]).unwrap();
+        assert_eq!(scan.summary.moved, 1);
         let r = settle_held(&mut s.conn, &mut held, now).unwrap();
-        assert_eq!((r.moved, r.removed, held.len()), (1, 0, 0));
+        assert_eq!((r, held.len()), (0, 0));
         assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
         assert_eq!(
             s.count("SELECT COUNT(*) FROM files WHERE file_name = 'moved.txt'"),
@@ -862,58 +815,33 @@ mod tests {
 
         // b.txt is removed and nothing ever claims it: deleted once time is up.
         fs::remove_file(s.root_dir.path().join("b.txt")).unwrap();
-        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("b.txt")], &[]).unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("b.txt")]).unwrap();
         let mut held = held_from(scan, hold);
-        assert_eq!(settle_held(&mut s.conn, &mut held, now).unwrap().removed, 0);
+        assert_eq!(settle_held(&mut s.conn, &mut held, now).unwrap(), 0);
         let later = now + Duration::from_secs(6);
-        assert_eq!(
-            settle_held(&mut s.conn, &mut held, later).unwrap().removed,
-            1
-        );
+        assert_eq!(settle_held(&mut s.conn, &mut held, later).unwrap(), 1);
         assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
     }
 
-    /// Closes the race the CI failure exposed: when the creation half of a
-    /// rename is reported in a later batch, matching it against `held`
-    /// happens inside `scan_paths`'s own transaction, so the new location is
-    /// never exposed as an unclaimed `pending` row a scheduler thread could
-    /// grab and re-embed as a brand-new file before the writer's
-    /// `settle_held` gets a turn.
+    /// What macOS CI actually saw: `notify-debouncer-full` folds a rename of a
+    /// file whose queue starts with a `Create` (FSEvents coalesces flags on a
+    /// fresh file) into a plain `Create` of the new path. The old path is never
+    /// reported, so the new path must find its vanished twin by itself.
     #[test]
-    fn scan_paths_claims_a_held_removal_directly_without_a_pending_row() {
-        use std::time::{Duration, Instant};
+    fn a_rename_reported_only_by_its_new_path_is_a_move() {
         let mut s = Setup::new();
         s.write("before.txt", "portable words");
         s.run();
         let id = s.count("SELECT id FROM files");
         let embedded = s.embedder.chunks();
 
-        // Batch 1: before.txt is gone. Nothing to match it with yet.
         fs::rename(
             s.root_dir.path().join("before.txt"),
             s.root_dir.path().join("after.txt"),
         )
         .unwrap();
-        let scan = scan_paths(
-            &mut s.conn,
-            &s.options,
-            &[s.root.path.join("before.txt")],
-            &[],
-        )
-        .unwrap();
-        let held = held_from(scan, Instant::now() + Duration::from_secs(5));
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("after.txt")]).unwrap();
 
-        // Batch 2: after.txt arrives with `held` already known, so this one
-        // call matches and moves it in place, not a later settle.
-        let scan = scan_paths(
-            &mut s.conn,
-            &s.options,
-            &[s.root.path.join("after.txt")],
-            &held,
-        )
-        .unwrap();
-
-        assert_eq!(scan.resolved, vec![id]);
         assert_eq!(scan.summary.moved, 1);
         assert_eq!(
             s.count("SELECT COUNT(*) FROM files WHERE state = 'pending'"),
@@ -937,15 +865,14 @@ mod tests {
         s.run();
         let now = Instant::now();
         fs::remove_file(s.root_dir.path().join("doc.txt")).unwrap();
-        let scan =
-            scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")], &[]).unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")]).unwrap();
         let mut held = held_from(scan, now + Duration::from_secs(5));
 
         s.write("doc.txt", "rewritten words, longer");
-        scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")], &[]).unwrap();
+        scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")]).unwrap();
         let r = settle_held(&mut s.conn, &mut held, now + Duration::from_secs(6)).unwrap();
 
-        assert_eq!((r.moved, r.removed, held.len()), (0, 0, 0));
+        assert_eq!((r, held.len()), (0, 0));
         assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
     }
 
