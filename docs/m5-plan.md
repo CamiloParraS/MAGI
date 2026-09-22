@@ -35,7 +35,7 @@ M5's objective (SPEC.md §7): after the initial index, only changed files are pr
 4. **Single writer thread** owns the only write connection; every delete, rename, state change and purge goes through it. Readers (search) use separate connections in WAL.
 5. **Embed worker owns the models**, batches of at most 16 chunks, checks a `search_pending` `AtomicBool` between batches (the "priority lock").
 6. **Hash-skip uses a streaming blake3** pass and compares hash, `pipeline_version` and the model ids; only if all match is extraction skipped.
-7. **Test instrumentation:** a `CountingEmbedder` wrapper (with `FakeEmbedder::counting()`), not a counter inside `FakeEmbedder`, because `FakeEmbedder` is a `Copy` unit struct used across dozens of tests.
+7. **Test instrumentation:** a `CountingEmbedder` wrapper, not a counter inside `FakeEmbedder`, because `FakeEmbedder` is a `Copy` unit struct used across dozens of tests.
 
 ## Slices
 
@@ -47,7 +47,7 @@ Each slice ends with: `cargo fmt`, `cargo clippy --workspace --all-targets --all
 - Refactor `pipeline.rs`: extract `index_one`-style stages; keep `index_root` as a thin wrapper so `magi-cli index`, `eval` and `xtask bench_corpus` keep working.
 - Hash-skip (SPEC §5.4 step 4): unchanged hash + current `pipeline_version` + current model ids -> update `size`/`mtime_ns` only.
 - Re-embed trigger: compare `meta.text_model_id`, `image_model_id`, and new `ocr_engine_id` with the running components; on mismatch mark affected files `pending` (all files for text, `kind = 'image'` for image and OCR) in the same transaction that updates `meta`. Old results stay searchable until replaced.
-- `CountingEmbedder` + `FakeEmbedder::counting()`.
+- `CountingEmbedder`.
 - **Proves (as DB/function-level tests):** items 2, 3, 3b, 7, 12 (root purge), 14 (error state, others continue).
 
 ### Slice 2: reconciliation, move detection, root lifecycle (still synchronous)

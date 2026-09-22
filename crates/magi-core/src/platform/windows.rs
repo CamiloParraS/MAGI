@@ -90,14 +90,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("placeholder.txt");
         std::fs::write(&path, "not here").unwrap();
-        assert!(!Os.is_cloud_only(&path, &std::fs::metadata(&path).unwrap()));
+        assert!(!Os.is_cloud_only(&std::fs::metadata(&path).unwrap()));
 
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
         assert_ne!(
             unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_OFFLINE) },
             0
         );
-        assert!(Os.is_cloud_only(&path, &std::fs::metadata(&path).unwrap()));
+        assert!(Os.is_cloud_only(&std::fs::metadata(&path).unwrap()));
         let walked = crate::discovery::stat(&path).unwrap();
         assert!(walked.cloud_only);
     }

@@ -20,6 +20,9 @@ pub trait OcrEngine: Send + Sync {
     /// Recognized text, one line per detected line, in reading order. An
     /// image with no text returns an empty string — that is not an error.
     fn recognize(&self, image: &image::RgbImage) -> crate::error::Result<String>;
+
+    /// See [`crate::embed::TextEmbedder::unload_if_idle`].
+    fn unload_if_idle(&self, _idle: std::time::Duration) {}
 }
 
 /// Used until ADR-0006's engine lands, and afterwards whenever the OCR

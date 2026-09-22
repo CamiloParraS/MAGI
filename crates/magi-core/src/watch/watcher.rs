@@ -1,11 +1,11 @@
 //! One `notify` watcher per root, debounced (~2 s), reporting *which paths
 //! changed* to the writer as [`WriteJob::Paths`] (SPEC.md §5.4 runtime events).
 //! What each change means (new, modified, removed, renamed, moved out of the
-//! roots, now excluded) is decided by [`reconcile_paths`], which looks at the
+//! roots, now excluded) is decided by [`scan_paths`], which looks at the
 //! disk instead of trusting the event kind: the event kinds differ by OS, and
 //! renames arrive as pairs, halves, or delete plus create.
 //!
-//! [`reconcile_paths`]: super::reconcile::reconcile_paths
+//! [`scan_paths`]: super::reconcile::scan_paths
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -23,9 +23,7 @@ use crate::index::writer::WriteJob;
 const DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// The running watchers. Dropping this stops them.
-pub struct Watchers {
-    _debouncers: Vec<Debouncer<RecommendedWatcher, RecommendedCache>>,
-}
+pub type Watchers = Vec<Debouncer<RecommendedWatcher, RecommendedCache>>;
 
 /// Starts a watcher on each root. Returns the ones that could not be watched
 /// (inotify limit, a network drive, a vanished folder) so the caller can mark
@@ -59,12 +57,7 @@ pub(crate) fn start(roots: &[Root], jobs: &Sender<WriteJob>) -> (Watchers, Vec<i
             }
         }
     }
-    (
-        Watchers {
-            _debouncers: debouncers,
-        },
-        failed,
-    )
+    (debouncers, failed)
 }
 
 fn watch_root(
@@ -86,12 +79,12 @@ fn job_for(result: DebounceEventResult) -> Option<WriteJob> {
     match result {
         Err(errors) => {
             tracing::warn!(?errors, "watcher error; rescanning");
-            Some(rescan())
+            Some(WriteJob::Reconcile(None))
         }
         Ok(events) => {
             if events.iter().any(|e| e.need_rescan()) {
                 tracing::warn!("watcher overflow; rescanning");
-                return Some(rescan());
+                return Some(WriteJob::Reconcile(None));
             }
             // Reads and opens are not changes.
             let paths: HashSet<PathBuf> = events
@@ -102,10 +95,4 @@ fn job_for(result: DebounceEventResult) -> Option<WriteJob> {
             (!paths.is_empty()).then(|| WriteJob::Paths(paths.into_iter().collect()))
         }
     }
-}
-
-fn rescan() -> WriteJob {
-    // Nobody waits for this reply.
-    let (reply, _) = crossbeam_channel::bounded(1);
-    WriteJob::Reconcile(reply)
 }

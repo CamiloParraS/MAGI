@@ -13,17 +13,6 @@ use crate::index::PIPELINE_VERSION;
 use crate::index::pipeline::{IndexRootOptions, hash_file};
 use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 
-/// What a scan found. The `unseen` rows are deletion candidates, left for
-/// [`remove_unseen`] rather than deleted here, so a move into a root scanned
-/// later can still claim them.
-pub struct Reconciled {
-    pub inserted: u32,
-    pub changed: u32,
-    pub unchanged: u32,
-    pub moved: u32,
-    pub unseen: Vec<i64>,
-}
-
 /// The id for the next scan, one more than the last (`meta.last_scan_id`).
 /// Rows carry the id of the scan that last saw them; an older one means gone.
 pub fn next_scan_id(conn: &Connection) -> Result<i64> {
@@ -121,22 +110,6 @@ fn find_old_home(conn: &Connection, entry: &discovery::WalkEntry) -> Result<Opti
         .map(|(id, ..)| id))
 }
 
-/// Reconciles only `paths` (what the watcher reported): each is looked at on
-/// disk, a folder is walked, and whatever was at or under a path but is no
-/// longer found there (deleted, moved away, now excluded) is removed. A path
-/// outside every usable root is ignored; one that is a root itself triggers a
-/// full [`reconcile_all`], which probes it.
-pub fn reconcile_paths(
-    conn: &mut Connection,
-    options: &IndexRootOptions,
-    paths: &[PathBuf],
-) -> Result<ScanSummary> {
-    let scan = scan_paths(conn, options, paths)?;
-    let mut summary = scan.summary;
-    summary.removed += remove_unseen(conn, scan.unseen, scan.scan_id)?;
-    Ok(summary)
-}
-
 /// What [`scan_paths`] found and left undecided.
 pub struct PathScan {
     pub summary: ScanSummary,
@@ -145,10 +118,14 @@ pub struct PathScan {
     pub scan_id: i64,
 }
 
-/// The scanning half of [`reconcile_paths`]: queues what is new or changed,
-/// follows moves, and returns what disappeared without deciding it, so the
-/// caller can hold it for a moment: a move between roots is reported by two
-/// watchers that debounce independently, so the removal can arrive first.
+/// Reconciles only `paths` (what the watcher reported): each is looked at on
+/// disk and a folder is walked. What is new or changed is queued and moves are
+/// followed. Whatever was at or under a path but is no longer found there
+/// (deleted, moved away, now excluded) is returned undecided, so the caller can
+/// hold it for a moment: a move between roots is reported by two watchers that
+/// debounce independently, so the removal can arrive first. A path outside
+/// every usable root is ignored; one that is a root itself triggers a full
+/// [`reconcile_all`], which probes it.
 pub fn scan_paths(
     conn: &mut Connection,
     options: &IndexRootOptions,
@@ -159,11 +136,11 @@ pub fn scan_paths(
         .filter(|r| r.enabled && matches!(r.status.as_str(), "ok" | "watch_failed"))
         .collect();
     if paths.iter().any(|p| usable.iter().any(|r| r.path == *p)) {
-        let scan_id = next_scan_id(conn)?;
         return Ok(PathScan {
             summary: reconcile_all(conn, options)?,
+            // `reconcile_all` settled its own deletions: nothing to hold.
             unseen: Vec::new(),
-            scan_id,
+            scan_id: 0,
         });
     }
     let scan_id = next_scan_id(conn)?;
@@ -240,14 +217,16 @@ pub fn settle_held(
 /// unknown file is a move (see [`find_old_home`]) or is inserted `pending`;
 /// one whose size or mtime differ, or that was indexed by an older pipeline,
 /// is marked `pending` with its new stat; anything else is only marked seen.
-/// Nothing is extracted or deleted.
+/// Nothing is extracted or deleted: the rows it did not see are returned as
+/// deletion candidates for [`remove_unseen`], so a move into a root scanned
+/// later can still claim them.
 pub fn reconcile_root(
     conn: &mut Connection,
     root_id: i64,
     root_path: &Path,
     options: &IndexRootOptions,
     scan_id: i64,
-) -> Result<Reconciled> {
+) -> Result<(ScanSummary, Vec<i64>)> {
     let entries = discovery::walk(root_path, &options.walk_options())?;
     let tx = conn.transaction()?;
     let mut summary = ScanSummary::default();
@@ -260,13 +239,7 @@ pub fn reconcile_root(
     )?;
     let unseen = files::unseen(&tx, root_id, scan_id)?;
     tx.commit()?;
-    Ok(Reconciled {
-        inserted: summary.inserted,
-        changed: summary.changed,
-        unchanged: summary.unchanged,
-        moved: summary.moved,
-        unseen,
-    })
+    Ok((summary, unseen))
 }
 
 /// Totals from [`reconcile_all`].
@@ -277,6 +250,16 @@ pub struct ScanSummary {
     pub unchanged: u32,
     pub moved: u32,
     pub removed: u32,
+}
+
+impl std::ops::AddAssign for ScanSummary {
+    fn add_assign(&mut self, other: Self) {
+        self.inserted += other.inserted;
+        self.changed += other.changed;
+        self.unchanged += other.unchanged;
+        self.moved += other.moved;
+        self.removed += other.removed;
+    }
 }
 
 impl ScanSummary {
@@ -304,12 +287,9 @@ pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Resul
         if access != RootAccess::Ok {
             continue;
         }
-        let report = reconcile_root(conn, root.id, &root.path, options, scan_id)?;
-        summary.inserted += report.inserted;
-        summary.changed += report.changed;
-        summary.unchanged += report.unchanged;
-        summary.moved += report.moved;
-        unseen.extend(report.unseen);
+        let (found, gone) = reconcile_root(conn, root.id, &root.path, options, scan_id)?;
+        summary += found;
+        unseen.extend(gone);
     }
     summary.removed = remove_unseen(conn, unseen, scan_id)?;
     Ok(summary)
@@ -337,14 +317,16 @@ pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Opti
 /// have claimed one as a move) with everything derived from them. Returns how
 /// many were deleted.
 pub fn remove_unseen(conn: &mut Connection, unseen: Vec<i64>, scan_id: i64) -> Result<u32> {
-    let mut removed = 0;
-    for id in unseen {
-        if files::is_unseen_since(conn, id, scan_id)? {
-            files::delete_file(conn, id)?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
+    let now = std::time::Instant::now();
+    let mut held = unseen
+        .into_iter()
+        .map(|id| Held {
+            id,
+            scan_id,
+            until: now,
+        })
+        .collect();
+    settle_held(conn, &mut held, now)
 }
 
 #[cfg(test)]
@@ -358,6 +340,19 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    /// [`scan_paths`] with the removals settled at once, as the writer does
+    /// once their hold is up.
+    fn reconcile_paths(
+        conn: &mut Connection,
+        options: &IndexRootOptions,
+        paths: &[PathBuf],
+    ) -> Result<ScanSummary> {
+        let scan = scan_paths(conn, options, paths)?;
+        let mut summary = scan.summary;
+        summary.removed += remove_unseen(conn, scan.unseen, scan.scan_id)?;
+        Ok(summary)
+    }
 
     struct Setup {
         _db_dir: tempfile::TempDir,
@@ -379,7 +374,7 @@ mod tests {
                 root_dir,
                 conn,
                 root,
-                embedder: Arc::new(FakeEmbedder::counting()),
+                embedder: Arc::new(CountingEmbedder::new(FakeEmbedder)),
                 options: IndexRootOptions::from_config(&IndexingConfig::default()).unwrap(),
             }
         }
@@ -513,9 +508,10 @@ mod tests {
         let scan_id = next_scan_id(&s.conn).unwrap();
         let (mut unseen, mut moved) = (Vec::new(), 0);
         for r in [&s.root, &other] {
-            let report = reconcile_root(&mut s.conn, r.id, &r.path, &s.options, scan_id).unwrap();
-            unseen.extend(report.unseen);
-            moved += report.moved;
+            let (found, gone) =
+                reconcile_root(&mut s.conn, r.id, &r.path, &s.options, scan_id).unwrap();
+            unseen.extend(gone);
+            moved += found.moved;
         }
         let removed = remove_unseen(&mut s.conn, unseen, scan_id).unwrap();
 

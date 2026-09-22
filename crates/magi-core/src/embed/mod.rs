@@ -10,6 +10,7 @@ pub use siglip::SigLipEmbedder;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use crate::error::Result;
 
@@ -59,6 +60,9 @@ pub trait TextEmbedder: Send + Sync {
     fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     /// Embeds a single search query.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
+    /// Frees the model if it has been idle at least `idle`; the next use
+    /// loads it again. Never waits for a model in use. No-op by default.
+    fn unload_if_idle(&self, _idle: Duration) {}
 }
 
 /// Encodes images for `vec_image` and search queries into the same space
@@ -74,6 +78,8 @@ pub trait ImageEmbedder: Send + Sync {
     fn embed_image(&self, image: &image::RgbImage) -> Result<Vec<f32>>;
     /// Embeds a search query with the text tower.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
+    /// See [`TextEmbedder::unload_if_idle`].
+    fn unload_if_idle(&self, _idle: Duration) {}
 }
 
 fn l2_normalize(v: &mut [f32]) {
@@ -211,13 +217,6 @@ impl<E> CountingEmbedder<E> {
     }
 }
 
-impl FakeEmbedder {
-    /// A [`FakeEmbedder`] that counts its calls.
-    pub fn counting() -> CountingEmbedder<FakeEmbedder> {
-        CountingEmbedder::new(FakeEmbedder)
-    }
-}
-
 impl<E: TextEmbedder> TextEmbedder for CountingEmbedder<E> {
     fn model_id(&self) -> &str {
         self.model_id
@@ -239,6 +238,10 @@ impl<E: TextEmbedder> TextEmbedder for CountingEmbedder<E> {
     fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         self.inner.embed_query(text)
     }
+
+    fn unload_if_idle(&self, idle: Duration) {
+        self.inner.unload_if_idle(idle);
+    }
 }
 
 #[cfg(test)]
@@ -258,13 +261,18 @@ mod tests {
 
     #[test]
     fn counting_embedder_counts_calls_and_chunks_but_not_queries() {
-        let counting = FakeEmbedder::counting();
+        let counting = CountingEmbedder::new(FakeEmbedder);
         counting.embed_passages(&["a", "b"]).unwrap();
         counting.embed_passages(&["c"]).unwrap();
         counting.embed_query("q").unwrap();
         assert_eq!((counting.calls(), counting.chunks()), (2, 3));
         assert_eq!(counting.model_id(), "fake-v1");
-        assert_eq!(FakeEmbedder::counting().with_model_id("x").model_id(), "x");
+        assert_eq!(
+            CountingEmbedder::new(FakeEmbedder)
+                .with_model_id("x")
+                .model_id(),
+            "x"
+        );
     }
 
     #[test]

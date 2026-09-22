@@ -3,12 +3,11 @@
 //! and one every 15 minutes while any root has no working watcher. Every tick
 //! also re-probes roots that were unreadable or missing (SPEC.md §6.1).
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::index::pipeline::unix_now;
 use crate::index::writer::WriteJob;
 
 /// The clock is looked at, and lost roots re-probed, this often.
@@ -62,29 +61,20 @@ impl Timers {
     }
 }
 
-fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
-}
-
 /// The ticker thread: asks the writer for a full scan whenever [`Timers`] says
 /// one is due. Ends when `stop` fires or is dropped.
 pub(crate) fn run(
     stop: Receiver<()>,
     jobs: Sender<WriteJob>,
     interval_hours: u32,
-    unwatched: Arc<AtomicUsize>,
+    unwatched: bool,
 ) {
     let mut timers = Timers::new(interval_hours, unix_now());
     while let Err(crossbeam_channel::RecvTimeoutError::Timeout) = stop.recv_timeout(TICK) {
         let _ = jobs.send(WriteJob::Reprobe);
-        let unwatched = unwatched.load(Ordering::Relaxed) > 0;
         if let Some(reason) = timers.tick(unix_now(), unwatched) {
             tracing::info!(?reason, "scheduled reconciliation");
-            // Nobody waits for this reply.
-            let (reply, _) = crossbeam_channel::bounded(1);
-            let _ = jobs.send(WriteJob::Reconcile(reply));
+            let _ = jobs.send(WriteJob::Reconcile(None));
         }
     }
 }

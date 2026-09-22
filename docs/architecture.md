@@ -308,7 +308,7 @@ purges the root's files first, in the same transaction: before, it failed with a
 foreign-key error on any root that had been indexed.
 
 **Test instrumentation.** `embed::CountingEmbedder` wraps a `TextEmbedder` and
-counts `embed_passages` calls and chunks (`FakeEmbedder::counting()`), with
+counts `embed_passages` calls and chunks (`CountingEmbedder::new(FakeEmbedder)`), with
 `with_model_id` to simulate a model change.
 
 **Reconciliation** (`watch::reconcile`, Slice 2). `index_root` is
@@ -402,8 +402,37 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
   `THREAD_PRIORITY_BELOW_NORMAL`, Linux `setpriority(PRIO_PROCESS, 0, 10)` (per
   thread on Linux), macOS QoS utility.
 - **Power.** `Os.on_battery()`: Windows `GetSystemPowerStatus`, Linux
-  `/sys/class/power_supply`, macOS `pmset -g batt`. Read by nothing yet; pause on
-  battery is M5 Slice 6.
+  `/sys/class/power_supply`, macOS `pmset -g batt`. Read by the monitor for
+  pause on battery (below).
 - **Unwatched roots.** A network share or mapped network drive (Windows) is
   never watched, and a root whose watcher fails (inotify `ENOSPC` logs the
   `sysctl` fix) is marked `watch_failed`; both are polled every 15 minutes.
+
+## Resource policy (M5 Slice 6)
+
+`index::resources` holds the policy as pure functions and one monitor thread
+(`magi-monitor`) started by the engine.
+
+- **Workers.** `worker_threads = 0` means `min(physical_cores / 2, total_ram_gb / 4)`
+  clamped to 1-4, with RAM rounded to whole GB (an "8 GB" machine reports about
+  7.8 GiB and still counts as 8). `sysinfo` (feature `system` only) gives total
+  RAM and physical cores.
+- **Low-memory mode** (8 GB or less): `idle_unload_minutes` is capped at 2. The
+  worker formula already gives at most 2 there.
+- **Models load on first use and unload when idle.** `TextEmbedder`,
+  `ImageEmbedder` and `OcrEngine` have `unload_if_idle(idle)` (no-op by default).
+  `E5Embedder`, `SigLipEmbedder` and `PaddleOcr` keep their ONNX sessions in a
+  `ModelSlot`; their `load()` only checks the files are there (and reads the
+  tokenizer / OCR dictionary), so a missing model still fails at startup.
+  `ModelSlot::unload_if_idle` uses `try_lock`: a model in use is not idle and is
+  never waited on. `PaddleOcr` waits at most 30 s for another extract worker's
+  OCR (`get_or_load_within`), so a hung run cannot pile up stuck threads.
+- **Monitor.** Every 10 s (or when woken) it reads available memory; below 1 GiB
+  (NFR-13) it pauses indexing and unloads the image model at once. With
+  `pause_on_battery`, being on battery (read at most once a minute) also pauses.
+  Each check also unloads models idle longer than the idle timeout, including
+  after searches.
+- **Pause.** `EngineHandle::is_paused()`. While paused the scheduler starts no
+  new files; files already in the pipeline finish, and watcher events are still
+  recorded as `pending`. `EngineHandle::simulate_low_memory(bool)` is the test
+  hook for item 17 (hidden from docs).

@@ -4,12 +4,13 @@
 //! for a fixed time and hopes.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use magi_core::config::Config;
 use magi_core::db::{self, files, roots};
-use magi_core::embed::{CountingEmbedder, FakeEmbedder};
+use magi_core::embed::{CountingEmbedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder};
 use magi_core::ocr::NoOcr;
 use magi_core::search::fts::search_fts;
 use magi_core::{Engine, EngineHandle};
@@ -54,7 +55,7 @@ impl Env {
             _db_dir: db_dir,
             root_dir,
             db_path,
-            embedder: Arc::new(FakeEmbedder::counting()),
+            embedder: Arc::new(CountingEmbedder::new(FakeEmbedder)),
         }
     }
 
@@ -67,13 +68,19 @@ impl Env {
     }
 
     fn start(&self) -> EngineHandle {
+        self.start_with(None)
+    }
+
+    fn start_with(&self, image: Option<Arc<dyn ImageEmbedder>>) -> EngineHandle {
         let mut config = Config::default();
         config.indexing.worker_threads = 2;
+        // A laptop running the tests on battery must not pause them.
+        config.indexing.pause_on_battery = false;
         Engine::start(
             &config,
             &self.db_path,
             self.embedder.clone(),
-            None,
+            image,
             Arc::new(NoOcr),
         )
         .unwrap()
@@ -752,4 +759,75 @@ fn a_locked_file_is_retried_and_indexed_after_release() {
         env.state_of("held.txt") == "indexed"
     });
     assert_eq!(env.hits("exclusive"), 1);
+}
+
+/// An image model that says whether it is loaded, so a test can watch it
+/// being unloaded. Only a forced unload (idle `0`) clears it: the real idle
+/// timeout never passes during a test.
+#[derive(Default)]
+struct TrackedImageModel(AtomicBool);
+
+impl ImageEmbedder for TrackedImageModel {
+    fn model_id(&self) -> &str {
+        "fake-image-v1"
+    }
+
+    fn dim(&self) -> usize {
+        FakeImageEmbedder.dim()
+    }
+
+    fn embed_image(&self, image: &image::RgbImage) -> magi_core::Result<Vec<f32>> {
+        self.0.store(true, Ordering::SeqCst);
+        FakeImageEmbedder.embed_image(image)
+    }
+
+    fn embed_query(&self, text: &str) -> magi_core::Result<Vec<f32>> {
+        FakeImageEmbedder.embed_query(text)
+    }
+
+    fn unload_if_idle(&self, idle: Duration) {
+        if idle.is_zero() {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Item 17: memory pressure (forced through the test hook) pauses indexing
+/// and unloads the image model; clearing it resumes indexing.
+#[test]
+fn memory_pressure_pauses_indexing_and_unloads_the_image_model() {
+    let env = Env::new();
+    image::RgbImage::from_pixel(64, 64, image::Rgb([200, 30, 30]))
+        .save(env.root().join("red.png"))
+        .unwrap();
+    let image = Arc::new(TrackedImageModel::default());
+    let engine = env.start_with(Some(image.clone()));
+    env.wait_drained(1);
+    assert!(image.0.load(Ordering::SeqCst), "the image was embedded");
+
+    engine.simulate_low_memory(true);
+    wait_until(Duration::from_secs(30), "pause and unload", || {
+        engine.is_paused() && !image.0.load(Ordering::SeqCst)
+    });
+    env.write("later.txt", "postponed content");
+    // Old enough to pass the scheduler's stability check at once, so only the
+    // pause can hold it back.
+    std::fs::File::options()
+        .write(true)
+        .open(env.root().join("later.txt"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+    wait_until(Duration::from_secs(30), "later.txt to be queued", || {
+        env.count("SELECT COUNT(*) FROM files WHERE file_name = 'later.txt'") == 1
+    });
+    // A negative can only be shown by waiting: the scheduler looks at the
+    // queue every 250 ms, so 3 s gives it a dozen chances to start the file.
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(env.state_of("later.txt"), "pending");
+
+    engine.simulate_low_memory(false);
+    env.wait_drained(2);
+    assert!(!engine.is_paused());
+    assert_eq!(env.hits("postponed"), 1);
 }

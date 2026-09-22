@@ -27,6 +27,8 @@ crossbeam-channel = "0.5.17"
 # File watching (SPEC.md section 3). Stable releases: notify 9 and debouncer 0.8 are still release candidates.
 notify = "8.2.0"
 notify-debouncer-full = "0.6.0"
+# Available memory and physical cores (SPEC.md section 5.3); only the `system` feature.
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 # Thin OS bindings for platform/ (thread priority, power status, drive type). No native library.
 libc = "0.2.189"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Power", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use magi_core::config::IndexingConfig;
-use magi_core::embed::FakeEmbedder;
+use magi_core::embed::{CountingEmbedder, FakeEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::{db, paths};
 
@@ -28,7 +28,7 @@ fn indexing_fixture_corpus_twice_is_idempotent() {
     let root = db::roots::add(&conn, &root_path).unwrap();
     let options = IndexRootOptions::from_config(&IndexingConfig::default()).unwrap();
 
-    let embedder = std::sync::Arc::new(FakeEmbedder::counting());
+    let embedder = std::sync::Arc::new(CountingEmbedder::new(FakeEmbedder));
     let first_summary = index_root(
         &mut conn,
         root.id,

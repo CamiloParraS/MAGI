@@ -49,7 +49,7 @@ impl PermissionProbe for FsProbe {
 /// Detects cloud-only (dataless) files that must not be read, per SPEC.md §6.
 /// Decided from metadata alone: reading content would download the file.
 pub trait CloudPlaceholder {
-    fn is_cloud_only(&self, path: &Path, metadata: &Metadata) -> bool;
+    fn is_cloud_only(&self, metadata: &Metadata) -> bool;
 }
 
 /// Reports whether the machine is currently running on battery. `None` when
@@ -67,7 +67,7 @@ pub trait ThreadPriority {
 pub struct Os;
 
 impl CloudPlaceholder for Os {
-    fn is_cloud_only(&self, _path: &Path, metadata: &Metadata) -> bool {
+    fn is_cloud_only(&self, metadata: &Metadata) -> bool {
         #[cfg(target_os = "windows")]
         {
             windows::is_cloud_only(metadata)

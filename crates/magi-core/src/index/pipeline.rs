@@ -151,11 +151,11 @@ pub fn index_root(
         return Ok(IndexSummary::default());
     }
 
-    let report = reconcile_root(conn, root_id, root_path, options, scan_id)?;
+    let (found, unseen) = reconcile_root(conn, root_id, root_path, options, scan_id)?;
     let mut summary = IndexSummary {
-        unchanged: report.unchanged,
-        moved: report.moved,
-        removed: remove_unseen(conn, report.unseen, scan_id)?,
+        unchanged: found.unchanged,
+        moved: found.moved,
+        removed: remove_unseen(conn, unseen, scan_id)?,
         ..IndexSummary::default()
     };
     drain_pending(conn, ctx, options, scan_id, &mut summary)?;
@@ -195,18 +195,20 @@ fn drain_pending(
                     continue;
                 }
             };
-            let Some(root_path) = root_paths.get(&pending.root_id) else {
+            let (Some(root_path), Some(stored)) = (
+                root_paths.get(&pending.root_id),
+                files::get_stored(conn, &pending.path)?,
+            ) else {
                 continue;
             };
-            match index_file(
-                conn,
-                ctx,
-                options,
-                pending.root_id,
-                root_path,
-                &entry,
+            let job = Job {
+                root_id: pending.root_id,
+                root_path: root_path.clone(),
+                entry,
                 scan_id,
-            )? {
+                stored,
+            };
+            match index_file(conn, ctx, options, &job)? {
                 Status::Indexed => summary.indexed += 1,
                 Status::Skipped => summary.skipped += 1,
                 Status::Errored => summary.errored += 1,
@@ -230,8 +232,8 @@ pub(crate) struct Job {
     pub root_path: PathBuf,
     pub entry: WalkEntry,
     pub scan_id: i64,
-    /// The file's row, if it has one.
-    pub stored: Option<StoredFile>,
+    /// The file's row: every queued file has one.
+    pub stored: StoredFile,
 }
 
 pub(crate) enum Status {
@@ -247,16 +249,12 @@ pub(crate) enum Status {
 /// the result.
 pub(crate) enum Extracted {
     /// Nothing to redo: only size, mtime, scan and state are refreshed.
-    Keep { file_id: i64, state: String },
+    Keep { state: String },
     /// Read and extracted, ready to embed.
     Fresh(Box<Fresh>),
     /// Could not be read just now (I/O): try again later, with backoff.
     /// `locked`: another program holds it open ([`platform::is_locked`]).
-    Retry {
-        file_id: i64,
-        message: String,
-        locked: bool,
-    },
+    Retry { message: String, locked: bool },
 }
 
 pub(crate) struct Fresh {
@@ -301,68 +299,55 @@ fn content_is(stored: &StoredFile, hash: &[u8; 32]) -> bool {
 /// otherwise read, extract and chunk it. CPU and I/O only, no database.
 pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job) -> Extracted {
     let entry = &job.entry;
-    let stored = job.stored.as_ref();
-    // An I/O failure on a file with a row is retried; without one there is
-    // nothing to retry, so it is recorded as an error.
-    let unreadable = |kind: Kind, e: std::io::Error| match stored {
-        Some(s) => Err(Extracted::Retry {
-            file_id: s.id,
-            message: e.to_string(),
-            locked: platform::is_locked(&e),
-        }),
-        None => Ok(errored(kind, e.to_string())),
+    let s = &job.stored;
+    let unreadable = |e: std::io::Error| Extracted::Retry {
+        message: e.to_string(),
+        locked: platform::is_locked(&e),
     };
 
     // Same size and mtime as when it was indexed: nothing to read.
-    if let Some(s) = stored
-        && is_settled(s)
+    if is_settled(s)
         && s.root_id == job.root_id
         && s.size == entry.size
         && s.mtime_ns == entry.mtime_ns
     {
         return Extracted::Keep {
-            file_id: s.id,
             state: s.state.clone(),
         };
     }
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
-    let outcome = match plan_entry(entry, max_size_bytes, options) {
-        Plan::Unreadable(e) => unreadable(Kind::Other, e),
+    let mut outcome = match plan_entry(entry, max_size_bytes, options) {
+        Plan::Unreadable(e) => return unreadable(e),
         Plan::Done(outcome) => {
-            let outcome = *outcome;
-            if let Some(s) = stored.filter(|s| unchanged_without_content(s, &outcome)) {
+            if unchanged_without_content(s, &outcome) {
                 return Extracted::Keep {
-                    file_id: s.id,
                     state: outcome.state.to_string(),
                 };
             }
-            Ok(outcome)
+            *outcome
         }
         Plan::Extract(kind) => {
-            // Only a file already in the index has a hash to compare with; a
-            // new one goes straight to extraction, which hashes it anyway.
-            match stored.map(|s| (s, hash_file(&entry.path))) {
-                // Touched or re-saved with the same content: keep the chunks
-                // and vectors, update only size and mtime (SPEC.md §5.4 step 4).
-                Some((s, Ok(hash))) if content_is(s, &hash) => {
-                    return Extracted::Keep {
-                        file_id: s.id,
-                        state: "indexed".into(),
-                    };
+            // Touched or re-saved with the same content: keep the chunks and
+            // vectors, update only size and mtime (SPEC.md §5.4 step 4). A row
+            // never hashed goes straight to extraction, which hashes it anyway.
+            if s.content_hash.is_some() {
+                match hash_file(&entry.path) {
+                    Ok(hash) if content_is(s, &hash) => {
+                        return Extracted::Keep {
+                            state: "indexed".into(),
+                        };
+                    }
+                    Ok(_) => {}
+                    Err(e) => return unreadable(e),
                 }
-                Some((_, Err(e))) => unreadable(kind, e),
-                _ => {
-                    extract_entry(&entry.path, kind, options, ctx).or_else(|e| unreadable(kind, e))
-                }
+            }
+            match extract_entry(&entry.path, kind, options, ctx) {
+                Ok(outcome) => outcome,
+                Err(e) => return unreadable(e),
             }
         }
     };
-    let mut outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(retry) => return retry,
-    };
-
     let rel_path = entry
         .path
         .strip_prefix(&job.root_path)
@@ -451,15 +436,10 @@ pub(crate) fn store_embedded(
     })
 }
 
-pub(crate) fn store_keep(
-    conn: &Connection,
-    job: &Job,
-    file_id: i64,
-    state: &str,
-) -> Result<Status> {
+pub(crate) fn store_keep(conn: &Connection, job: &Job, state: &str) -> Result<Status> {
     files::touch_unchanged(
         conn,
-        file_id,
+        job.stored.id,
         job.entry.size,
         job.entry.mtime_ns,
         job.scan_id,
@@ -490,28 +470,14 @@ fn index_file(
     conn: &mut Connection,
     ctx: &IndexContext,
     options: &IndexRootOptions,
-    root_id: i64,
-    root_path: &Path,
-    entry: &WalkEntry,
-    scan_id: i64,
+    job: &Job,
 ) -> Result<Status> {
-    let job = Job {
-        root_id,
-        root_path: root_path.to_path_buf(),
-        entry: entry.clone(),
-        scan_id,
-        stored: files::get_stored(conn, &entry.path)?,
-    };
-    match prepare(ctx, options, &job) {
-        Extracted::Keep { file_id, state } => store_keep(conn, &job, file_id, &state),
-        Extracted::Retry {
-            file_id,
-            message,
-            locked,
-        } => store_retry(conn, file_id, &message, locked),
+    match prepare(ctx, options, job) {
+        Extracted::Keep { state } => store_keep(conn, job, &state),
+        Extracted::Retry { message, locked } => store_retry(conn, job.stored.id, &message, locked),
         Extracted::Fresh(fresh) => {
-            let embedded = embed(ctx, &job, *fresh, &|| {})?;
-            store_embedded(conn, &job, embedded)
+            let embedded = embed(ctx, job, *fresh, &|| {})?;
+            store_embedded(conn, job, embedded)
         }
     }
 }
@@ -736,7 +702,7 @@ fn extract_entry(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::embed::{FakeEmbedder, TextEmbedder};
+    use crate::embed::{CountingEmbedder, FakeEmbedder, TextEmbedder};
     use std::fs;
 
     /// Returns `(db_dir, root_dir, conn, root_id)`. Both temp dirs must
@@ -845,15 +811,29 @@ mod tests {
             cloud_only: true,
             ..discovery::stat(&path).unwrap()
         };
+        files::insert_pending(
+            &conn,
+            root_id,
+            &path,
+            Path::new("report.txt"),
+            entry.size,
+            entry.mtime_ns,
+            1,
+        )
+        .unwrap();
+        let job = Job {
+            root_id,
+            root_path: root_path.clone(),
+            stored: files::get_stored(&conn, &path).unwrap().unwrap(),
+            entry,
+            scan_id: 1,
+        };
 
         let status = index_file(
             &mut conn,
             &IndexContext::new(Arc::new(FakeEmbedder)),
             &default_options(),
-            root_id,
-            &root_path,
-            &entry,
-            1,
+            &job,
         )
         .unwrap();
 
@@ -1333,7 +1313,7 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = Arc::new(FakeEmbedder::counting());
+        let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
 
         let first = run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
@@ -1352,7 +1332,7 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         let file = root.join("notes.txt");
         fs::write(&file, "the same words").unwrap();
-        let embedder = Arc::new(FakeEmbedder::counting());
+        let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
         run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
         let old_mtime = scalar(&conn, "SELECT mtime_ns FROM files");
@@ -1382,7 +1362,7 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         let file = root.join("notes.txt");
         fs::write(&file, "alpha apple").unwrap();
-        let embedder = Arc::new(FakeEmbedder::counting());
+        let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
         run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
 
@@ -1411,7 +1391,7 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let v1 = Arc::new(FakeEmbedder::counting());
+        let v1 = Arc::new(CountingEmbedder::new(FakeEmbedder));
         run(&mut conn, root_id, &root, v1.clone(), 1);
 
         let same = run(&mut conn, root_id, &root, v1.clone(), 2);
@@ -1421,7 +1401,7 @@ mod tests {
             "same id: hash-skip applies"
         );
 
-        let v2 = Arc::new(FakeEmbedder::counting().with_model_id("fake-v2"));
+        let v2 = Arc::new(CountingEmbedder::new(FakeEmbedder).with_model_id("fake-v2"));
         let changed = run(&mut conn, root_id, &root, v2.clone(), 3);
         assert_eq!((changed.indexed, changed.unchanged), (1, 0));
         assert!(
@@ -1446,7 +1426,7 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = Arc::new(FakeEmbedder::counting());
+        let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
         run(&mut conn, root_id, &root, embedder.clone(), 1);
         conn.execute("UPDATE files SET pipeline_version = 0", [])
             .unwrap();
@@ -1533,7 +1513,7 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        let embedder = Arc::new(FakeEmbedder::counting());
+        let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
         run(&mut conn, root_id, &root, embedder.clone(), 1);
         let embedded = embedder.chunks();
         let id = scalar(&conn, "SELECT id FROM files");

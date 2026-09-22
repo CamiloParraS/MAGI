@@ -106,18 +106,13 @@ pub fn set_status(conn: &Connection, id: i64, status: &str) -> Result<()> {
 /// can set, so it does not clear `watch_failed`.
 pub fn set_access(conn: &Connection, id: i64, access: &RootAccess) -> Result<()> {
     let status = match access {
-        RootAccess::Ok => {
-            conn.execute(
-                "UPDATE roots SET status = 'ok' WHERE id = ?1 AND status IN ('missing', 'permission_denied')",
-                params![id],
-            )?;
-            return Ok(());
-        }
+        RootAccess::Ok => "ok",
         RootAccess::PermissionDenied => "permission_denied",
         RootAccess::Missing => "missing",
     };
     conn.execute(
-        "UPDATE roots SET status = ?2 WHERE id = ?1",
+        "UPDATE roots SET status = ?2
+         WHERE id = ?1 AND (?2 <> 'ok' OR status IN ('missing', 'permission_denied'))",
         params![id, status],
     )?;
     Ok(())

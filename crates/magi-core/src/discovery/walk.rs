@@ -62,7 +62,7 @@ pub fn stat(path: &Path) -> std::io::Result<WalkEntry> {
         size: meta.len(),
         mtime_ns: mtime_ns(&meta),
         is_dir: meta.is_dir(),
-        cloud_only: Os.is_cloud_only(path, &meta),
+        cloud_only: Os.is_cloud_only(&meta),
     })
 }
 
@@ -165,7 +165,7 @@ pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Ve
             size: meta.len(),
             mtime_ns: mtime_ns(&meta),
             is_dir,
-            cloud_only: Os.is_cloud_only(path, &meta),
+            cloud_only: Os.is_cloud_only(&meta),
         });
     }
     Ok(entries)

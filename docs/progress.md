@@ -1836,8 +1836,8 @@ stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
       Retry tests skip the backoff by setting `next_attempt_at = 0` rather than
       waiting minutes. Three consecutive full runs of the suite (20 tests)
       green. Unit tests: 237 (13 new). Clippy clean.
-- [ ] **CI on macOS and Linux**: not run yet. The macOS and Linux platform code
-      has not been compiled anywhere; only CI can, so expect a possible iteration.
+- [x] **CI on all three OSes**: green on 8a95a56 (Windows, Ubuntu 22.04,
+      macOS 14), checked 2026-09-22.
 
 **Known limits.**
 - A placeholder that is hydrated in place with the same size and mtime stays
@@ -1849,3 +1849,51 @@ stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
   a long lock gives up sooner than three tries.
 - A recovered root is reconciled but not watched until the next start (polled
   every 15 minutes meanwhile), as in Slice 4.
+
+### M5 Slice 6 - resource policy
+
+Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
+`magi-monitor` thread); see docs/architecture.md, "Resource policy".
+
+- [x] **Memory pressure** (item 17, NFR-13): every 10 s the monitor reads
+      available memory (`sysinfo`); below 1 GiB the scheduler starts no new
+      files and the image model is unloaded at once. Clearing it resumes.
+      Deviation from the plan: no `MemoryProbe` trait. The test hook is
+      `EngineHandle::simulate_low_memory(bool)` (hidden from docs), which also
+      wakes the monitor, so the test does not wait out the 10 s check.
+- [x] **Auto `worker_threads`**: `min(physical_cores / 2, total_ram_gb / 4)`,
+      clamped to 1-4, RAM rounded to whole GB. **Low-memory mode** (8 GB or
+      less): idle unload capped at 2 minutes.
+- [x] **Idle unload**: `unload_if_idle` on `TextEmbedder`, `ImageEmbedder` and
+      `OcrEngine`. `E5Embedder` and `PaddleOcr` now load their sessions on first
+      use, as SigLIP already did; `load()` still fails at once if the files are
+      missing. The monitor unloads anything idle past the timeout.
+- [x] **Pause on battery** (`pause_on_battery`), read at most once a minute.
+      Engine tests turn it off so a laptop on battery can still run them.
+- [x] **New dependency**: `sysinfo` 0.39.6, `default-features = false`,
+      feature `system` (SPEC §5.3 names it). Pure Rust over OS APIs, no native
+      library, so no ADR.
+- [x] **Verification**: item 17 in `tests/incremental.rs`: an image is indexed
+      (image model loaded), the hook pauses indexing and unloads the model, a
+      new file (mtime backdated so the stability check cannot be what holds it)
+      stays `pending` for 3 s, and clearing the hook indexes it. Checked that the
+      test fails when the scheduler ignores the pause. Unit tests: worker
+      formula, low-memory mode, the 1 GiB threshold, and a busy `ModelSlot` is
+      neither unloaded nor lent twice. Unit tests: 242 (5 new); three full
+      runs of `tests/incremental.rs` (21 tests) green. Clippy clean.
+- [x] **Fix found in review (since Slice 3):** two extract workers can decode
+      images at once (the gate allows 2), but `PaddleOcr` failed at once when
+      the other worker held it, and `extract_image` treats a failed OCR as "no
+      text", so one of two concurrent images was indexed without its OCR text,
+      for good. OCR now waits up to 30 s for the other worker
+      (`ModelSlot::get_or_load_within`), well under the 60 s file timeout, so a
+      hung run still cannot pile up stuck threads. Unit test: a bounded wait
+      gets the model once the other user is done.
+
+**Known limits.**
+- A file already in the pipeline when the pause starts may load the image
+  model again; the next check (10 s) unloads it again.
+- The pause is not in `IndexStatus` or persisted yet; user pause/resume and
+  status are Slice 7.
+- Under memory pressure the SigLIP text tower is unloaded too; a search loads
+  it again.

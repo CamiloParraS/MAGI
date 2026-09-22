@@ -603,18 +603,13 @@ pub fn delete_files(conn: &Connection, ids: &[i64]) -> Result<Vec<String>> {
     Ok(keys)
 }
 
-/// Deletes one file in its own transaction. `Ok(false)` if it was not there.
-pub fn delete_file(conn: &mut Connection, file_id: i64) -> Result<bool> {
+/// Deletes one file in its own transaction. A file already gone is a no-op.
+pub fn delete_file(conn: &mut Connection, file_id: i64) -> Result<()> {
     let tx = conn.transaction()?;
-    let existed: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM files WHERE id = ?1)",
-        params![file_id],
-        |row| row.get(0),
-    )?;
     let keys = delete_files(&tx, &[file_id])?;
     tx.commit()?;
     remove_unreferenced_thumbnails(conn, &keys);
-    Ok(existed)
+    Ok(())
 }
 
 /// Deletes every file under `root_id`. **Call inside a transaction.** Returns
@@ -958,7 +953,7 @@ mod tests {
         let keep = add_file(&mut conn, 1, "keep.txt", 1, "kept words");
         let gone = add_file(&mut conn, 1, "gone.txt", 2, "vanishing words");
 
-        assert!(delete_file(&mut conn, gone).unwrap());
+        delete_file(&mut conn, gone).unwrap();
 
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM files"), 1);
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM chunks"), 1);
@@ -979,7 +974,7 @@ mod tests {
             1
         );
         assert_eq!(scalar(&conn, "SELECT id FROM files"), keep);
-        assert!(!delete_file(&mut conn, gone).unwrap(), "already gone");
+        delete_file(&mut conn, gone).unwrap(); // already gone: a no-op
     }
 
     #[test]

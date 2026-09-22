@@ -4,6 +4,7 @@
 pub mod gate;
 mod isolate;
 pub mod pipeline;
+pub mod resources;
 pub mod scheduler;
 pub mod writer;
 

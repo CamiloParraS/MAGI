@@ -47,6 +47,7 @@ ndarray = { workspace = true }
 crossbeam-channel = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
+sysinfo = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

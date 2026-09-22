@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -341,10 +341,37 @@ impl<T> ModelSlot<T> {
     /// already, and marks this as the most recent use. A failed `load`
     /// leaves the slot empty (not a stale/poisoned entry).
     pub fn get_or_load(&self, load: impl FnOnce() -> Result<T>) -> Result<ModelGuard<'_, T>> {
-        let mut guard = self
+        let guard = self
             .inner
             .lock()
             .map_err(|_| Error::Model("model slot lock poisoned".to_string()))?;
+        Self::use_or_load(guard, load)
+    }
+
+    /// Like [`get_or_load`](Self::get_or_load), but waits at most `wait` for
+    /// another caller to finish with the model, then fails.
+    pub fn get_or_load_within(
+        &self,
+        wait: Duration,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<ModelGuard<'_, T>> {
+        let deadline = Instant::now() + wait;
+        loop {
+            match self.inner.try_lock() {
+                Ok(guard) => return Self::use_or_load(guard, load),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    // ponytail: polling, a Condvar if waits ever get long or many.
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => return Err(Error::Model("model busy or its lock poisoned".into())),
+            }
+        }
+    }
+
+    fn use_or_load(
+        mut guard: MutexGuard<'_, Option<(T, Instant)>>,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<ModelGuard<'_, T>> {
         match guard.as_mut() {
             Some((_, last_used)) => *last_used = Instant::now(),
             None => *guard = Some((load()?, Instant::now())),
@@ -353,9 +380,10 @@ impl<T> ModelSlot<T> {
     }
 
     /// Drops the model if it's been idle at least `idle_timeout`. Returns
-    /// whether it actually unloaded something.
+    /// whether it actually unloaded something. A model in use is not idle, so
+    /// this never waits for it.
     pub fn unload_if_idle(&self, idle_timeout: Duration) -> bool {
-        let Ok(mut guard) = self.inner.lock() else {
+        let Ok(mut guard) = self.inner.try_lock() else {
             return false;
         };
         let is_idle = guard
@@ -686,6 +714,38 @@ mod tests {
             "any elapsed time clears a 0s idle timeout"
         );
         assert!(!slot.is_loaded());
+    }
+
+    #[test]
+    fn a_model_in_use_is_neither_unloaded_nor_lent_twice() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        let in_use = slot.get_or_load(|| Ok(7)).unwrap();
+        assert!(!slot.unload_if_idle(Duration::ZERO), "must not wait for it");
+        assert!(
+            slot.get_or_load_within(Duration::ZERO, || Ok(8)).is_err(),
+            "still busy when the wait is up"
+        );
+        drop(in_use);
+        assert_eq!(
+            *slot.get_or_load_within(Duration::ZERO, || Ok(8)).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn a_bounded_wait_gets_the_model_once_the_other_user_is_done() {
+        let slot: ModelSlot<u32> = ModelSlot::new();
+        let (taken_tx, taken) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _in_use = slot.get_or_load(|| Ok(7)).unwrap();
+                taken_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            });
+            taken.recv().unwrap();
+            let got = slot.get_or_load_within(Duration::from_secs(10), || Ok(8));
+            assert_eq!(*got.unwrap(), 7);
+        });
     }
 
     #[test]

@@ -104,7 +104,7 @@ impl Scheduler {
         self.held.remove(&id);
     }
 
-    pub fn in_flight(&self) -> usize {
+    fn in_flight(&self) -> usize {
         self.held
             .values()
             .filter(|h| matches!(h, Hold::InFlight))
@@ -135,17 +135,7 @@ impl Scheduler {
                 Some(Hold::Watching { size, .. }) => Some(*size),
                 _ => None,
             };
-            match discovery::stat(&file.path) {
-                Err(e) => {
-                    actions.push(gone_or_failed(id, &e));
-                    self.held.insert(id, Hold::InFlight);
-                }
-                Ok(entry) => {
-                    if let Some(action) = self.judge(&file, entry, previous, now, &mut room) {
-                        actions.push(action);
-                    }
-                }
-            }
+            actions.extend(self.look(&file, previous, now, &mut room));
         }
 
         // New rows. The limit leaves room for the known ones at the front.
@@ -159,21 +149,28 @@ impl Scheduler {
                 if self.held.len() - self.in_flight() >= MAX_WAITING {
                     break;
                 }
-                let id = file.id;
-                match discovery::stat(&file.path) {
-                    Err(e) => {
-                        actions.push(gone_or_failed(id, &e));
-                        self.held.insert(id, Hold::InFlight);
-                    }
-                    Ok(entry) => {
-                        if let Some(action) = self.judge(&file, entry, None, now, &mut room) {
-                            actions.push(action);
-                        }
-                    }
-                }
+                actions.extend(self.look(&file, None, now, &mut room));
             }
         }
         Ok(actions)
+    }
+
+    /// Stats one file and [`judge`](Self::judge)s it; one that cannot be
+    /// stat'd is deleted or failed, and held until the writer reports back.
+    fn look(
+        &mut self,
+        file: &PendingFile,
+        previous_size: Option<u64>,
+        now: Now,
+        room: &mut usize,
+    ) -> Option<Action> {
+        match discovery::stat(&file.path) {
+            Ok(entry) => self.judge(file, entry, previous_size, now, room),
+            Err(e) => {
+                self.held.insert(file.id, Hold::InFlight);
+                Some(gone_or_failed(file.id, &e))
+            }
+        }
     }
 
     /// Settles one stat'd file: defer it, watch it for a second look, or hand

@@ -45,12 +45,6 @@ impl SigLipEmbedder {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Drops whichever towers have been idle at least `idle_timeout`.
-    pub fn unload_if_idle(&self, idle_timeout: Duration) {
-        self.vision.unload_if_idle(idle_timeout);
-        self.text.unload_if_idle(idle_timeout);
-    }
 }
 
 fn load_vision() -> Result<Mutex<Session>> {
@@ -137,6 +131,12 @@ impl ImageEmbedder for SigLipEmbedder {
 
     fn dim(&self) -> usize {
         IMAGE_EMBEDDING_DIM
+    }
+
+    /// Drops whichever towers have been idle at least `idle`.
+    fn unload_if_idle(&self, idle: Duration) {
+        self.vision.unload_if_idle(idle);
+        self.text.unload_if_idle(idle);
     }
 
     fn embed_image(&self, image: &RgbImage) -> Result<Vec<f32>> {

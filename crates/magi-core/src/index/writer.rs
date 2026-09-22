@@ -5,8 +5,7 @@
 //! half-done. Search reads on other connections (WAL).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -39,11 +38,7 @@ pub(crate) enum WriteJob {
         embedded: Box<Embedded>,
     },
     /// Unchanged: refresh size, mtime and scan id only.
-    Keep {
-        job: Box<Job>,
-        file_id: i64,
-        state: String,
-    },
+    Keep { job: Box<Job>, state: String },
     /// Failed for a reason that may pass: back off and retry.
     Retry {
         file_id: i64,
@@ -52,8 +47,9 @@ pub(crate) enum WriteJob {
     },
     /// Gone from disk.
     Delete(i64),
-    /// Walk every enabled root and settle deletions and moves.
-    Reconcile(Sender<Result<ScanSummary>>),
+    /// Walk every enabled root and settle deletions and moves; the result goes
+    /// to the sender, if anyone is waiting for it.
+    Reconcile(Option<Sender<Result<ScanSummary>>>),
     /// Reconcile if a root that was unreadable or missing is back.
     Reprobe,
     /// The watcher saw these paths change: reconcile just them.
@@ -62,18 +58,18 @@ pub(crate) enum WriteJob {
     Stop,
 }
 
-/// What the engine has done since it started.
-#[derive(Default)]
-pub struct Stats {
-    pub indexed: AtomicU64,
-    pub skipped: AtomicU64,
-    pub errored: AtomicU64,
-    pub unchanged: AtomicU64,
-    pub retried: AtomicU64,
-    pub removed: AtomicU64,
+impl WriteJob {
+    /// A failure that may pass, not caused by a lock.
+    pub(crate) fn retry(file_id: i64, message: String) -> Self {
+        Self::Retry {
+            file_id,
+            message,
+            locked: false,
+        }
+    }
 }
 
-/// A point-in-time copy of [`Stats`].
+/// What the engine has done since it started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatsSnapshot {
     pub indexed: u64,
@@ -84,28 +80,33 @@ pub struct StatsSnapshot {
     pub removed: u64,
 }
 
+/// The live [`StatsSnapshot`]; only the writer updates it.
+#[derive(Default)]
+pub struct Stats(Mutex<StatsSnapshot>);
+
 impl Stats {
     pub fn snapshot(&self) -> StatsSnapshot {
-        let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
-        StatsSnapshot {
-            indexed: get(&self.indexed),
-            skipped: get(&self.skipped),
-            errored: get(&self.errored),
-            unchanged: get(&self.unchanged),
-            retried: get(&self.retried),
-            removed: get(&self.removed),
-        }
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn update(&self, f: impl FnOnce(&mut StatsSnapshot)) {
+        f(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     fn count(&self, status: &Status) {
-        let counter = match status {
-            Status::Indexed => &self.indexed,
-            Status::Skipped => &self.skipped,
-            Status::Errored => &self.errored,
-            Status::Unchanged => &self.unchanged,
-            Status::Retried => &self.retried,
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
+        self.update(|s| {
+            *match status {
+                Status::Indexed => &mut s.indexed,
+                Status::Skipped => &mut s.skipped,
+                Status::Errored => &mut s.errored,
+                Status::Unchanged => &mut s.unchanged,
+                Status::Retried => &mut s.retried,
+            } += 1;
+        });
+    }
+
+    fn removed(&self, n: u32) {
+        self.update(|s| s.removed += u64::from(n));
     }
 }
 
@@ -149,11 +150,11 @@ pub(crate) fn run(
             WriteJob::Reconcile(reply) => {
                 let summary = reconcile_all(&mut conn, &current(&options));
                 if let Ok(s) = &summary {
-                    stats
-                        .removed
-                        .fetch_add(u64::from(s.removed), Ordering::Relaxed);
+                    stats.removed(s.removed);
                 }
-                let _ = reply.send(summary);
+                if let Some(reply) = reply {
+                    let _ = reply.send(summary);
+                }
                 let _ = wake.try_send(());
                 continue;
             }
@@ -161,9 +162,7 @@ pub(crate) fn run(
                 match recover(&mut conn, &current(&options)) {
                     Ok(Some(s)) => {
                         tracing::info!("a root is readable again; reconciled");
-                        stats
-                            .removed
-                            .fetch_add(u64::from(s.removed), Ordering::Relaxed);
+                        stats.removed(s.removed);
                         let _ = wake.try_send(());
                     }
                     Ok(None) => {}
@@ -198,9 +197,7 @@ pub(crate) fn run(
             }
             WriteJob::Delete(id) => {
                 match files::delete_file(&mut conn, id) {
-                    Ok(_) => {
-                        stats.removed.fetch_add(1, Ordering::Relaxed);
-                    }
+                    Ok(()) => stats.removed(1),
                     Err(e) => tracing::error!(file_id = id, error = %e, "could not delete file"),
                 }
                 id
@@ -217,34 +214,24 @@ pub(crate) fn run(
                 );
                 file_id
             }
-            WriteJob::Keep {
-                job,
-                file_id,
-                state,
-            } => {
-                if requeued(&conn, file_id) {
-                    let _ = done.send(file_id);
-                    continue;
+            WriteJob::Keep { job, state } => {
+                let id = job.stored.id;
+                if !requeued(&conn, id) {
+                    apply(&stats, id, store_keep(&conn, &job, &state));
                 }
-                apply(&stats, file_id, store_keep(&conn, &job, file_id, &state));
-                file_id
+                id
             }
             WriteJob::Store { job, embedded } => {
-                let file_id = job.stored.as_ref().map(|s| s.id);
-                if file_id.is_some_and(|id| requeued(&conn, id)) {
-                    let _ = done.send(file_id.unwrap_or_default());
-                    continue;
+                let id = job.stored.id;
+                if !requeued(&conn, id) {
+                    let result = store_embedded(&mut conn, &job, *embedded);
+                    if let Err(e) = &result {
+                        // Leave the file retryable rather than stuck in `indexing`.
+                        tracing::error!(file_id = id, error = %e, "could not store file");
+                        let _ = store_retry(&conn, id, &e.to_string(), false);
+                    }
+                    apply(&stats, id, result);
                 }
-                let result = store_embedded(&mut conn, &job, *embedded);
-                let id = file_id.unwrap_or_default();
-                if let Err(e) = &result
-                    && file_id.is_some()
-                {
-                    // Leave the file retryable rather than stuck in `indexing`.
-                    tracing::error!(file_id = id, error = %e, "could not store file");
-                    let _ = store_retry(&conn, id, &e.to_string(), false);
-                }
-                apply(&stats, id, result);
                 id
             }
         };
@@ -254,11 +241,7 @@ pub(crate) fn run(
 
 fn settle(conn: &mut Connection, held: &mut Vec<Held>, stats: &Stats) {
     match settle_held(conn, held, Instant::now()) {
-        Ok(removed) => {
-            stats
-                .removed
-                .fetch_add(u64::from(removed), Ordering::Relaxed);
-        }
+        Ok(removed) => stats.removed(removed),
         Err(e) => tracing::error!(error = %e, "could not settle removed files"),
     }
 }

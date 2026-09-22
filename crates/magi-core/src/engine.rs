@@ -11,7 +11,9 @@
 //! them (on its own connection), waits for each file to stop changing, and
 //! feeds the pipeline at a bounded rate. The writer is the only thread that
 //! writes. Per-root watchers and the ticker (`watch/`) feed it changes; the
-//! extract and embed threads run at low OS priority.
+//! extract and embed threads run at low OS priority. The monitor
+//! (`index::resources`) pauses the scheduler on low memory or battery and
+//! unloads idle models.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -31,7 +33,7 @@ use crate::index::pipeline::{
 };
 use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
-use crate::index::{ModelIds, requeue_on_model_change};
+use crate::index::{ModelIds, requeue_on_model_change, resources};
 use crate::ocr::OcrEngine;
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
@@ -90,10 +92,7 @@ impl Engine {
             ocr,
             ..IndexContext::new(text)
         });
-        let workers = match config.indexing.worker_threads {
-            0 => (std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1),
-            n => n as usize,
-        };
+        let (total_memory, workers) = resources::machine(config.indexing.worker_threads);
         let max_in_flight = workers * 2 + 2;
 
         let (write_tx, write_rx) = crossbeam_channel::unbounded::<WriteJob>();
@@ -104,6 +103,9 @@ impl Engine {
         let stats = Arc::new(Stats::default());
         let stop = Arc::new(AtomicBool::new(false));
         let search_pending = SearchPending::default();
+        let paused = Arc::new(AtomicBool::new(false));
+        let force_low_memory = Arc::new(AtomicBool::new(false));
+        let (monitor_wake, monitor_rx) = crossbeam_channel::bounded::<()>(1);
 
         // Step 3: watch before scanning. Events that arrive during the scan
         // queue behind it on the writer's channel and are applied afterwards.
@@ -126,9 +128,7 @@ impl Engine {
             }
         }
         // Roots polled instead of watched: failed ones, and any not accessible.
-        let unwatched = Arc::new(AtomicUsize::new(
-            enabled.len() - accessible.len() + failed.len(),
-        ));
+        let unwatched = accessible.len() < enabled.len() || !failed.is_empty();
         let (ticker_stop, ticker_rx) = crossbeam_channel::bounded::<()>(1);
 
         let inner = Arc::new(Inner {
@@ -140,6 +140,9 @@ impl Engine {
             write_tx: write_tx.clone(),
             stats: stats.clone(),
             search_pending: search_pending.clone(),
+            paused: paused.clone(),
+            force_low_memory: force_low_memory.clone(),
+            monitor_wake,
         });
         let handle = EngineHandle { inner };
 
@@ -174,14 +177,14 @@ impl Engine {
 
         // Step 6: the queue, newest first, is the scheduler's job from here.
         handle.spawn("magi-scheduler", {
-            let write_tx = write_tx.clone();
+            let (write_tx, stop, paused) = (write_tx.clone(), stop.clone(), paused.clone());
             move || {
                 scheduler_thread(
                     &scheduler_conn,
                     Scheduler::new(max_in_flight),
                     &stop,
-                    &done_rx,
-                    &wake_rx,
+                    &paused,
+                    (&done_rx, &wake_rx),
                     &write_tx,
                     &extract_tx,
                 )
@@ -190,6 +193,16 @@ impl Engine {
         handle.spawn("magi-ticker", {
             let hours = config.indexing.reconcile_interval_hours;
             move || poller::run(ticker_rx, write_tx, hours, unwatched)
+        })?;
+        let monitor = resources::Monitor {
+            ctx,
+            paused,
+            force_low_memory,
+            pause_on_battery: config.indexing.pause_on_battery,
+            idle: resources::idle_unload(config.models.idle_unload_minutes, total_memory),
+        };
+        handle.spawn("magi-monitor", move || {
+            resources::run(monitor, &stop, monitor_rx)
         })?;
         Ok(handle)
     }
@@ -207,11 +220,15 @@ struct Inner {
     options: SharedOptions,
     watchers: Mutex<Option<Watchers>>,
     ticker_stop: Sender<()>,
-    /// Spawn order: writer, embed, extract workers, scheduler, ticker.
+    /// Spawn order: writer, embed, extract workers, scheduler, ticker, monitor.
     threads: Mutex<Vec<JoinHandle<()>>>,
     write_tx: Sender<WriteJob>,
     stats: Arc<Stats>,
     search_pending: SearchPending,
+    /// Set by the monitor: low memory, or on battery (SPEC.md §6.4).
+    paused: Arc<AtomicBool>,
+    force_low_memory: Arc<AtomicBool>,
+    monitor_wake: Sender<()>,
 }
 
 impl EngineHandle {
@@ -241,7 +258,7 @@ impl EngineHandle {
         let (reply, result) = crossbeam_channel::bounded(1);
         // A stopped engine drops `reply`, which the caller sees as a
         // disconnected receiver.
-        let _ = self.inner.write_tx.send(WriteJob::Reconcile(reply));
+        let _ = self.inner.write_tx.send(WriteJob::Reconcile(Some(reply)));
         result
     }
 
@@ -267,6 +284,20 @@ impl EngineHandle {
         self.inner.search_pending.clone()
     }
 
+    /// Whether indexing is paused for low memory or battery. Files already in
+    /// the pipeline finish; no new ones start.
+    pub fn is_paused(&self) -> bool {
+        self.inner.paused.load(Ordering::SeqCst)
+    }
+
+    /// Test hook (SPEC.md §7 M5 item 17): acts as if available memory were
+    /// below 1 GB until called with `false`.
+    #[doc(hidden)]
+    pub fn simulate_low_memory(&self, low: bool) {
+        self.inner.force_low_memory.store(low, Ordering::SeqCst);
+        let _ = self.inner.monitor_wake.try_send(());
+    }
+
     /// Stops the threads and waits for them. Work still queued in the
     /// pipeline is dropped; its rows stay `indexing` and are recovered at the
     /// next start. Everything already handed to the writer is applied.
@@ -286,6 +317,7 @@ impl Inner {
                 .take(),
         );
         let _ = self.ticker_stop.try_send(());
+        let _ = self.monitor_wake.try_send(());
         let mut threads =
             std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
         if threads.is_empty() {
@@ -339,8 +371,8 @@ fn scheduler_thread(
     conn: &rusqlite::Connection,
     mut scheduler: Scheduler,
     stop: &AtomicBool,
-    done: &Receiver<i64>,
-    wake: &Receiver<()>,
+    paused: &AtomicBool,
+    (done, wake): (&Receiver<i64>, &Receiver<()>),
     write_tx: &Sender<WriteJob>,
     extract_tx: &Sender<Job>,
 ) {
@@ -348,9 +380,11 @@ fn scheduler_thread(
         while let Ok(id) = done.try_recv() {
             scheduler.finished(id);
         }
-        match scheduler.poll(conn, Now::current()) {
-            Ok(actions) => dispatch(conn, actions, write_tx, extract_tx),
-            Err(e) => tracing::error!(error = %e, "scheduler poll failed"),
+        if !paused.load(Ordering::SeqCst) {
+            match scheduler.poll(conn, Now::current()) {
+                Ok(actions) => dispatch(conn, actions, write_tx, extract_tx),
+                Err(e) => tracing::error!(error = %e, "scheduler poll failed"),
+            }
         }
         select! {
             recv(done) -> id => if let Ok(id) = id { scheduler.finished(id) },
@@ -385,11 +419,7 @@ fn dispatch(
                 let _ = write_tx.send(WriteJob::Delete(id));
             }
             Action::Fail { id, message } => {
-                let _ = write_tx.send(WriteJob::Retry {
-                    file_id: id,
-                    message,
-                    locked: false,
-                });
+                let _ = write_tx.send(WriteJob::retry(id, message));
             }
             Action::Extract { file, entry } => {
                 let stored = files::get_stored(conn, &entry.path).ok().flatten();
@@ -404,15 +434,11 @@ fn dispatch(
                     root_path: root_path.clone(),
                     entry,
                     scan_id,
-                    stored: Some(stored),
+                    stored,
                 });
             }
         }
     }
-}
-
-fn file_id(job: &Job) -> Option<i64> {
-    job.stored.as_ref().map(|s| s.id)
 }
 
 fn extract_worker(
@@ -432,34 +458,21 @@ fn extract_worker(
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let extracted = catch_unwind(AssertUnwindSafe(|| prepare(ctx, &current, &job)));
-        let next = match extracted {
-            Ok(Extracted::Keep { file_id, state }) => WriteJob::Keep {
-                job: Box::new(job),
-                file_id,
-                state,
-            },
-            Ok(Extracted::Retry {
-                file_id,
-                message,
-                locked,
-            }) => WriteJob::Retry {
-                file_id,
-                message,
-                locked,
-            },
+        let next = match catch_unwind(AssertUnwindSafe(|| prepare(ctx, &current, &job))) {
             Ok(Extracted::Fresh(fresh)) => {
                 let _ = embed_tx.send((job, *fresh));
                 continue;
             }
-            Err(_) => match file_id(&job) {
-                Some(file_id) => WriteJob::Retry {
-                    file_id,
-                    message: "extraction panicked".into(),
-                    locked: false,
-                },
-                None => continue,
+            Ok(Extracted::Keep { state }) => WriteJob::Keep {
+                job: Box::new(job),
+                state,
             },
+            Ok(Extracted::Retry { message, locked }) => WriteJob::Retry {
+                file_id: job.stored.id,
+                message,
+                locked,
+            },
+            Err(_) => WriteJob::retry(job.stored.id, "extraction panicked".into()),
         };
         let _ = write_tx.send(next);
     }
@@ -485,22 +498,8 @@ fn embed_worker(
                 job: Box::new(job),
                 embedded: Box::new(embedded),
             },
-            Ok(Err(e)) => match file_id(&job) {
-                Some(file_id) => WriteJob::Retry {
-                    file_id,
-                    message: e.to_string(),
-                    locked: false,
-                },
-                None => continue,
-            },
-            Err(_) => match file_id(&job) {
-                Some(file_id) => WriteJob::Retry {
-                    file_id,
-                    message: "embedding panicked".into(),
-                    locked: false,
-                },
-                None => continue,
-            },
+            Ok(Err(e)) => WriteJob::retry(job.stored.id, e.to_string()),
+            Err(_) => WriteJob::retry(job.stored.id, "embedding panicked".into()),
         };
         let _ = write_tx.send(next);
     }
