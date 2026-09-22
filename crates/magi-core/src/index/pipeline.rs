@@ -18,7 +18,7 @@ use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
-use crate::platform::{FsProbe, PermissionProbe, RootAccess};
+use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{reconcile_root, remove_unseen};
 
 use super::gate::ImageGate;
@@ -251,7 +251,12 @@ pub(crate) enum Extracted {
     /// Read and extracted, ready to embed.
     Fresh(Box<Fresh>),
     /// Could not be read just now (I/O): try again later, with backoff.
-    Retry { file_id: i64, message: String },
+    /// `locked`: another program holds it open ([`platform::is_locked`]).
+    Retry {
+        file_id: i64,
+        message: String,
+        locked: bool,
+    },
 }
 
 pub(crate) struct Fresh {
@@ -299,12 +304,13 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
     let stored = job.stored.as_ref();
     // An I/O failure on a file with a row is retried; without one there is
     // nothing to retry, so it is recorded as an error.
-    let unreadable = |kind: Kind, message: String| match stored {
+    let unreadable = |kind: Kind, e: std::io::Error| match stored {
         Some(s) => Err(Extracted::Retry {
             file_id: s.id,
-            message,
+            message: e.to_string(),
+            locked: platform::is_locked(&e),
         }),
-        None => Ok(errored(kind, message)),
+        None => Ok(errored(kind, e.to_string())),
     };
 
     // Same size and mtime as when it was indexed: nothing to read.
@@ -321,8 +327,8 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
     }
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
-    let outcome = match plan_entry(&entry.path, entry.size, max_size_bytes, options) {
-        Plan::Unreadable(message) => unreadable(Kind::Other, message),
+    let outcome = match plan_entry(entry, max_size_bytes, options) {
+        Plan::Unreadable(e) => unreadable(Kind::Other, e),
         Plan::Done(outcome) => {
             let outcome = *outcome;
             if let Some(s) = stored.filter(|s| unchanged_without_content(s, &outcome)) {
@@ -345,10 +351,10 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
                         state: "indexed".into(),
                     };
                 }
-                Some((_, Err(e))) => unreadable(kind, e.to_string()),
-                _ => extract_entry(&entry.path, kind, options, ctx)
-                    .map_err(|e| e.to_string())
-                    .or_else(|message| unreadable(kind, message)),
+                Some((_, Err(e))) => unreadable(kind, e),
+                _ => {
+                    extract_entry(&entry.path, kind, options, ctx).or_else(|e| unreadable(kind, e))
+                }
             }
         }
     };
@@ -462,13 +468,21 @@ pub(crate) fn store_keep(
     Ok(Status::Unchanged)
 }
 
-pub(crate) fn store_retry(conn: &Connection, file_id: i64, message: &str) -> Result<Status> {
-    Ok(
-        match files::record_failure(conn, file_id, message, unix_now())? {
-            files::Failure::Retry { .. } => Status::Retried,
-            files::Failure::GaveUp { .. } => Status::Errored,
-        },
-    )
+pub(crate) fn store_retry(
+    conn: &Connection,
+    file_id: i64,
+    message: &str,
+    locked: bool,
+) -> Result<Status> {
+    let record = if locked {
+        files::record_locked
+    } else {
+        files::record_failure
+    };
+    Ok(match record(conn, file_id, message, unix_now())? {
+        files::Failure::Retry { .. } => Status::Retried,
+        files::Failure::GaveUp { .. } => Status::Errored,
+    })
 }
 
 /// The three stages for one file in a row, on the calling thread.
@@ -490,7 +504,11 @@ fn index_file(
     };
     match prepare(ctx, options, &job) {
         Extracted::Keep { file_id, state } => store_keep(conn, &job, file_id, &state),
-        Extracted::Retry { file_id, message } => store_retry(conn, file_id, &message),
+        Extracted::Retry {
+            file_id,
+            message,
+            locked,
+        } => store_retry(conn, file_id, &message, locked),
         Extracted::Fresh(fresh) => {
             let embedded = embed(ctx, &job, *fresh, &|| {})?;
             store_embedded(conn, &job, embedded)
@@ -594,15 +612,23 @@ fn read_header(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
 /// What to do with a file before reading its content.
 enum Plan {
     /// Could not be opened to tell what it is.
-    Unreadable(String),
+    Unreadable(std::io::Error),
     /// Settled without reading it: too large or not extracted.
     Done(Box<FileOutcome>),
     /// Read it and run this kind's extractor.
     Extract(Kind),
 }
 
-fn plan_entry(path: &Path, size: u64, max_size_bytes: u64, options: &IndexRootOptions) -> Plan {
-    if size > max_size_bytes {
+fn plan_entry(entry: &WalkEntry, max_size_bytes: u64, options: &IndexRootOptions) -> Plan {
+    let path = entry.path.as_path();
+    // Before anything that opens it: its bytes are in the cloud.
+    if entry.cloud_only {
+        return Plan::Done(Box::new(skipped(
+            discovery::classify(path, &[]),
+            "cloud_only",
+        )));
+    }
+    if entry.size > max_size_bytes {
         return Plan::Done(Box::new(skipped(
             discovery::classify(path, &[]),
             "too_large",
@@ -615,7 +641,7 @@ fn plan_entry(path: &Path, size: u64, max_size_bytes: u64, options: &IndexRootOp
     if kind == Kind::Other {
         match read_header(path, SNIFF_HEADER_LEN) {
             Ok(header) => kind = discovery::classify(path, &header),
-            Err(e) => return Plan::Unreadable(e.to_string()),
+            Err(e) => return Plan::Unreadable(e),
         }
     }
 
@@ -805,6 +831,39 @@ mod tests {
             .unwrap();
         assert_eq!(row.state, "skipped");
         assert_eq!(row.skip_reason.as_deref(), Some("image_too_large"));
+    }
+
+    /// SPEC.md §5.4 step 3: a cloud placeholder is indexed by name only and
+    /// its content is never read (reading it would download it).
+    #[test]
+    fn a_cloud_only_file_is_indexed_by_name_and_never_read() {
+        let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let path = root_path.join("report.txt");
+        fs::write(&path, "confidential zeppelin").unwrap();
+        let entry = WalkEntry {
+            cloud_only: true,
+            ..discovery::stat(&path).unwrap()
+        };
+
+        let status = index_file(
+            &mut conn,
+            &IndexContext::new(Arc::new(FakeEmbedder)),
+            &default_options(),
+            root_id,
+            &root_path,
+            &entry,
+            1,
+        )
+        .unwrap();
+
+        assert!(matches!(status, Status::Skipped));
+        let row = db::files::get_by_path(&conn, &path).unwrap().unwrap();
+        assert_eq!(row.state, "skipped");
+        assert_eq!(row.skip_reason.as_deref(), Some("cloud_only"));
+        let hits = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
+        assert_eq!(hits("zeppelin"), 0, "content must not be read");
+        assert_eq!(hits("report"), 1, "the name is still searchable");
     }
 
     #[test]

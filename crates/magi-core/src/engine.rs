@@ -10,8 +10,8 @@
 //! The database's `pending` rows are the queue; the scheduler thread reads
 //! them (on its own connection), waits for each file to stop changing, and
 //! feeds the pipeline at a bounded rate. The writer is the only thread that
-//! writes. No watcher yet (M5 Slice 4): [`EngineHandle::rescan`] is how new
-//! and changed files are noticed after startup.
+//! writes. Per-root watchers and the ticker (`watch/`) feed it changes; the
+//! extract and embed threads run at low OS priority.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
 use crate::index::{ModelIds, requeue_on_model_change};
 use crate::ocr::OcrEngine;
-use crate::platform::{FsProbe, PermissionProbe, RootAccess};
+use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
 use crate::watch::watcher::Watchers;
 use crate::watch::{poller, watcher};
@@ -388,6 +388,7 @@ fn dispatch(
                 let _ = write_tx.send(WriteJob::Retry {
                     file_id: id,
                     message,
+                    locked: false,
                 });
             }
             Action::Extract { file, entry } => {
@@ -422,6 +423,7 @@ fn extract_worker(
     embed_tx: &Sender<(Job, Fresh)>,
     write_tx: &Sender<WriteJob>,
 ) {
+    Os.lower_current_thread();
     for job in jobs {
         if stop.load(Ordering::SeqCst) {
             continue;
@@ -437,7 +439,15 @@ fn extract_worker(
                 file_id,
                 state,
             },
-            Ok(Extracted::Retry { file_id, message }) => WriteJob::Retry { file_id, message },
+            Ok(Extracted::Retry {
+                file_id,
+                message,
+                locked,
+            }) => WriteJob::Retry {
+                file_id,
+                message,
+                locked,
+            },
             Ok(Extracted::Fresh(fresh)) => {
                 let _ = embed_tx.send((job, *fresh));
                 continue;
@@ -446,6 +456,7 @@ fn extract_worker(
                 Some(file_id) => WriteJob::Retry {
                     file_id,
                     message: "extraction panicked".into(),
+                    locked: false,
                 },
                 None => continue,
             },
@@ -461,6 +472,7 @@ fn embed_worker(
     jobs: Receiver<(Job, Fresh)>,
     write_tx: &Sender<WriteJob>,
 ) {
+    Os.lower_current_thread();
     for (job, fresh) in jobs {
         if stop.load(Ordering::SeqCst) {
             continue;
@@ -477,6 +489,7 @@ fn embed_worker(
                 Some(file_id) => WriteJob::Retry {
                     file_id,
                     message: e.to_string(),
+                    locked: false,
                 },
                 None => continue,
             },
@@ -484,6 +497,7 @@ fn embed_worker(
                 Some(file_id) => WriteJob::Retry {
                     file_id,
                     message: "embedding panicked".into(),
+                    locked: false,
                 },
                 None => continue,
             },

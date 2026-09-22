@@ -2877,6 +2877,7 @@ dependencies = [
  "image",
  "infer 0.22.0",
  "isolang",
+ "libc",
  "ndarray",
  "notify",
  "notify-debouncer-full",
@@ -2907,6 +2908,7 @@ dependencies = [
  "unicode-normalization",
  "ureq",
  "whatlang",
+ "windows-sys 0.61.2",
  "zip 5.1.1",
 ]
 

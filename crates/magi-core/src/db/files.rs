@@ -334,11 +334,7 @@ pub enum Failure {
 }
 
 pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
-    let attempts: u32 = conn.query_row(
-        "SELECT attempts FROM files WHERE id = ?1",
-        params![file_id],
-        |row| row.get::<_, u32>(0),
-    )? + 1;
+    let attempts = attempts_of(conn, file_id)? + 1;
     if attempts >= MAX_ATTEMPTS {
         conn.execute(
             "UPDATE files SET state = 'error', attempts = ?2, error = ?3, next_attempt_at = NULL
@@ -347,6 +343,35 @@ pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) 
         )?;
         return Ok(Failure::GaveUp { attempts });
     }
+    retry_later(conn, file_id, attempts, message, now)
+}
+
+/// A file another program holds open (Windows sharing or lock violation):
+/// always retried, never `error` (SPEC.md §5.4 step 6, §6.2). The count grows
+/// so the backoff does, but stops one short of [`MAX_ATTEMPTS`].
+///
+/// ponytail: shares `attempts` with real failures, so one real failure right
+/// after a long lock gives up at once; a separate lock counter if that bites.
+pub fn record_locked(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
+    let attempts = (attempts_of(conn, file_id)? + 1).min(MAX_ATTEMPTS - 1);
+    retry_later(conn, file_id, attempts, message, now)
+}
+
+fn attempts_of(conn: &Connection, file_id: i64) -> Result<u32> {
+    Ok(conn.query_row(
+        "SELECT attempts FROM files WHERE id = ?1",
+        params![file_id],
+        |row| row.get::<_, u32>(0),
+    )?)
+}
+
+fn retry_later(
+    conn: &Connection,
+    file_id: i64,
+    attempts: u32,
+    message: &str,
+    now: i64,
+) -> Result<Failure> {
     let next_attempt_at = now + backoff_secs(attempts);
     conn.execute(
         "UPDATE files SET state = 'pending', attempts = ?2, error = ?3, next_attempt_at = ?4
@@ -1012,6 +1037,36 @@ mod tests {
             1,
             "limit respected"
         );
+    }
+
+    /// SPEC.md §6.2: a file another program holds open is retried with
+    /// backoff and is never given up on for it.
+    #[test]
+    fn a_locked_file_backs_off_but_never_goes_to_error() {
+        let (_dir, mut conn) = open_test_db();
+        let id = add_file(&mut conn, 1, "open.docx", 1, "x");
+        mark_indexing(&conn, id).unwrap();
+
+        assert_eq!(
+            record_locked(&conn, id, "locked", 1000).unwrap(),
+            Failure::Retry {
+                attempts: 1,
+                next_attempt_at: 1030
+            }
+        );
+        for now in 2000..2010 {
+            assert_eq!(
+                record_locked(&conn, id, "locked", now).unwrap(),
+                Failure::Retry {
+                    attempts: MAX_ATTEMPTS - 1,
+                    next_attempt_at: now + 120
+                }
+            );
+        }
+        let state: String = conn
+            .query_row("SELECT state FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(state, "pending");
     }
 
     #[test]

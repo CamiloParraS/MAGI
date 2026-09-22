@@ -1,6 +1,7 @@
 //! Periodic safety nets (SPEC.md §5.4): a reconciliation every
 //! `reconcile_interval_hours`, one after a wall-clock jump (sleep/resume),
-//! and one every 15 minutes while any root has no working watcher.
+//! and one every 15 minutes while any root has no working watcher. Every tick
+//! also re-probes roots that were unreadable or missing (SPEC.md §6.1).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,8 +11,8 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::index::writer::WriteJob;
 
-/// The clock is looked at this often.
-const TICK: Duration = Duration::from_secs(60);
+/// The clock is looked at, and lost roots re-probed, this often.
+const TICK: Duration = Duration::from_secs(30);
 /// A wall-clock gap between ticks over this is a sleep, resume or clock change.
 const JUMP_SECS: i64 = 5 * 60;
 /// Polling period for roots without a watcher.
@@ -77,6 +78,7 @@ pub(crate) fn run(
 ) {
     let mut timers = Timers::new(interval_hours, unix_now());
     while let Err(crossbeam_channel::RecvTimeoutError::Timeout) = stop.recv_timeout(TICK) {
+        let _ = jobs.send(WriteJob::Reprobe);
         let unwatched = unwatched.load(Ordering::Relaxed) > 0;
         if let Some(reason) = timers.tick(unix_now(), unwatched) {
             tracing::info!(?reason, "scheduled reconciliation");

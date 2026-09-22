@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use crate::error::Result;
+use crate::platform::{CloudPlaceholder, Os};
 
 /// Package-bundle directory suffixes treated as a single opaque entry
 /// (indexed by name only, never descended) per SPEC.md §5.2.
@@ -24,6 +25,9 @@ pub struct WalkEntry {
     pub size: u64,
     pub mtime_ns: i64,
     pub is_dir: bool,
+    /// A cloud placeholder (OneDrive, iCloud, Dropbox) whose content is not on
+    /// disk: never read, or reading it would download it (SPEC.md §6).
+    pub cloud_only: bool,
 }
 
 fn is_opaque_bundle(path: &Path) -> bool {
@@ -58,6 +62,7 @@ pub fn stat(path: &Path) -> std::io::Result<WalkEntry> {
         size: meta.len(),
         mtime_ns: mtime_ns(&meta),
         is_dir: meta.is_dir(),
+        cloud_only: Os.is_cloud_only(path, &meta),
     })
 }
 
@@ -160,6 +165,7 @@ pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Ve
             size: meta.len(),
             mtime_ns: mtime_ns(&meta),
             is_dir,
+            cloud_only: Os.is_cloud_only(path, &meta),
         });
     }
     Ok(entries)

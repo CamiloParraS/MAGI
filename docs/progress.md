@@ -1789,3 +1789,63 @@ consecutive isolated runs and three full runs pass.
 - A root that was missing at start, or whose watcher failed, is polled every
   15 minutes; a root that comes back is not watched until the next start.
 - The 2 s debounce and 5 s hold are constants, not settings.
+
+### M5 Slice 5 - platform behaviour
+
+Plan: docs/m5-plan.md. `platform::Os` implements the SPEC §6 traits; OS code
+stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
+`platform/mod.rs` so every OS tests them.
+
+- [x] **Cloud placeholders** (SPEC §5.4 step 3, §6.1, §6.2). `WalkEntry::cloud_only`
+      comes from metadata the walk already reads: Windows
+      `0x00400000 | 0x00040000 | 0x00001000`, macOS `SF_DATALESS = 0x40000000`
+      (checked against xnu `bsd/sys/stat.h`), Linux never. The file is
+      `skipped` / `cloud_only` with only its filename chunk; `plan_entry` decides
+      before anything opens it, and move matching does not hash it. Tests: the
+      bit decoders (all OSes), a pipeline test (content not searchable, name
+      is), and on Windows a real `FILE_ATTRIBUTE_OFFLINE` set with
+      `SetFileAttributesW` and read back through `discovery::stat`.
+- [x] **Locked files** (item 16). Windows errors 32/33 (`platform::is_locked`)
+      go through `files::record_locked`: same backoff, attempts capped one below
+      `MAX_ATTEMPTS`, so never `error`. `std` already opens files with shared
+      read/write/delete access.
+- [x] **Thread priority**: extract and embed threads call
+      `Os.lower_current_thread()` (Windows `THREAD_PRIORITY_BELOW_NORMAL`, Linux
+      `setpriority(PRIO_PROCESS, 0, 10)`, macOS `QOS_CLASS_UTILITY`).
+- [x] **Power status**: Windows `GetSystemPowerStatus`, Linux
+      `/sys/class/power_supply` (`type` and `online`), macOS `pmset -g batt`.
+      Parsers unit-tested; nothing reads it until Slice 6's pause on battery.
+- [x] **Recovery**: the ticker now ticks every 30 s and sends
+      `WriteJob::Reprobe`; `reconcile::recover` reconciles when a
+      `permission_denied` or `missing` root is readable again (SPEC §6.1). The
+      jump detector is unchanged (still a gap over 5 minutes).
+- [x] **Unwatched roots**: a UNC path or a drive letter of type `DRIVE_REMOTE`
+      is not watched (`watch_failed`, 15-minute polling); inotify `ENOSPC`
+      (`MaxFilesWatch`) logs the `sysctl fs.inotify.max_user_watches` fix.
+- [x] **New dependencies**: `libc` 0.2.189 (Unix) and `windows-sys` 0.61.2
+      (Windows; features FileSystem, Power, Threading, WindowsProgramming,
+      Foundation). Both were already in the lockfile transitively; thin
+      bindings, no native library, so no ADR.
+- [x] **Verification** (Windows, `tests/incremental.rs`, real engine): 14 (a
+      file with read permission denied, `chmod 000` on Unix and an `icacls`
+      deny ACE on Windows, is retried then `error`, the other file indexed),
+      15 (root renamed away: `missing`, rows kept, hidden from search; renamed
+      back while running: picked up by the 30 s re-probe, embed counter
+      unchanged), 16 (file held with `share_mode(0)`: six retries, still
+      `pending`, indexed once released), plus a path over 260 characters.
+      Retry tests skip the backoff by setting `next_attempt_at = 0` rather than
+      waiting minutes. Three consecutive full runs of the suite (20 tests)
+      green. Unit tests: 237 (13 new). Clippy clean.
+- [ ] **CI on macOS and Linux**: not run yet. The macOS and Linux platform code
+      has not been compiled anywhere; only CI can, so expect a possible iteration.
+
+**Known limits.**
+- A placeholder that is hydrated in place with the same size and mtime stays
+  `skipped` / `cloud_only` until it next changes.
+- The scheduler's stability `stat` on Windows opens a handle without data
+  access; no real OneDrive or iCloud placeholder has been tested, only the
+  attribute bits.
+- `record_locked` shares the `attempts` counter, so a real failure right after
+  a long lock gives up sooner than three tries.
+- A recovered root is reconciled but not watched until the next start (polled
+  every 15 minutes meanwhile), as in Slice 4.

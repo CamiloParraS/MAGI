@@ -37,10 +37,24 @@ pub(crate) fn start(roots: &[Root], jobs: &Sender<WriteJob>) -> (Watchers, Vec<i
     let mut debouncers = Vec::new();
     let mut failed = Vec::new();
     for root in roots {
+        if crate::platform::is_network_drive(&root.path) {
+            tracing::info!(root = %root.path.display(), "network drive; polling instead of watching");
+            failed.push(root.id);
+            continue;
+        }
         match watch_root(root, jobs.clone()) {
             Ok(debouncer) => debouncers.push(debouncer),
             Err(e) => {
-                tracing::warn!(root = %root.path.display(), error = %e, "cannot watch root; polling instead");
+                if matches!(e.kind, notify::ErrorKind::MaxFilesWatch) {
+                    tracing::warn!(
+                        root = %root.path.display(),
+                        "inotify watch limit reached; polling instead. Raise it with \
+                         `sudo sysctl fs.inotify.max_user_watches=524288` and persist it \
+                         in /etc/sysctl.d/"
+                    );
+                } else {
+                    tracing::warn!(root = %root.path.display(), error = %e, "cannot watch root; polling instead");
+                }
                 failed.push(root.id);
             }
         }

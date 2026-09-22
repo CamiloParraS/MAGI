@@ -374,6 +374,36 @@ A ticker thread (`watch::poller`) asks for a full scan every
 `reconcile_interval_hours`, after a wall-clock jump over 5 minutes, and every 15
 minutes while a root has no watcher (status `watch_failed`, or not accessible).
 
+Every 30 s tick also sends `WriteJob::Reprobe`: if a root that is
+`permission_denied` or `missing` probes readable again, everything is
+reconciled (`reconcile::recover`), which clears its status.
+
 `EngineHandle::apply_indexing_config` replaces the shared indexing options and
 rescans. The stale-result rule: a file re-queued by a watcher event while the
 pipeline is working on it has that result dropped and is processed again.
+
+## Platform behaviour (M5 Slice 5)
+
+`platform::Os` implements SPEC §6's `CloudPlaceholder`, `PowerStatus` and
+`ThreadPriority`; the OS code lives in `platform/{windows,macos,linux}.rs`, the
+pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
+`platform/mod.rs` so every OS tests them.
+
+- **Cloud placeholders.** `WalkEntry::cloud_only` comes from metadata the walk
+  already has: Windows attributes `RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN |
+  OFFLINE`, macOS `st_flags & SF_DATALESS` (0x40000000), never on Linux. Such a
+  file is stored `skipped` with `skip_reason = 'cloud_only'` and only its
+  filename chunk; nothing opens it (`plan_entry` checks first, move matching
+  does not hash it).
+- **Locked files.** An I/O error that `platform::is_locked` recognises (Windows
+  32/33) is retried through `files::record_locked`: the usual backoff, but the
+  attempt count stops one short of `MAX_ATTEMPTS`, so it never becomes `error`.
+- **Priority.** Extract and embed threads lower themselves: Windows
+  `THREAD_PRIORITY_BELOW_NORMAL`, Linux `setpriority(PRIO_PROCESS, 0, 10)` (per
+  thread on Linux), macOS QoS utility.
+- **Power.** `Os.on_battery()`: Windows `GetSystemPowerStatus`, Linux
+  `/sys/class/power_supply`, macOS `pmset -g batt`. Read by nothing yet; pause on
+  battery is M5 Slice 6.
+- **Unwatched roots.** A network share or mapped network drive (Windows) is
+  never watched, and a root whose watcher fails (inotify `ENOSPC` logs the
+  `sysctl` fix) is marked `watch_failed`; both are polled every 15 minutes.

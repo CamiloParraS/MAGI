@@ -100,6 +100,10 @@ fn reconcile_entry(
 /// read only when a move is plausible. A row never hashed (filename-only
 /// kinds) cannot be matched; its replacement costs one filename chunk.
 fn find_old_home(conn: &Connection, entry: &discovery::WalkEntry) -> Result<Option<i64>> {
+    // Hashing reads the bytes, which for a placeholder means downloading them.
+    if entry.cloud_only {
+        return Ok(None);
+    }
     let kind = discovery::classify(&entry.path, &[]);
     let candidates: Vec<_> = files::hashed_of_size(conn, entry.size, kind.as_str())?
         .into_iter()
@@ -311,6 +315,24 @@ pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Resul
     Ok(summary)
 }
 
+/// Re-probes roots that were unreadable or missing (SPEC.md §6.1 recovery,
+/// every 30 s from the ticker). If any is back, everything is reconciled, which
+/// also clears its status. `None` when nothing came back.
+///
+/// ponytail: a recovered root triggers a scan of every root; scan just that
+/// one if roots get large enough for it to matter.
+pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Option<ScanSummary>> {
+    let back = roots::list(conn)?.into_iter().any(|r| {
+        r.enabled
+            && matches!(r.status.as_str(), "permission_denied" | "missing")
+            && FsProbe.probe(&r.path) == RootAccess::Ok
+    });
+    if !back {
+        return Ok(None);
+    }
+    reconcile_all(conn, options).map(Some)
+}
+
 /// Deletes the candidates still unseen by `scan_id` (a later root's walk may
 /// have claimed one as a move) with everything derived from them. Returns how
 /// many were deleted.
@@ -392,6 +414,27 @@ mod tests {
         fn hits(&self, query: &str) -> usize {
             search_fts(&self.conn, query, 10).unwrap().len()
         }
+    }
+
+    /// SPEC.md §6.1 recovery: a root that was unreadable or missing and is
+    /// back is reconciled at the next re-probe; a still-broken one is not.
+    #[test]
+    fn a_root_that_comes_back_is_reconciled_by_recover() {
+        let mut s = Setup::new();
+        s.write("a.txt", "alpha");
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
+
+        roots::set_status(&s.conn, s.root.id, "permission_denied").unwrap();
+        let summary = recover(&mut s.conn, &s.options).unwrap().unwrap();
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(s.status(), "ok");
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
+
+        let other = tempfile::tempdir().unwrap();
+        let unplugged = roots::add(&s.conn, other.path()).unwrap();
+        drop(other);
+        roots::set_status(&s.conn, unplugged.id, "missing").unwrap();
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
     }
 
     /// SPEC.md §7 M5 item 7: a deleted file leaves nothing behind.

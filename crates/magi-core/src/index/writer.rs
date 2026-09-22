@@ -17,7 +17,7 @@ use crate::error::Result;
 use crate::index::pipeline::{
     Embedded, IndexRootOptions, Job, Status, store_embedded, store_keep, store_retry,
 };
-use crate::watch::reconcile::{Held, ScanSummary, reconcile_all, scan_paths, settle_held};
+use crate::watch::reconcile::{Held, ScanSummary, reconcile_all, recover, scan_paths, settle_held};
 
 /// The indexing options in force, replaceable while running (an exclusion
 /// changed in settings). Each job reads the current ones.
@@ -45,11 +45,17 @@ pub(crate) enum WriteJob {
         state: String,
     },
     /// Failed for a reason that may pass: back off and retry.
-    Retry { file_id: i64, message: String },
+    Retry {
+        file_id: i64,
+        message: String,
+        locked: bool,
+    },
     /// Gone from disk.
     Delete(i64),
     /// Walk every enabled root and settle deletions and moves.
     Reconcile(Sender<Result<ScanSummary>>),
+    /// Reconcile if a root that was unreadable or missing is back.
+    Reprobe,
     /// The watcher saw these paths change: reconcile just them.
     Paths(Vec<PathBuf>),
     /// Finish everything queued before this, then stop.
@@ -151,6 +157,20 @@ pub(crate) fn run(
                 let _ = wake.try_send(());
                 continue;
             }
+            WriteJob::Reprobe => {
+                match recover(&mut conn, &current(&options)) {
+                    Ok(Some(s)) => {
+                        tracing::info!("a root is readable again; reconciled");
+                        stats
+                            .removed
+                            .fetch_add(u64::from(s.removed), Ordering::Relaxed);
+                        let _ = wake.try_send(());
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::error!(error = %e, "could not re-probe roots"),
+                }
+                continue;
+            }
             WriteJob::Paths(paths) => {
                 match scan_paths(&mut conn, &current(&options), &paths) {
                     Ok(scan) => {
@@ -185,8 +205,16 @@ pub(crate) fn run(
                 }
                 id
             }
-            WriteJob::Retry { file_id, message } => {
-                apply(&stats, file_id, store_retry(&conn, file_id, &message));
+            WriteJob::Retry {
+                file_id,
+                message,
+                locked,
+            } => {
+                apply(
+                    &stats,
+                    file_id,
+                    store_retry(&conn, file_id, &message, locked),
+                );
                 file_id
             }
             WriteJob::Keep {
@@ -214,7 +242,7 @@ pub(crate) fn run(
                 {
                     // Leave the file retryable rather than stuck in `indexing`.
                     tracing::error!(file_id = id, error = %e, "could not store file");
-                    let _ = store_retry(&conn, id, &e.to_string());
+                    let _ = store_retry(&conn, id, &e.to_string(), false);
                 }
                 apply(&stats, id, result);
                 id
