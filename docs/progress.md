@@ -1948,7 +1948,8 @@ Plan: docs/m5-plan.md. See docs/architecture.md, "Control surface".
   the one (a stat walk, no re-embedding).
 - `pause()` and root changes wait for the writer, so they can take as long as
   a running scan.
-- Ctrl-C shutdown is not verified yet: no test sends it (the kill test uses a
-  hard kill), and it has not been tried by hand. To check in a terminal.
+- Ctrl-C shutdown has no automated test (the kill test uses a hard kill); it
+  was checked by hand by the owner on Windows (prints `stopping...` then
+  `stopped`, 2026-09-22).
 - A file already waiting out the stability check when its root is disabled
   may still be indexed once.
