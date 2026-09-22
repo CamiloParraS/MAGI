@@ -362,9 +362,13 @@ before the first scan. A batch of events becomes `WriteJob::Paths(paths)`; the
 event *kinds* are ignored except that access events are dropped and an error or
 overflow becomes a full rescan. The writer runs `reconcile::scan_paths`, which
 looks at each path on disk (file: queue it if wanted; folder: walk it; missing or
-now excluded: its rows are deletion candidates). Candidates are held for 5 s and
-matched against new files by blake3 hash (`settle_held`), so a rename, a folder
-rename or a move between roots keeps the row, chunks and vectors.
+now excluded: its rows are deletion candidates). Moves are matched from the new
+side: an unknown path whose size, kind and blake3 hash equal those of a row whose
+own path is gone takes over that row in the scan's transaction
+(`find_old_home`), so a rename, a folder rename or a move between roots keeps the
+row, chunks and vectors whichever half the OS reports first. Deletion candidates
+are held 5 s before deleting (`settle_held`), which gives the other root's
+watcher time to report the new path.
 
 A ticker thread (`watch::poller`) asks for a full scan every
 `reconcile_interval_hours`, after a wall-clock jump over 5 minutes, and every 15

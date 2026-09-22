@@ -1758,8 +1758,20 @@ longer the only way.
       With the watchers disabled the watcher tests fail on their waits.
       224 unit tests (11 new: scan/hold/rename/folder cases, `is_wanted` against
       a real walk, `walk_under`, `Timers`), clippy clean.
-- [ ] **CI on all three OSes** is not confirmed: this work is unpushed. Only
-      Windows has run it.
+- [x] **CI on all three OSes** green after the three follow-up fixes below
+      (confirmed by the owner, 2026-09-22).
+
+**Follow-up fixes (CI on macOS and Linux).** macOS's FSEvents does not pair a
+rename's halves, and `notify-debouncer-full` folds a rename of a just-created
+file into a bare create of the new path, so the rename test saw two rows. Two
+attempts that claimed held candidates inside the scan transaction (b756f62,
+83ca6df) were replaced by matching from the new side (2632650):
+`reconcile_entry` hashes an unknown path only when a same-size, same-kind
+hashed row exists whose own path is gone (`find_old_home`), and moves that row
+in place. The old path never has to be reported, the match happens in the
+scan's transaction (the scheduler never sees an unclaimed `pending` row), and
+startup scans get the same behaviour. `Held` is now only a delay before
+deleting.
 
 **A flake, and its cause.** The move-between-roots test failed about half the
 runs with the file embedded twice. Not a test problem: the removal and the
@@ -1768,10 +1780,8 @@ first batch left nothing to match. Fixed by holding candidates (above); 10
 consecutive isolated runs and three full runs pass.
 
 **Known limits.**
-- A creation that is reported *before* its removal can miss the match if the
-  new row is already dispatched (a moved file keeps its old mtime, so it is
-  dispatched about 1 s after it is queued); it is then deleted and re-embedded.
-  The 5 s hold only helps when the removal comes first.
+- A moved file whose kind has no content hash (filename-only kinds) cannot
+  be matched; it is re-created, which costs one filename chunk.
 - A held file stays searchable for up to 5 s after it was deleted.
 - `is_wanted` does not know the Windows hidden *attribute* or symlinked
   ancestor folders, and a path inside an opaque bundle is ignored (the periodic
