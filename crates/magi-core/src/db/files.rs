@@ -520,46 +520,74 @@ pub fn new_pending_of_size(conn: &Connection, size: u64) -> Result<Vec<(i64, Pat
 /// vector still describes the old name.
 pub fn rename_file(conn: &mut Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
     let tx = conn.transaction()?;
-    let (root_id, path, rel_path, file_name, ext, size, mtime_ns): (
-        i64,
-        String,
-        String,
-        String,
-        Option<String>,
-        i64,
-        i64,
-    ) = tx.query_row(
-        "SELECT root_id, path, rel_path, file_name, ext, size, mtime_ns FROM files WHERE id = ?1",
+    let (root_id, path, rel_path, size, mtime_ns): (i64, String, String, i64, i64) = tx.query_row(
+        "SELECT root_id, path, rel_path, size, mtime_ns FROM files WHERE id = ?1",
         params![new_id],
-        |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-            ))
-        },
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     delete_files(&tx, &[new_id])?;
-    tx.execute(
+    rename_file_to(
+        &tx,
+        keep_id,
+        root_id,
+        MoveTarget {
+            path: Path::new(&path),
+            rel_path: Path::new(&rel_path),
+            size: size as u64,
+            mtime_ns,
+        },
+        scan_id,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Where a move lands, for [`rename_file_to`].
+pub struct MoveTarget<'a> {
+    pub path: &'a Path,
+    pub rel_path: &'a Path,
+    pub size: u64,
+    pub mtime_ns: i64,
+}
+
+/// The same move as [`rename_file`], sourced directly from a freshly walked
+/// entry instead of an already-inserted `pending` row: lets a scan match a
+/// held deletion candidate and move it in place without ever exposing an
+/// unclaimed `pending` row at the new path for the scheduler to pick up
+/// (SPEC.md §5.4 step 4). Runs inside the caller's transaction.
+pub fn rename_file_to(
+    conn: &Connection,
+    keep_id: i64,
+    root_id: i64,
+    to: MoveTarget<'_>,
+    scan_id: i64,
+) -> Result<()> {
+    conn.execute(
         "UPDATE files SET root_id = ?2, path = ?3, rel_path = ?4, file_name = ?5, ext = ?6,
                 size = ?7, mtime_ns = ?8, seen_scan_id = ?9
          WHERE id = ?1",
         params![
-            keep_id, root_id, path, rel_path, file_name, ext, size, mtime_ns, scan_id
+            keep_id,
+            root_id,
+            to.path.to_string_lossy(),
+            to.rel_path.to_string_lossy(),
+            to.path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default(),
+            to.path.extension().and_then(|e| e.to_str()),
+            to.size as i64,
+            to.mtime_ns,
+            scan_id,
         ],
     )?;
-    tx.execute(
+    conn.execute(
         "UPDATE chunks SET text = ?2 WHERE file_id = ?1 AND source = 'filename'",
         params![
             keep_id,
-            crate::extract::filename::filename_chunk(Path::new(&rel_path)).text
+            crate::extract::filename::filename_chunk(to.rel_path).text
         ],
     )?;
-    tx.commit()?;
     Ok(())
 }
 

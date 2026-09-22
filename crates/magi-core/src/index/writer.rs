@@ -152,8 +152,9 @@ pub(crate) fn run(
                 continue;
             }
             WriteJob::Paths(paths) => {
-                match scan_paths(&mut conn, &current(&options), &paths) {
+                match scan_paths(&mut conn, &current(&options), &paths, &held) {
                     Ok(scan) => {
+                        held.retain(|h| !scan.resolved.contains(&h.gone.id));
                         for gone in scan.unseen {
                             if !held.iter().any(|h| h.gone.id == gone.id) {
                                 held.push(Held {
