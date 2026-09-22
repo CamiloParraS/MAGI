@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use magi_core::config::Config;
 use magi_core::db::{self, files, roots};
+use magi_core::dto::IndexState;
 use magi_core::embed::{CountingEmbedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder};
 use magi_core::ocr::NoOcr;
 use magi_core::search::fts::search_fts;
@@ -652,6 +653,36 @@ fn make_unreadable(path: &Path) {
     assert!(std::fs::read(path).is_err(), "the file is still readable");
 }
 
+/// Undoes [`make_unreadable`].
+fn make_readable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let user = std::env::var("USERNAME").unwrap();
+        let removed = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/remove:d", &user])
+            .output()
+            .unwrap();
+        assert!(removed.status.success(), "{removed:?}");
+    }
+}
+
+/// Dates `path` a minute back: old enough to pass the scheduler's stability
+/// check at once, so only what the test is about can hold it back.
+fn backdate(path: &Path) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+}
+
 /// Item 14: a file the user may not read is retried, then left in `error`;
 /// the other files are indexed regardless.
 #[test]
@@ -660,7 +691,7 @@ fn a_file_without_read_permission_becomes_error_and_the_others_continue() {
     env.write("secret.txt", "classified words");
     env.write("open.txt", "public words");
     make_unreadable(&env.root().join("secret.txt"));
-    let _engine = env.start();
+    let engine = env.start();
 
     wait_until(Duration::from_secs(60), "secret.txt to give up", || {
         env.skip_backoff();
@@ -671,6 +702,15 @@ fn a_file_without_read_permission_becomes_error_and_the_others_continue() {
     });
     assert_eq!(env.hits("public"), 1);
     assert_eq!(env.hits("classified"), 0);
+    assert_eq!(engine.status().unwrap().errors, 1);
+
+    // Readable again: only a manual retry brings it back.
+    make_readable(&env.root().join("secret.txt"));
+    assert_eq!(engine.retry_errors().unwrap(), 1);
+    wait_until(Duration::from_secs(30), "secret.txt to be indexed", || {
+        env.state_of("secret.txt") == "indexed"
+    });
+    assert_eq!(env.hits("classified"), 1);
 }
 
 /// Item 15: a root that disappears keeps its index (hidden from search), and
@@ -810,14 +850,7 @@ fn memory_pressure_pauses_indexing_and_unloads_the_image_model() {
         engine.is_paused() && !image.0.load(Ordering::SeqCst)
     });
     env.write("later.txt", "postponed content");
-    // Old enough to pass the scheduler's stability check at once, so only the
-    // pause can hold it back.
-    std::fs::File::options()
-        .write(true)
-        .open(env.root().join("later.txt"))
-        .unwrap()
-        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
-        .unwrap();
+    backdate(&env.root().join("later.txt"));
     wait_until(Duration::from_secs(30), "later.txt to be queued", || {
         env.count("SELECT COUNT(*) FROM files WHERE file_name = 'later.txt'") == 1
     });
@@ -830,4 +863,100 @@ fn memory_pressure_pauses_indexing_and_unloads_the_image_model() {
     env.wait_drained(2);
     assert!(!engine.is_paused());
     assert_eq!(env.hits("postponed"), 1);
+}
+
+/// Item 12 through the engine: a root added while running is indexed and
+/// watched, a disabled one is hidden and re-read when enabled, and a removed
+/// one leaves no row behind.
+#[test]
+fn roots_are_added_disabled_and_removed_while_running() {
+    let env = Env::new();
+    env.write("home.txt", "home words");
+    let engine = env.start();
+    env.wait_drained(1);
+
+    let extra = tempfile::tempdir().unwrap();
+    std::fs::write(extra.path().join("first.txt"), "added words").unwrap();
+    let root = engine.add_root(extra.path()).unwrap();
+    assert_eq!((root.enabled, root.status.as_str()), (true, "ok"));
+    assert!(engine.add_root(extra.path()).is_err(), "already a root");
+    env.wait_drained(2);
+    std::fs::write(extra.path().join("second.txt"), "watched words").unwrap();
+    wait_until(Duration::from_secs(30), "the new root's watcher", || {
+        env.hits("watched") == 1
+    });
+
+    engine.set_root_enabled(root.id, false).unwrap();
+    assert_eq!(env.hits("added"), 0, "a disabled root is hidden");
+    std::fs::write(extra.path().join("third.txt"), "disabled words").unwrap();
+    engine.set_root_enabled(root.id, true).unwrap();
+    wait_until(Duration::from_secs(30), "the re-enabled root", || {
+        env.hits("added") == 1 && env.hits("disabled") == 1
+    });
+
+    engine.remove_root(root.id).unwrap();
+    assert!(engine.remove_root(root.id).is_err(), "already removed");
+    assert_eq!(env.count("SELECT COUNT(*) FROM files"), 1);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM chunks c JOIN files f ON f.id = c.file_id"),
+        env.count("SELECT COUNT(*) FROM chunks")
+    );
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM vec_text"),
+        env.count("SELECT COUNT(*) FROM chunks")
+    );
+    assert_eq!(env.hits("words"), 1, "only home.txt is left");
+    assert_eq!(engine.status().unwrap().roots.len(), 1);
+}
+
+/// SPEC.md §6.4: a user pause holds new work back, survives a restart, and
+/// resuming indexes what waited.
+#[test]
+fn a_pause_survives_a_restart_and_resuming_indexes_what_waited() {
+    let env = Env::new();
+    let engine = env.start();
+    engine.pause().unwrap();
+    assert!(engine.is_paused());
+    assert_eq!(engine.status().unwrap().state, IndexState::Paused);
+    engine.shutdown();
+
+    env.write("waiting.txt", "held words");
+    backdate(&env.root().join("waiting.txt"));
+    let engine = env.start();
+    assert!(engine.is_paused(), "the pause was persisted");
+    // A negative can only be shown by waiting: see the item 17 test.
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(env.state_of("waiting.txt"), "pending");
+
+    engine.resume().unwrap();
+    env.wait_drained(1);
+    assert_eq!(env.hits("held"), 1);
+    engine.shutdown();
+    assert!(!env.start().is_paused(), "the resume was persisted");
+}
+
+/// Status and its events: the counts follow the queue, and a subscriber hears
+/// about a change without asking.
+#[test]
+fn status_counts_the_queue_and_events_follow_changes() {
+    let env = Env::new();
+    env.write("a.txt", "alpha words");
+    let engine = env.start();
+    env.wait_drained(1);
+    let events = engine.subscribe();
+
+    env.write("b.txt", "beta words");
+    wait_until(Duration::from_secs(30), "an idle event after b.txt", || {
+        events
+            .try_iter()
+            .any(|s| s.state == IndexState::Idle && s.indexed == 2)
+    });
+    let status = engine.status().unwrap();
+    assert_eq!(
+        (status.state, status.queued, status.indexed, status.errors),
+        (IndexState::Idle, 0, 2, 0)
+    );
+    assert_eq!(status.current_file, None);
+    assert_eq!(status.roots.len(), 1);
+    assert_eq!(status.roots[0].status, "ok");
 }

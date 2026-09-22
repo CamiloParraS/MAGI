@@ -78,6 +78,25 @@ pub fn list(conn: &Connection) -> Result<Vec<Root>> {
     Ok(rows)
 }
 
+pub fn get(conn: &Connection, id: i64) -> Result<Root> {
+    list(conn)?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or(Error::RootIdNotFound(id))
+}
+
+/// A disabled root keeps its rows but is not indexed, watched or searched.
+pub fn set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<()> {
+    let affected = conn.execute(
+        "UPDATE roots SET enabled = ?2 WHERE id = ?1",
+        params![id, enabled],
+    )?;
+    if affected == 0 {
+        return Err(Error::RootIdNotFound(id));
+    }
+    Ok(())
+}
+
 /// Removes a root and everything indexed under it: files, chunks, FTS rows and
 /// both vector tables, in one transaction (SPEC.md §7 M5 item 12). Without the
 /// purge the delete would fail on the `files.root_id` foreign key.
@@ -145,6 +164,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = db::open(&dir.path().join("magi.db")).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn a_root_can_be_disabled_enabled_and_read_back() {
+        let (_dir, conn) = open_test_db();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = add(&conn, root_dir.path()).unwrap();
+
+        set_enabled(&conn, root.id, false).unwrap();
+        assert!(!get(&conn, root.id).unwrap().enabled);
+        set_enabled(&conn, root.id, true).unwrap();
+        assert_eq!(get(&conn, root.id).unwrap(), root);
+        assert!(matches!(
+            set_enabled(&conn, root.id + 1, true),
+            Err(Error::RootIdNotFound(_))
+        ));
+        assert!(matches!(
+            get(&conn, root.id + 1),
+            Err(Error::RootIdNotFound(_))
+        ));
     }
 
     #[test]

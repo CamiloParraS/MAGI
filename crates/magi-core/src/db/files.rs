@@ -300,13 +300,15 @@ pub struct PendingFile {
     pub mtime_ns: i64,
 }
 
-/// The next files to work on: `pending`, not waiting out a retry delay, most
-/// recently modified first so fresh files become searchable first (SPEC.md
-/// §5.4 step 6).
+/// The next files to work on: `pending`, not waiting out a retry delay, in a
+/// root that is enabled and readable, most recently modified first so fresh
+/// files become searchable first (SPEC.md §5.4 step 6).
 pub fn next_pending(conn: &Connection, now: i64, limit: u32) -> Result<Vec<PendingFile>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, root_id, path, size, mtime_ns FROM files
          WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
+           AND root_id IN (SELECT id FROM roots
+                           WHERE enabled = 1 AND status IN ('ok', 'watch_failed'))
          ORDER BY mtime_ns DESC, id
          LIMIT ?2",
     )?;
@@ -638,6 +640,25 @@ pub fn remove_unreferenced_thumbnails(conn: &Connection, keys: &[String]) {
             let _ = std::fs::remove_file(crate::thumbs::thumb_path(key));
         }
     }
+}
+
+/// Puts every `error` file back in the queue with a clean slate (SPEC.md §5.7
+/// `retry_errors`). Returns how many.
+pub fn retry_errors(conn: &Connection) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE files SET state = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+         WHERE state = 'error'",
+        [],
+    )?)
+}
+
+/// How many files are in each state.
+pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<String, u64>> {
+    let mut stmt = conn.prepare_cached("SELECT state, COUNT(*) FROM files GROUP BY state")?;
+    let counts = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(counts)
 }
 
 pub fn count_files(conn: &Connection) -> Result<i64> {
@@ -1062,6 +1083,46 @@ mod tests {
             .query_row("SELECT state FROM files", [], |r| r.get(0))
             .unwrap();
         assert_eq!(state, "pending");
+    }
+
+    #[test]
+    fn retrying_errors_queues_them_afresh_and_leaves_the_rest() {
+        let (_dir, mut conn) = open_test_db();
+        let broken = add_file(&mut conn, 1, "broken.txt", 1, "x");
+        let fine = add_file(&mut conn, 1, "fine.txt", 2, "y");
+        for now in [1000, 2000, 3000] {
+            record_failure(&conn, broken, "unreadable", now).unwrap();
+        }
+        assert_eq!(count_states(&conn).unwrap().get("error"), Some(&1));
+
+        assert_eq!(retry_errors(&conn).unwrap(), 1);
+        let row: (String, i64, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT state, attempts, next_attempt_at, error FROM files WHERE id = ?1",
+                [broken],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("pending".into(), 0, None, None));
+        assert_eq!(state_of(&conn, fine).unwrap().as_deref(), Some("indexed"));
+        assert_eq!(retry_errors(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_disabled_or_missing_root_has_nothing_to_hand_out() {
+        let (_dir, mut conn) = open_test_db();
+        let id = add_file(&mut conn, 1, "queued.txt", 1, "x");
+        mark_pending(&conn, id).unwrap();
+        assert_eq!(next_pending(&conn, 0, 10).unwrap().len(), 1);
+
+        conn.execute("UPDATE roots SET enabled = 0", []).unwrap();
+        assert!(next_pending(&conn, 0, 10).unwrap().is_empty());
+        conn.execute("UPDATE roots SET enabled = 1, status = 'missing'", [])
+            .unwrap();
+        assert!(next_pending(&conn, 0, 10).unwrap().is_empty());
+        conn.execute("UPDATE roots SET status = 'watch_failed'", [])
+            .unwrap();
+        assert_eq!(next_pending(&conn, 0, 10).unwrap().len(), 1);
     }
 
     #[test]

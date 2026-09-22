@@ -4,7 +4,8 @@
 //! file, so writes never contend and a crash leaves at most one file
 //! half-done. Search reads on other connections (WAL).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,8 @@ pub(crate) enum WriteJob {
     Reprobe,
     /// The watcher saw these paths change: reconcile just them.
     Paths(Vec<PathBuf>),
+    /// Any other write (root management, pause, retry), in order with the rest.
+    Exec(Box<dyn FnOnce(&mut Connection) + Send>),
     /// Finish everything queued before this, then stop.
     Stop,
 }
@@ -80,17 +83,53 @@ pub struct StatsSnapshot {
     pub removed: u64,
 }
 
-/// The live [`StatsSnapshot`]; only the writer updates it.
+/// Live progress: the [`StatsSnapshot`] and whether a scan is running, kept by
+/// the writer, and the file most recently started, set by the extract workers.
 #[derive(Default)]
-pub struct Stats(Mutex<StatsSnapshot>);
+pub struct Stats {
+    counts: Mutex<StatsSnapshot>,
+    /// Bumped after every writer job, so a status watcher looks again only then.
+    generation: AtomicU64,
+    scanning: AtomicBool,
+    current_file: Mutex<Option<PathBuf>>,
+}
 
 impl Stats {
     pub fn snapshot(&self) -> StatsSnapshot {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        *self.counts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn is_scanning(&self) -> bool {
+        self.scanning.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn current_file(&self) -> Option<PathBuf> {
+        self.current_file
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_current_file(&self, path: &Path) {
+        *self
+            .current_file
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(path.to_path_buf());
+    }
+
+    fn scanning<T>(&self, scan: impl FnOnce() -> T) -> T {
+        self.scanning.store(true, Ordering::SeqCst);
+        let result = scan();
+        self.scanning.store(false, Ordering::SeqCst);
+        result
     }
 
     fn update(&self, f: impl FnOnce(&mut StatsSnapshot)) {
-        f(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner));
+        f(&mut self.counts.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     fn count(&self, status: &Status) {
@@ -130,6 +169,8 @@ pub(crate) fn run(
 ) {
     let mut held: Vec<Held> = Vec::new();
     loop {
+        // The previous job is applied.
+        stats.generation.fetch_add(1, Ordering::SeqCst);
         let job = if held.is_empty() {
             match jobs.recv() {
                 Ok(job) => job,
@@ -147,8 +188,13 @@ pub(crate) fn run(
         };
         let id = match job {
             WriteJob::Stop => return,
+            WriteJob::Exec(write) => {
+                write(&mut conn);
+                let _ = wake.try_send(());
+                continue;
+            }
             WriteJob::Reconcile(reply) => {
-                let summary = reconcile_all(&mut conn, &current(&options));
+                let summary = stats.scanning(|| reconcile_all(&mut conn, &current(&options)));
                 if let Ok(s) = &summary {
                     stats.removed(s.removed);
                 }
@@ -216,14 +262,14 @@ pub(crate) fn run(
             }
             WriteJob::Keep { job, state } => {
                 let id = job.stored.id;
-                if !requeued(&conn, id) {
+                if !superseded(&conn, id) {
                     apply(&stats, id, store_keep(&conn, &job, &state));
                 }
                 id
             }
             WriteJob::Store { job, embedded } => {
                 let id = job.stored.id;
-                if !requeued(&conn, id) {
+                if !superseded(&conn, id) {
                     let result = store_embedded(&mut conn, &job, *embedded);
                     if let Err(e) = &result {
                         // Leave the file retryable rather than stuck in `indexing`.
@@ -249,13 +295,40 @@ fn settle(conn: &mut Connection, held: &mut Vec<Held>, stats: &Stats) {
 /// The file was changed again while the pipeline was working on it (the watcher
 /// put it back to `pending`): what was extracted is already stale, so it is
 /// dropped and the file is picked up again.
-fn requeued(conn: &Connection, file_id: i64) -> bool {
-    files::state_of(conn, file_id).ok().flatten().as_deref() == Some("pending")
+/// Whether a result for this file is out of date: it was queued again (changed
+/// while in the pipeline), deleted, or its root removed. Storing it anyway
+/// would bring back a deleted row. Only a row still `indexing` takes it.
+fn superseded(conn: &Connection, file_id: i64) -> bool {
+    files::state_of(conn, file_id).is_ok_and(|state| state.as_deref() != Some("indexing"))
 }
 
 fn apply(stats: &Stats, file_id: i64, result: Result<Status>) {
     match result {
         Ok(status) => stats.count(&status),
         Err(e) => tracing::error!(file_id, error = %e, "write failed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use std::path::Path;
+
+    #[test]
+    fn only_a_row_still_indexing_takes_a_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = db::open(&dir.path().join("magi.db")).unwrap();
+        let root = db::roots::add(&conn, dir.path()).unwrap();
+        let path = root.path.join("a.txt");
+        files::insert_pending(&conn, root.id, &path, Path::new("a.txt"), 1, 1, 1).unwrap();
+        let id = files::get_stored(&conn, &path).unwrap().unwrap().id;
+
+        files::mark_indexing(&conn, id).unwrap();
+        assert!(!superseded(&conn, id));
+        files::mark_pending(&conn, id).unwrap();
+        assert!(superseded(&conn, id), "changed again while in the pipeline");
+        files::delete_file(&mut conn, id).unwrap();
+        assert!(superseded(&conn, id), "deleted, or its root removed");
     }
 }

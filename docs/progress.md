@@ -1897,3 +1897,58 @@ Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
   status are Slice 7.
 - Under memory pressure the SigLIP text tower is unloaded too; a search loads
   it again.
+
+### M5 Slice 7 - control surface and daemon
+
+Plan: docs/m5-plan.md. See docs/architecture.md, "Control surface".
+
+- [x] **`EngineHandle`**: `status()` (`IndexStatus`), `subscribe()` (status
+      events), `pause()` / `resume()` persisted in `meta.paused`, `add_root`
+      (rejects missing, duplicate and nested paths; probes, watches, scans;
+      returns the probed status), `remove_root` (stops the watcher, purges),
+      `set_root_enabled`, `retry_errors`. `rescan()` and
+      `apply_indexing_config()` already covered `rescan_all` and exclusions.
+      Every write runs on the writer (`WriteJob::Exec`, a closure with a reply).
+- [x] **DTOs** in `dto.rs` (serde only): `IndexStatus`, `IndexState`,
+      `RootStatus`.
+- [x] **Events.** One `IndexStatus` stream covers SPEC's status, progress, root
+      status and permission issues (a `permission_denied` root is in `roots`).
+      The status thread wakes twice a second and reads the database only when
+      the writer applied a job or the pause/scan flags flipped.
+- [x] **`magi-cli daemon [--stats]`**: headless engine, one line per status
+      change, roots printed when they change, Ctrl-C shuts down cleanly,
+      `--stats` prints CPU and RSS each minute. Tried by hand: 30 files indexed,
+      a file created while running picked up within the debounce.
+- [x] **Fix found while building it:** a store for a file deleted (or whose
+      root was removed) while it was in the pipeline re-created its row, since
+      only a re-queued row was treated as stale. Now only a row still
+      `indexing` takes a result (`writer::superseded`, unit test).
+- [x] **`next_pending`** skips rows of disabled roots and of roots `missing`
+      or `permission_denied` (before, a `pending` row of a missing root was
+      stat'd, not found, and deleted).
+- [x] **New dependency**: `ctrlc` 3.5.2 (magi-cli only), as the plan chose over
+      a stop-file. Pure Rust; pulls `nix` on Unix, `windows-sys` (already
+      used) on Windows. `sysinfo` (already a dependency) for `--stats`.
+- [x] **Verification.** `tests/incremental.rs`: item 12 through the engine
+      (a root added while running is indexed and watched, disabled is hidden,
+      re-enabled picks up what changed, removed leaves only the other root's
+      rows, with `vec_text` matching `chunks`), item 13 (Slice 4), persisted
+      pause (paused, restart, a backdated file stays `pending` 3 s, resume
+      indexes it, restart not paused), status counts and a subscriber hearing
+      about a new file, and `retry_errors` bringing back a file made readable
+      again. `magi-cli/tests/daemon.rs`: item 11 with a real kill: 40 files of
+      about 1 MB, the daemon killed once a row is `indexing`, that row still
+      `indexing` in the database, `integrity_check` ok, a restart indexes all
+      40 with `chunks`, `chunks_fts` and `vec_text` in step (4 runs green).
+      Unit tests: 246 (4 new). Three full runs of `tests/incremental.rs`
+      (24 tests) green. Clippy clean.
+
+**Known limits.**
+- `add_root` and `set_root_enabled(true)` rescan every enabled root, not just
+  the one (a stat walk, no re-embedding).
+- `pause()` and root changes wait for the writer, so they can take as long as
+  a running scan.
+- Ctrl-C shutdown is not verified yet: no test sends it (the kill test uses a
+  hard kill), and it has not been tried by hand. To check in a terminal.
+- A file already waiting out the stability check when its root is disabled
+  may still be indexed once.

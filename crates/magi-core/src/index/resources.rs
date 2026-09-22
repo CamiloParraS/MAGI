@@ -70,11 +70,26 @@ pub fn machine(worker_threads: u32) -> (u64, usize) {
     (total, workers)
 }
 
+/// Why indexing is paused, if it is. While either is set the scheduler starts
+/// no new files.
+#[derive(Default)]
+pub(crate) struct Pause {
+    /// By the user; persisted in `meta.paused` (SPEC.md §6.4).
+    pub user: AtomicBool,
+    /// By the monitor: low memory, or on battery.
+    pub resources: AtomicBool,
+}
+
+impl Pause {
+    pub fn any(&self) -> bool {
+        self.user.load(Ordering::SeqCst) || self.resources.load(Ordering::SeqCst)
+    }
+}
+
 /// What the monitor thread watches and acts on.
 pub(crate) struct Monitor {
     pub ctx: Arc<IndexContext>,
-    /// Set while indexing must not start new files; the scheduler reads it.
-    pub paused: Arc<AtomicBool>,
+    pub pause: Arc<Pause>,
     /// Test hook for SPEC.md §7 M5 item 17: acts as if memory were low.
     pub force_low_memory: Arc<AtomicBool>,
     pub pause_on_battery: bool,
@@ -97,7 +112,7 @@ pub(crate) fn run(m: Monitor, stop: &AtomicBool, wake: Receiver<()>) {
             battery.is_some_and(|(_, on)| on)
         };
         let pause = low || on_battery;
-        if m.paused.swap(pause, Ordering::SeqCst) != pause {
+        if m.pause.resources.swap(pause, Ordering::SeqCst) != pause {
             tracing::info!(
                 pause,
                 low_memory = low,

@@ -7,7 +7,7 @@
 //!
 //! [`scan_paths`]: super::reconcile::scan_paths
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -22,8 +22,8 @@ use crate::index::writer::WriteJob;
 /// as one batch.
 const DEBOUNCE: Duration = Duration::from_secs(2);
 
-/// The running watchers. Dropping this stops them.
-pub type Watchers = Vec<Debouncer<RecommendedWatcher, RecommendedCache>>;
+/// The running watchers by root id. Dropping one stops it.
+pub type Watchers = HashMap<i64, Debouncer<RecommendedWatcher, RecommendedCache>>;
 
 /// Starts a watcher on each root. Returns the ones that could not be watched
 /// (inotify limit, a network drive, a vanished folder) so the caller can mark
@@ -32,7 +32,7 @@ pub type Watchers = Vec<Debouncer<RecommendedWatcher, RecommendedCache>>;
 /// Called before the first scan: events that arrive during it queue behind the
 /// scan on the writer's channel and are applied afterwards.
 pub(crate) fn start(roots: &[Root], jobs: &Sender<WriteJob>) -> (Watchers, Vec<i64>) {
-    let mut debouncers = Vec::new();
+    let mut debouncers = Watchers::new();
     let mut failed = Vec::new();
     for root in roots {
         if crate::platform::is_network_drive(&root.path) {
@@ -41,7 +41,9 @@ pub(crate) fn start(roots: &[Root], jobs: &Sender<WriteJob>) -> (Watchers, Vec<i
             continue;
         }
         match watch_root(root, jobs.clone()) {
-            Ok(debouncer) => debouncers.push(debouncer),
+            Ok(debouncer) => {
+                debouncers.insert(root.id, debouncer);
+            }
             Err(e) => {
                 if matches!(e.kind, notify::ErrorKind::MaxFilesWatch) {
                     tracing::warn!(

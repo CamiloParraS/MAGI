@@ -4,15 +4,20 @@
 mod eval;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use magi_core::dto::{IndexStatus, RootStatus};
 use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
 use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
 use magi_core::watch::reconcile::next_scan_id;
-use magi_core::{config, db, paths};
+use magi_core::{Engine, config, db, paths};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 #[derive(Parser)]
 #[command(name = "magi-cli")]
@@ -32,6 +37,13 @@ enum Command {
     },
     /// One-shot index of a root folder (no watcher; see SPEC.md §7 M2).
     Index { root: PathBuf },
+    /// Run the engine headless until Ctrl-C: watch the roots, index, and
+    /// print the status whenever it changes (SPEC.md §7 M5).
+    Daemon {
+        /// Also print this process's CPU and memory use once a minute.
+        #[arg(long)]
+        stats: bool,
+    },
     /// Search indexed content.
     Search {
         query: String,
@@ -66,6 +78,7 @@ fn main() -> anyhow::Result<()> {
         Command::Doctor => doctor()?,
         Command::Roots { action } => roots(action)?,
         Command::Index { root } => index_cmd(root)?,
+        Command::Daemon { stats } => daemon_cmd(stats)?,
         Command::Search { query, mode, limit } => search_cmd(&query, &mode, limit)?,
         Command::Eval { queries, corpus } => eval::eval_cmd(queries, corpus)?,
     }
@@ -203,6 +216,114 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         summary.errored
     );
     Ok(())
+}
+
+fn daemon_cmd(stats: bool) -> anyhow::Result<()> {
+    std::fs::create_dir_all(paths::data_dir())?;
+    let config = config::load()?;
+    let engine = Engine::start(
+        &config,
+        &db_path(),
+        embedder_from_env()?,
+        Some(image_embedder_from_env()),
+        ocr_from_env(),
+    )?;
+    let stop = Arc::new(AtomicBool::new(false));
+    ctrlc::set_handler({
+        let stop = stop.clone();
+        move || stop.store(true, Ordering::SeqCst)
+    })?;
+
+    let events = engine.subscribe();
+    let started = Instant::now();
+    let mut last: Option<IndexStatus> = None;
+    let mut print = |status: &IndexStatus| {
+        if last.as_ref() == Some(status) {
+            return;
+        }
+        print_status(started.elapsed(), status);
+        if last.as_ref().is_none_or(|l| l.roots != status.roots) {
+            print_roots(&status.roots);
+        }
+        last = Some(status.clone());
+    };
+    print(&engine.status()?);
+    let mut sampler = stats.then(Sampler::new).transpose()?;
+    while !stop.load(Ordering::SeqCst) {
+        if let Ok(status) = events.recv_timeout(Duration::from_millis(500)) {
+            print(&status);
+        }
+        if let Some(sampler) = sampler.as_mut() {
+            sampler.tick();
+        }
+    }
+    println!("stopping...");
+    engine.shutdown();
+    println!("stopped");
+    Ok(())
+}
+
+fn print_status(elapsed: Duration, s: &IndexStatus) {
+    println!(
+        "[{:>6}s] {:<8}  queued {}  indexed {}  skipped {}  errors {}{}",
+        elapsed.as_secs(),
+        format!("{:?}", s.state).to_lowercase(),
+        s.queued,
+        s.indexed,
+        s.skipped,
+        s.errors,
+        s.current_file
+            .as_deref()
+            .map(|f| format!("  {f}"))
+            .unwrap_or_default()
+    );
+}
+
+fn print_roots(roots: &[RootStatus]) {
+    for root in roots {
+        let enabled = if root.enabled { "" } else { " (disabled)" };
+        println!("  root {} {}: {}{enabled}", root.id, root.path, root.status);
+    }
+}
+
+/// Prints this process's CPU and resident memory once a minute (`--stats`),
+/// for the SPEC.md §7 M5 idle-CPU benchmark. CPU is averaged over the minute;
+/// 100% is one full core.
+struct Sampler {
+    sys: System,
+    pid: Pid,
+    next: Instant,
+}
+
+impl Sampler {
+    const EVERY: Duration = Duration::from_secs(60);
+
+    fn new() -> anyhow::Result<Self> {
+        let pid = sysinfo::get_current_pid().map_err(|e| anyhow::anyhow!(e))?;
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        Ok(Self {
+            sys,
+            pid,
+            next: Instant::now() + Self::EVERY,
+        })
+    }
+
+    fn tick(&mut self) {
+        if Instant::now() < self.next {
+            return;
+        }
+        self.next += Self::EVERY;
+        self.sys
+            .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
+        if let Some(p) = self.sys.process(self.pid) {
+            println!(
+                "stats: cpu {:.2}% of one core, rss {} MB",
+                p.cpu_usage(),
+                p.memory() / (1024 * 1024)
+            );
+        }
+    }
 }
 
 fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {

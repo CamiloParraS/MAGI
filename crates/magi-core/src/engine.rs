@@ -13,7 +13,9 @@
 //! writes. Per-root watchers and the ticker (`watch/`) feed it changes; the
 //! extract and embed threads run at low OS priority. The monitor
 //! (`index::resources`) pauses the scheduler on low memory or battery and
-//! unloads idle models.
+//! unloads idle models. The status thread tells subscribers what changed.
+//! Root management, pause and retry run on the writer too
+//! ([`WriteJob::Exec`]).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -22,18 +24,22 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, select};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, select};
+use rusqlite::Connection;
 
 use crate::config::{Config, IndexingConfig};
+use crate::db::roots::Root;
 use crate::db::{self, files, meta, roots};
+use crate::dto::{IndexState, IndexStatus, RootStatus};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::index::pipeline::{
     Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed, prepare,
 };
+use crate::index::resources::{self, Pause};
 use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
-use crate::index::{ModelIds, requeue_on_model_change, resources};
+use crate::index::{ModelIds, requeue_on_model_change};
 use crate::ocr::OcrEngine;
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
@@ -48,6 +54,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// The longest an embed batch yields to a waiting search, so a leaked
 /// [`SearchGuard`] cannot stall indexing for good.
 const MAX_YIELD: Duration = Duration::from_secs(5);
+/// How often the status thread checks whether anything changed.
+const STATUS_INTERVAL: Duration = Duration::from_millis(500);
 
 /// The core engine that Tauri commands and the CLI talk to.
 pub struct Engine;
@@ -86,6 +94,11 @@ impl Engine {
             },
         )?;
         let scheduler_conn = db::open(db_path)?;
+        let pause = Arc::new(Pause::default());
+        pause.user.store(
+            meta::get(&write_conn, "paused")?.as_deref() == Some("1"),
+            Ordering::SeqCst,
+        );
 
         let ctx = Arc::new(IndexContext {
             image_embedder: image,
@@ -103,7 +116,6 @@ impl Engine {
         let stats = Arc::new(Stats::default());
         let stop = Arc::new(AtomicBool::new(false));
         let search_pending = SearchPending::default();
-        let paused = Arc::new(AtomicBool::new(false));
         let force_low_memory = Arc::new(AtomicBool::new(false));
         let (monitor_wake, monitor_rx) = crossbeam_channel::bounded::<()>(1);
 
@@ -128,19 +140,29 @@ impl Engine {
             }
         }
         // Roots polled instead of watched: failed ones, and any not accessible.
-        let unwatched = accessible.len() < enabled.len() || !failed.is_empty();
-        let (ticker_stop, ticker_rx) = crossbeam_channel::bounded::<()>(1);
+        let unwatched = Arc::new(AtomicBool::new(
+            accessible.len() < enabled.len() || !failed.is_empty(),
+        ));
+        // Never sent on: dropping it at shutdown stops the ticker and status threads.
+        let (closer, closed) = crossbeam_channel::bounded::<()>(0);
+        let status = StatusSource {
+            reader: Arc::new(Mutex::new(db::open(db_path)?)),
+            stats: stats.clone(),
+            pause: pause.clone(),
+        };
+        let subscribers: Subscribers = Arc::default();
 
         let inner = Arc::new(Inner {
             stop: stop.clone(),
             options: options.clone(),
             watchers: Mutex::new(Some(watchers)),
-            ticker_stop,
+            unwatched: unwatched.clone(),
+            closer: Mutex::new(Some(closer)),
             threads: Mutex::new(Vec::new()),
             write_tx: write_tx.clone(),
-            stats: stats.clone(),
+            status: status.clone(),
+            subscribers: subscribers.clone(),
             search_pending: search_pending.clone(),
-            paused: paused.clone(),
             force_low_memory: force_low_memory.clone(),
             monitor_wake,
         });
@@ -169,21 +191,22 @@ impl Engine {
         for n in 0..workers {
             let (ctx, options, stop) = (ctx.clone(), options.clone(), stop.clone());
             let (rx, embed_tx, write_tx) = (extract_rx.clone(), embed_tx.clone(), write_tx.clone());
+            let stats = stats.clone();
             handle.spawn(&format!("magi-extract-{n}"), move || {
-                extract_worker(&ctx, &options, &stop, rx, &embed_tx, &write_tx)
+                extract_worker(&ctx, &options, &stats, &stop, rx, &embed_tx, &write_tx)
             })?;
         }
         drop((extract_rx, embed_tx));
 
         // Step 6: the queue, newest first, is the scheduler's job from here.
         handle.spawn("magi-scheduler", {
-            let (write_tx, stop, paused) = (write_tx.clone(), stop.clone(), paused.clone());
+            let (write_tx, stop, pause) = (write_tx.clone(), stop.clone(), pause.clone());
             move || {
                 scheduler_thread(
                     &scheduler_conn,
                     Scheduler::new(max_in_flight),
                     &stop,
-                    &paused,
+                    &pause,
                     (&done_rx, &wake_rx),
                     &write_tx,
                     &extract_tx,
@@ -191,12 +214,15 @@ impl Engine {
             }
         })?;
         handle.spawn("magi-ticker", {
-            let hours = config.indexing.reconcile_interval_hours;
-            move || poller::run(ticker_rx, write_tx, hours, unwatched)
+            let (hours, closed) = (config.indexing.reconcile_interval_hours, closed.clone());
+            move || poller::run(closed, write_tx, hours, unwatched)
+        })?;
+        handle.spawn("magi-status", move || {
+            status_thread(&status, &subscribers, &closed)
         })?;
         let monitor = resources::Monitor {
             ctx,
-            paused,
+            pause,
             force_low_memory,
             pause_on_battery: config.indexing.pause_on_battery,
             idle: resources::idle_unload(config.models.idle_unload_minutes, total_memory),
@@ -219,17 +245,22 @@ struct Inner {
     stop: Arc<AtomicBool>,
     options: SharedOptions,
     watchers: Mutex<Option<Watchers>>,
-    ticker_stop: Sender<()>,
-    /// Spawn order: writer, embed, extract workers, scheduler, ticker, monitor.
+    /// Set while some root is polled instead of watched.
+    unwatched: Arc<AtomicBool>,
+    /// Dropped at shutdown, which stops the ticker and status threads.
+    closer: Mutex<Option<Sender<()>>>,
+    /// Spawn order: writer, embed, extract workers, scheduler, ticker, status,
+    /// monitor.
     threads: Mutex<Vec<JoinHandle<()>>>,
     write_tx: Sender<WriteJob>,
-    stats: Arc<Stats>,
+    status: StatusSource,
+    subscribers: Subscribers,
     search_pending: SearchPending,
-    /// Set by the monitor: low memory, or on battery (SPEC.md §6.4).
-    paused: Arc<AtomicBool>,
     force_low_memory: Arc<AtomicBool>,
     monitor_wake: Sender<()>,
 }
+
+type Subscribers = Arc<Mutex<Vec<Sender<IndexStatus>>>>;
 
 impl EngineHandle {
     fn spawn(&self, name: &str, f: impl FnOnce() + Send + 'static) -> Result<()> {
@@ -247,7 +278,130 @@ impl EngineHandle {
 
     /// What has been done since the engine started.
     pub fn stats(&self) -> StatsSnapshot {
-        self.inner.stats.snapshot()
+        self.inner.status.stats.snapshot()
+    }
+
+    /// The index at a glance (SPEC.md §5.7 `get_status`).
+    pub fn status(&self) -> Result<IndexStatus> {
+        self.inner.status.read()
+    }
+
+    /// Every status change from now on (SPEC.md §5.3 engine events: state,
+    /// progress, root status, permission problems as root status). Checked
+    /// twice a second; dropping the receiver unsubscribes.
+    pub fn subscribe(&self) -> Receiver<IndexStatus> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        lock(&self.inner.subscribers).push(tx);
+        rx
+    }
+
+    /// Stops starting new files until [`resume`](Self::resume), across
+    /// restarts too (SPEC.md §6.4). Files already in the pipeline finish, and
+    /// changes are still queued.
+    pub fn pause(&self) -> Result<()> {
+        self.set_user_pause(true)
+    }
+
+    pub fn resume(&self) -> Result<()> {
+        self.set_user_pause(false)
+    }
+
+    fn set_user_pause(&self, on: bool) -> Result<()> {
+        self.inner.status.pause.user.store(on, Ordering::SeqCst);
+        self.write(move |conn| meta::set(conn, "paused", if on { "1" } else { "0" }))
+    }
+
+    /// Registers a root (SPEC.md §5.7 `add_root`), rejecting a missing,
+    /// duplicate or nested path, then probes, watches and scans it. The status
+    /// returned is the probe's result.
+    pub fn add_root(&self, path: &Path) -> Result<RootStatus> {
+        let path = path.to_path_buf();
+        let root = self.write(move |conn| {
+            let root = roots::add(conn, &path)?;
+            roots::set_access(conn, root.id, &FsProbe.probe(&root.path))?;
+            roots::get(conn, root.id)
+        })?;
+        let root = self.watch(root)?;
+        let _ = self.rescan();
+        Ok(root.into())
+    }
+
+    /// Stops watching a root and purges everything indexed under it (item 12).
+    pub fn remove_root(&self, id: i64) -> Result<()> {
+        self.unwatch(id);
+        self.write(move |conn| roots::remove(conn, id))
+    }
+
+    /// A disabled root keeps its rows but is not watched, indexed or searched;
+    /// enabling it watches and scans it again.
+    pub fn set_root_enabled(&self, id: i64, enabled: bool) -> Result<()> {
+        let root = self.write(move |conn| {
+            roots::set_enabled(conn, id, enabled)?;
+            roots::get(conn, id)
+        })?;
+        if enabled {
+            self.watch(root)?;
+            let _ = self.rescan();
+        } else {
+            self.unwatch(id);
+        }
+        Ok(())
+    }
+
+    /// Queues every file in `error` again (SPEC.md §5.7 `retry_errors`).
+    /// Returns how many.
+    pub fn retry_errors(&self) -> Result<usize> {
+        self.write(|conn| files::retry_errors(conn))
+    }
+
+    /// Starts watching `root` if it is readable. One that cannot be watched is
+    /// marked `watch_failed` and polled; one watched again is `ok` again.
+    fn watch(&self, root: Root) -> Result<Root> {
+        if FsProbe.probe(&root.path) != RootAccess::Ok {
+            self.inner.unwatched.store(true, Ordering::SeqCst);
+            return Ok(root);
+        }
+        let (started, failed) = watcher::start(std::slice::from_ref(&root), &self.inner.write_tx);
+        if let Some(watchers) = lock(&self.inner.watchers).as_mut() {
+            watchers.extend(started);
+        }
+        let status = if failed.is_empty() {
+            "ok"
+        } else {
+            self.inner.unwatched.store(true, Ordering::SeqCst);
+            "watch_failed"
+        };
+        if matches!(root.status.as_str(), "ok" | "watch_failed") && root.status != status {
+            let id = root.id;
+            return self.write(move |conn| {
+                roots::set_status(conn, id, status)?;
+                roots::get(conn, id)
+            });
+        }
+        Ok(root)
+    }
+
+    fn unwatch(&self, id: i64) {
+        if let Some(watchers) = lock(&self.inner.watchers).as_mut() {
+            watchers.remove(&id);
+        }
+    }
+
+    /// Runs `write` on the writer thread, in order with everything queued
+    /// before it, and waits for its result.
+    fn write<T: Send + 'static>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let stopped = || Error::Engine("the engine is stopped".into());
+        let (reply, result) = crossbeam_channel::bounded(1);
+        self.inner
+            .write_tx
+            .send(WriteJob::Exec(Box::new(move |conn| {
+                let _ = reply.send(write(conn));
+            })))
+            .map_err(|_| stopped())?;
+        result.recv().map_err(|_| stopped())?
     }
 
     /// Walks every enabled root again: new and changed files become `pending`,
@@ -284,10 +438,10 @@ impl EngineHandle {
         self.inner.search_pending.clone()
     }
 
-    /// Whether indexing is paused for low memory or battery. Files already in
-    /// the pipeline finish; no new ones start.
+    /// Whether indexing is paused, by the user or for low memory or battery.
+    /// Files already in the pipeline finish; no new ones start.
     pub fn is_paused(&self) -> bool {
-        self.inner.paused.load(Ordering::SeqCst)
+        self.inner.status.pause.any()
     }
 
     /// Test hook (SPEC.md §7 M5 item 17): acts as if available memory were
@@ -309,17 +463,11 @@ impl EngineHandle {
 impl Inner {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        // No new events, and the ticker stops waiting.
-        drop(
-            self.watchers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(),
-        );
-        let _ = self.ticker_stop.try_send(());
+        // No new events, and the ticker and status threads stop waiting.
+        drop(lock(&self.watchers).take());
+        drop(lock(&self.closer).take());
         let _ = self.monitor_wake.try_send(());
-        let mut threads =
-            std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut threads = std::mem::take(&mut *lock(&self.threads));
         if threads.is_empty() {
             return;
         }
@@ -336,6 +484,82 @@ impl Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What [`IndexStatus`] is read from, shared by the handle and the status
+/// thread. The reader connection only reads (WAL), so it never waits on the
+/// writer.
+#[derive(Clone)]
+struct StatusSource {
+    reader: Arc<Mutex<Connection>>,
+    stats: Arc<Stats>,
+    pause: Arc<Pause>,
+}
+
+impl StatusSource {
+    fn read(&self) -> Result<IndexStatus> {
+        let conn = lock(&self.reader);
+        let counts = files::count_states(&conn)?;
+        let count = |state: &str| counts.get(state).copied().unwrap_or(0);
+        let queued = count("pending") + count("indexing");
+        let state = if self.pause.any() {
+            IndexState::Paused
+        } else if self.stats.is_scanning() {
+            IndexState::Scanning
+        } else if queued > 0 {
+            IndexState::Indexing
+        } else {
+            IndexState::Idle
+        };
+        // The last file started is current only while one is in the pipeline.
+        let current_file = match state {
+            IndexState::Indexing if count("indexing") > 0 => self.stats.current_file(),
+            _ => None,
+        };
+        Ok(IndexStatus {
+            state,
+            queued,
+            indexed: count("indexed"),
+            skipped: count("skipped"),
+            errors: count("error"),
+            current_file: current_file.map(|p| p.to_string_lossy().into_owned()),
+            roots: roots::list(&conn)?
+                .into_iter()
+                .map(RootStatus::from)
+                .collect(),
+        })
+    }
+}
+
+/// Sends the status to every subscriber whenever it changes. The database is
+/// read only after the writer applied something, or the pause or scan state
+/// flipped, so an idle engine costs a few atomic loads twice a second.
+fn status_thread(source: &StatusSource, subscribers: &Subscribers, closed: &Receiver<()>) {
+    let mut seen = None;
+    let mut last = None;
+    while let Err(RecvTimeoutError::Timeout) = closed.recv_timeout(STATUS_INTERVAL) {
+        let now = (
+            source.stats.generation(),
+            source.pause.any(),
+            source.stats.is_scanning(),
+        );
+        if seen == Some(now) {
+            continue;
+        }
+        seen = Some(now);
+        match source.read() {
+            Ok(status) if last.as_ref() != Some(&status) => {
+                lock(subscribers).retain(|s| s.send(status.clone()).is_ok());
+                last = Some(status);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "could not read the index status"),
+        }
     }
 }
 
@@ -371,7 +595,7 @@ fn scheduler_thread(
     conn: &rusqlite::Connection,
     mut scheduler: Scheduler,
     stop: &AtomicBool,
-    paused: &AtomicBool,
+    pause: &Pause,
     (done, wake): (&Receiver<i64>, &Receiver<()>),
     write_tx: &Sender<WriteJob>,
     extract_tx: &Sender<Job>,
@@ -380,7 +604,7 @@ fn scheduler_thread(
         while let Ok(id) = done.try_recv() {
             scheduler.finished(id);
         }
-        if !paused.load(Ordering::SeqCst) {
+        if !pause.any() {
             match scheduler.poll(conn, Now::current()) {
                 Ok(actions) => dispatch(conn, actions, write_tx, extract_tx),
                 Err(e) => tracing::error!(error = %e, "scheduler poll failed"),
@@ -444,6 +668,7 @@ fn dispatch(
 fn extract_worker(
     ctx: &IndexContext,
     options: &SharedOptions,
+    stats: &Stats,
     stop: &AtomicBool,
     jobs: Receiver<Job>,
     embed_tx: &Sender<(Job, Fresh)>,
@@ -454,6 +679,7 @@ fn extract_worker(
         if stop.load(Ordering::SeqCst) {
             continue;
         }
+        stats.set_current_file(&job.entry.path);
         let current = options
             .read()
             .unwrap_or_else(PoisonError::into_inner)

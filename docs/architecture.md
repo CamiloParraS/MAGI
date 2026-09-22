@@ -23,6 +23,12 @@ DTOs live in `crates/magi-core/src/dto.rs` and are exported to
 `apps/desktop/src/bindings/` via `ts-rs`. See SPEC.md §5.7 for the full
 command table (populated as commands land, starting M1).
 
+So far (M5 Slice 7, serde only; the `ts-rs` derive comes with M6):
+`IndexStatus { state: idle|scanning|indexing|paused, queued, indexed, skipped,
+errors, current_file?, roots: RootStatus[] }` and `RootStatus { id, path,
+enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
+"Control surface" below for the `EngineHandle` methods behind them.
+
 ## Database schema
 
 See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/0001_init.sql`.
@@ -379,8 +385,10 @@ Every 30 s tick also sends `WriteJob::Reprobe`: if a root that is
 reconciled (`reconcile::recover`), which clears its status.
 
 `EngineHandle::apply_indexing_config` replaces the shared indexing options and
-rescans. The stale-result rule: a file re-queued by a watcher event while the
-pipeline is working on it has that result dropped and is processed again.
+rescans. The stale-result rule: a result is stored only if its row is still
+`indexing`. A file re-queued by a watcher event while the pipeline works on it
+is processed again; one deleted, or whose root was removed, in the meantime is
+not brought back (`writer::superseded`).
 
 ## Platform behaviour (M5 Slice 5)
 
@@ -436,3 +444,28 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
   new files; files already in the pipeline finish, and watcher events are still
   recorded as `pending`. `EngineHandle::simulate_low_memory(bool)` is the test
   hook for item 17 (hidden from docs).
+
+## Control surface (M5 Slice 7)
+
+`EngineHandle` methods, the core of SPEC.md §5.7's commands:
+
+| Method | Does |
+| --- | --- |
+| `status()` | `IndexStatus`: counts by state from a read connection, `paused` (user or monitor) over `scanning` (a full reconcile running) over `indexing` (anything `pending`/`indexing`) over `idle`. `current_file` is the file an extract worker last started, shown only while a row is `indexing`. |
+| `subscribe()` | A channel of `IndexStatus`, sent when it changes. The status thread checks twice a second but reads the database only after the writer applied a job, or the pause or scan flag flipped. Root status (including `permission_denied`) travels in `roots`. |
+| `pause()` / `resume()` / `is_paused()` | User pause, persisted in `meta.paused` (`1`/`0`) and restored at start. Same effect as the monitor's pause (`resources::Pause`). |
+| `add_root(path)` | `roots::add` (missing, duplicate and nested paths rejected), probe, watch, rescan. Returns the root's status after the probe. |
+| `remove_root(id)` | Stops its watcher, purges its rows (`roots::remove`). |
+| `set_root_enabled(id, on)` | Off: rows kept, hidden from search, not watched, its `pending` rows not handed out. On: watched and rescanned. |
+| `retry_errors()` | Every `error` row back to `pending` with attempts and backoff cleared. |
+| `rescan()`, `apply_indexing_config()` | As before (`rescan_all`, exclusions). |
+
+Every write goes through the writer: `WriteJob::Exec` carries a closure and the
+handle waits for its reply, so root management stays ordered with the rest.
+`files::next_pending` hands out only rows of enabled roots with status `ok` or
+`watch_failed`.
+
+`magi-cli daemon [--stats]` runs the engine headless on the dev data dir,
+prints a line per status change (and the roots when they change), and shuts
+down cleanly on Ctrl-C. `--stats` prints the process's CPU (averaged over the
+minute, 100% = one core) and RSS once a minute.

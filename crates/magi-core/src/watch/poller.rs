@@ -3,6 +3,8 @@
 //! and one every 15 minutes while any root has no working watcher. Every tick
 //! also re-probes roots that were unreadable or missing (SPEC.md §6.1).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -62,17 +64,18 @@ impl Timers {
 }
 
 /// The ticker thread: asks the writer for a full scan whenever [`Timers`] says
-/// one is due. Ends when `stop` fires or is dropped.
+/// one is due. `unwatched` is set while some root is polled instead of
+/// watched. Ends when `stop` fires or is dropped.
 pub(crate) fn run(
     stop: Receiver<()>,
     jobs: Sender<WriteJob>,
     interval_hours: u32,
-    unwatched: bool,
+    unwatched: Arc<AtomicBool>,
 ) {
     let mut timers = Timers::new(interval_hours, unix_now());
     while let Err(crossbeam_channel::RecvTimeoutError::Timeout) = stop.recv_timeout(TICK) {
         let _ = jobs.send(WriteJob::Reprobe);
-        if let Some(reason) = timers.tick(unix_now(), unwatched) {
+        if let Some(reason) = timers.tick(unix_now(), unwatched.load(Ordering::SeqCst)) {
             tracing::info!(?reason, "scheduled reconciliation");
             let _ = jobs.send(WriteJob::Reconcile(None));
         }
