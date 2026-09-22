@@ -4,8 +4,10 @@
 //! file, so writes never contend and a crash leaves at most one file
 //! half-done. Search reads on other connections (WAL).
 
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use rusqlite::Connection;
@@ -15,7 +17,18 @@ use crate::error::Result;
 use crate::index::pipeline::{
     Embedded, IndexRootOptions, Job, Status, store_embedded, store_keep, store_retry,
 };
-use crate::watch::reconcile::{ScanSummary, reconcile_all};
+use crate::watch::reconcile::{Held, ScanSummary, reconcile_all, scan_paths, settle_held};
+
+/// The indexing options in force, replaceable while running (an exclusion
+/// changed in settings). Each job reads the current ones.
+pub(crate) type SharedOptions = Arc<RwLock<Arc<IndexRootOptions>>>;
+
+fn current(options: &SharedOptions) -> Arc<IndexRootOptions> {
+    options
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
 
 pub(crate) enum WriteJob {
     /// The file entered the pipeline (`pending -> indexing`).
@@ -37,6 +50,8 @@ pub(crate) enum WriteJob {
     Delete(i64),
     /// Walk every enabled root and settle deletions and moves.
     Reconcile(Sender<Result<ScanSummary>>),
+    /// The watcher saw these paths change: reconcile just them.
+    Paths(Vec<PathBuf>),
     /// Finish everything queued before this, then stop.
     Stop,
 }
@@ -88,28 +103,70 @@ impl Stats {
     }
 }
 
+/// How long a file the watcher saw disappear is kept before it is deleted, so
+/// the other half of a move (a creation reported in a later batch, possibly by
+/// another root's watcher) can still claim it and spare it a re-embed.
+const HOLD: Duration = Duration::from_secs(5);
+/// How often held files are looked at when no job arrives.
+const HOLD_TICK: Duration = Duration::from_millis(500);
+
 /// Runs until [`WriteJob::Stop`]. `done` gets the id of every file the pipeline
 /// held, once its job has been applied (or has failed), so the scheduler can
 /// release it; `wake` nudges the scheduler after a reconciliation.
 pub(crate) fn run(
     mut conn: Connection,
-    options: Arc<IndexRootOptions>,
+    options: SharedOptions,
     jobs: Receiver<WriteJob>,
     done: Sender<i64>,
     wake: Sender<()>,
     stats: Arc<Stats>,
 ) {
-    for job in jobs {
+    let mut held: Vec<Held> = Vec::new();
+    loop {
+        let job = if held.is_empty() {
+            match jobs.recv() {
+                Ok(job) => job,
+                Err(_) => return,
+            }
+        } else {
+            match jobs.recv_timeout(HOLD_TICK) {
+                Ok(job) => job,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    settle(&mut conn, &mut held, &stats);
+                    continue;
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+            }
+        };
         let id = match job {
             WriteJob::Stop => return,
             WriteJob::Reconcile(reply) => {
-                let summary = reconcile_all(&mut conn, &options);
+                let summary = reconcile_all(&mut conn, &current(&options));
                 if let Ok(s) = &summary {
                     stats
                         .removed
                         .fetch_add(u64::from(s.removed), Ordering::Relaxed);
                 }
                 let _ = reply.send(summary);
+                let _ = wake.try_send(());
+                continue;
+            }
+            WriteJob::Paths(paths) => {
+                match scan_paths(&mut conn, &current(&options), &paths) {
+                    Ok(scan) => {
+                        for gone in scan.unseen {
+                            if !held.iter().any(|h| h.gone.id == gone.id) {
+                                held.push(Held {
+                                    gone,
+                                    scan_id: scan.scan_id,
+                                    until: Instant::now() + HOLD,
+                                });
+                            }
+                        }
+                        settle(&mut conn, &mut held, &stats);
+                    }
+                    Err(e) => tracing::error!(error = %e, "could not reconcile changed paths"),
+                }
                 let _ = wake.try_send(());
                 continue;
             }
@@ -137,11 +194,19 @@ pub(crate) fn run(
                 file_id,
                 state,
             } => {
+                if requeued(&conn, file_id) {
+                    let _ = done.send(file_id);
+                    continue;
+                }
                 apply(&stats, file_id, store_keep(&conn, &job, file_id, &state));
                 file_id
             }
             WriteJob::Store { job, embedded } => {
                 let file_id = job.stored.as_ref().map(|s| s.id);
+                if file_id.is_some_and(|id| requeued(&conn, id)) {
+                    let _ = done.send(file_id.unwrap_or_default());
+                    continue;
+                }
                 let result = store_embedded(&mut conn, &job, *embedded);
                 let id = file_id.unwrap_or_default();
                 if let Err(e) = &result
@@ -157,6 +222,24 @@ pub(crate) fn run(
         };
         let _ = done.send(id);
     }
+}
+
+fn settle(conn: &mut Connection, held: &mut Vec<Held>, stats: &Stats) {
+    match settle_held(conn, held, Instant::now()) {
+        Ok(resolved) => {
+            stats
+                .removed
+                .fetch_add(u64::from(resolved.removed), Ordering::Relaxed);
+        }
+        Err(e) => tracing::error!(error = %e, "could not settle removed files"),
+    }
+}
+
+/// The file was changed again while the pipeline was working on it (the watcher
+/// put it back to `pending`): what was extracted is already stale, so it is
+/// dropped and the file is picked up again.
+fn requeued(conn: &Connection, file_id: i64) -> bool {
+    files::state_of(conn, file_id).ok().flatten().as_deref() == Some("pending")
 }
 
 fn apply(stats: &Stats, file_id: i64, result: Result<Status>) {

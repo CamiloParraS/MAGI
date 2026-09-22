@@ -22,6 +22,8 @@ const SETTLE: Duration = Duration::from_secs(3);
 const RECHECK: Duration = Duration::from_secs(1);
 /// How long a file that is still changing waits before it is looked at again.
 const DEFER: Duration = Duration::from_secs(5);
+/// Modification times this far ahead of the clock count as "just now".
+const CLOCK_SLOP_NS: i64 = 2_000_000_000;
 /// Files being watched for stability at once, so a huge queue is not stat'd
 /// all in one go.
 const MAX_WAITING: usize = 1024;
@@ -185,14 +187,30 @@ impl Scheduler {
         room: &mut usize,
     ) -> Option<Action> {
         let id = file.id;
-        let age = Duration::from_nanos(now.unix_ns.saturating_sub(entry.mtime_ns).max(0) as u64);
-        // Younger than the settle window, or grown since the first look.
-        if age < SETTLE || previous_size.is_some_and(|s| s != entry.size) {
+        let age = match now.unix_ns.saturating_sub(entry.mtime_ns) {
+            past if past >= 0 => Duration::from_nanos(past as u64),
+            // A hair ahead of our clock: written just now.
+            ahead if -ahead < CLOCK_SLOP_NS => Duration::ZERO,
+            // Far in the future (clock skew, or set that way): the time says
+            // nothing about whether it is still being written, so the size
+            // check decides instead of holding the file until then.
+            _ => SETTLE,
+        };
+        // Younger than the settle window: look again once it would have
+        // settled if left alone. Grown since the first look: wait longer.
+        let wait = if age < SETTLE {
+            Some((SETTLE - age).max(RECHECK))
+        } else {
+            previous_size
+                .is_some_and(|s| s != entry.size)
+                .then_some(DEFER)
+        };
+        if let Some(wait) = wait {
             self.held.insert(
                 id,
                 Hold::Deferred {
                     file: file.clone(),
-                    until: now.at + DEFER,
+                    until: now.at + wait,
                 },
             );
             return None;
@@ -399,6 +417,27 @@ mod tests {
         s.finished(new);
         let ready = s.poll(&f.conn, t0.plus(Duration::from_secs(3))).unwrap();
         assert_eq!(extracted_ids(&ready), vec![old]);
+    }
+
+    /// A modification time in the future must not hold a file back for as long.
+    #[test]
+    fn a_file_dated_in_the_future_is_not_held_until_then() {
+        let f = Fixture::new();
+        let id = f.queue("skewed.txt", "x");
+        fs::File::options()
+            .write(true)
+            .open(f.dir.path().join("skewed.txt"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(3600))
+            .unwrap();
+        let mut s = Scheduler::new(8);
+        let t0 = Now::current();
+        assert!(
+            s.poll(&f.conn, t0).unwrap().is_empty(),
+            "first look: watched"
+        );
+        let ready = s.poll(&f.conn, t0.plus(Duration::from_secs(2))).unwrap();
+        assert_eq!(extracted_ids(&ready), vec![id]);
     }
 
     /// A row waiting out a retry delay is not touched.

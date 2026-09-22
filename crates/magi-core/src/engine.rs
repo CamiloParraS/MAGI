@@ -16,13 +16,13 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, select};
 
-use crate::config::Config;
+use crate::config::{Config, IndexingConfig};
 use crate::db::{self, files, meta, roots};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
@@ -30,10 +30,13 @@ use crate::index::pipeline::{
     Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed, prepare,
 };
 use crate::index::scheduler::{Action, Now, Scheduler};
-use crate::index::writer::{self, Stats, StatsSnapshot, WriteJob};
+use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
 use crate::index::{ModelIds, requeue_on_model_change};
 use crate::ocr::OcrEngine;
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::ScanSummary;
+use crate::watch::watcher::Watchers;
+use crate::watch::{poller, watcher};
 
 /// How often the scheduler looks at the queue when nothing wakes it sooner.
 ///
@@ -67,7 +70,9 @@ impl Engine {
         image: Option<Arc<dyn ImageEmbedder>>,
         ocr: Arc<dyn OcrEngine>,
     ) -> Result<EngineHandle> {
-        let options = Arc::new(IndexRootOptions::from_config(&config.indexing)?);
+        let options: SharedOptions = Arc::new(RwLock::new(Arc::new(
+            IndexRootOptions::from_config(&config.indexing)?,
+        )));
         let mut write_conn = db::open(db_path)?;
         files::reset_indexing_to_pending(&write_conn)?;
         requeue_on_model_change(
@@ -100,8 +105,37 @@ impl Engine {
         let stop = Arc::new(AtomicBool::new(false));
         let search_pending = SearchPending::default();
 
+        // Step 3: watch before scanning. Events that arrive during the scan
+        // queue behind it on the writer's channel and are applied afterwards.
+        let enabled: Vec<_> = roots::list(&write_conn)?
+            .into_iter()
+            .filter(|r| r.enabled)
+            .collect();
+        let accessible: Vec<_> = enabled
+            .iter()
+            .filter(|r| FsProbe.probe(&r.path) == RootAccess::Ok)
+            .cloned()
+            .collect();
+        let (watchers, failed) = watcher::start(&accessible, &write_tx);
+        for root in &accessible {
+            let failed_now = failed.contains(&root.id);
+            if failed_now {
+                roots::set_status(&write_conn, root.id, "watch_failed")?;
+            } else if root.status == "watch_failed" {
+                roots::set_status(&write_conn, root.id, "ok")?;
+            }
+        }
+        // Roots polled instead of watched: failed ones, and any not accessible.
+        let unwatched = Arc::new(AtomicUsize::new(
+            enabled.len() - accessible.len() + failed.len(),
+        ));
+        let (ticker_stop, ticker_rx) = crossbeam_channel::bounded::<()>(1);
+
         let inner = Arc::new(Inner {
             stop: stop.clone(),
+            options: options.clone(),
+            watchers: Mutex::new(Some(watchers)),
+            ticker_stop,
             threads: Mutex::new(Vec::new()),
             write_tx: write_tx.clone(),
             stats: stats.clone(),
@@ -153,6 +187,10 @@ impl Engine {
                 )
             }
         })?;
+        handle.spawn("magi-ticker", {
+            let hours = config.indexing.reconcile_interval_hours;
+            move || poller::run(ticker_rx, write_tx, hours, unwatched)
+        })?;
         Ok(handle)
     }
 }
@@ -166,7 +204,10 @@ pub struct EngineHandle {
 
 struct Inner {
     stop: Arc<AtomicBool>,
-    /// Spawn order: writer, embed, extract workers, scheduler.
+    options: SharedOptions,
+    watchers: Mutex<Option<Watchers>>,
+    ticker_stop: Sender<()>,
+    /// Spawn order: writer, embed, extract workers, scheduler, ticker.
     threads: Mutex<Vec<JoinHandle<()>>>,
     write_tx: Sender<WriteJob>,
     stats: Arc<Stats>,
@@ -204,6 +245,22 @@ impl EngineHandle {
         result
     }
 
+    /// Swaps in new indexing options (exclusions, hidden files, size limits) and
+    /// rescans, so files that are newly excluded are purged and files that are
+    /// newly allowed are indexed.
+    pub fn apply_indexing_config(
+        &self,
+        config: &IndexingConfig,
+    ) -> Result<Receiver<Result<ScanSummary>>> {
+        let options = Arc::new(IndexRootOptions::from_config(config)?);
+        *self
+            .inner
+            .options
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = options;
+        Ok(self.rescan())
+    }
+
     /// Indexing yields to searches that hold a [`SearchGuard`] (SPEC.md §5.3,
     /// the priority lock). M6's search command takes one per query.
     pub fn search_pending(&self) -> SearchPending {
@@ -221,6 +278,14 @@ impl EngineHandle {
 impl Inner {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        // No new events, and the ticker stops waiting.
+        drop(
+            self.watchers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+        let _ = self.ticker_stop.try_send(());
         let mut threads =
             std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
         if threads.is_empty() {
@@ -351,7 +416,7 @@ fn file_id(job: &Job) -> Option<i64> {
 
 fn extract_worker(
     ctx: &IndexContext,
-    options: &IndexRootOptions,
+    options: &SharedOptions,
     stop: &AtomicBool,
     jobs: Receiver<Job>,
     embed_tx: &Sender<(Job, Fresh)>,
@@ -361,7 +426,11 @@ fn extract_worker(
         if stop.load(Ordering::SeqCst) {
             continue;
         }
-        let extracted = catch_unwind(AssertUnwindSafe(|| prepare(ctx, options, &job)));
+        let current = options
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let extracted = catch_unwind(AssertUnwindSafe(|| prepare(ctx, &current, &job)));
         let next = match extracted {
             Ok(Extracted::Keep { file_id, state }) => WriteJob::Keep {
                 job: Box::new(job),

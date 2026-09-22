@@ -1700,3 +1700,82 @@ threads.
 - A worker that panics is contained per file (`catch_unwind`), but the
   extraction timeout thread cap from M2 still applies.
 - No watcher: new and changed files are found by `rescan()` only.
+
+### M5 Slice 4 - watchers, polling fallback, periodic safety nets
+
+Plan: docs/m5-plan.md. The engine now notices changes itself; `rescan()` is no
+longer the only way.
+
+- [x] **`watch/watcher.rs`**: one `notify` watcher per root, debounced 2 s, started
+      **before** the first scan (events queue behind it on the writer's channel
+      and are applied afterwards). It reports only *which paths changed*
+      (`WriteJob::Paths`); an error or an overflow flag falls back to a full
+      rescan. Instead of mirroring SPEC's event table case by case, each path is
+      looked at on disk by `reconcile::scan_paths`: a file is queued, a folder is
+      walked (`discovery::walk_under`), and whatever was at or under a path but
+      is gone, moved away or now excluded (`discovery::is_wanted`) becomes a
+      deletion candidate. This handles create, modify, remove, rename in place,
+      rename out of the roots, rename into an excluded folder and rename from an
+      unknown place with the same code, and behaves the same whichever event kinds
+      the OS reports.
+- [x] **Held deletions** (`reconcile::Held`, `settle_held`, in the writer): a
+      candidate is kept for 5 s and matched by content hash against new `pending`
+      rows, so a move whose removal and creation arrive in different batches is
+      still a rename. Two roots' watchers debounce independently, and without this
+      a move between roots re-embedded the file about half the time (caught by the
+      integration test, see below). A candidate seen again (an editor's atomic
+      save) is dropped from the list instead of deleted.
+- [x] **Changed while queued.** If the watcher re-queues a file the pipeline is
+      working on, the stale result is dropped and the file is picked up again
+      (`writer::requeued`), so a store never overwrites a newer change.
+- [x] **`watch/poller.rs`**: `Timers` (pure, wall-clock seconds passed in) and a
+      ticker thread: a scan every `reconcile_interval_hours`, after a wall-clock
+      jump over 5 minutes between 1-minute ticks, and every 15 minutes while any
+      root has no working watcher. A root whose watcher fails to start gets
+      status `watch_failed` (cleared when it starts again).
+- [x] **`EngineHandle::apply_indexing_config`**: swaps the indexing options
+      (exclusions, hidden files, size limits) while running and rescans. The
+      options are shared behind an `RwLock`; workers, the writer and the watcher
+      path read the current ones. Slice 7's `apply_config` builds on it.
+- [x] **Scheduler.** A file modified under 3 s ago is looked at again when it
+      will have settled (at least 1 s), not after a flat 5 s; that keeps a new
+      file within item 1's 10 s window (about 5 s measured). A file dated in the
+      future (clock skew) was held until that time; it is now judged by the size
+      check instead (unit test).
+- [x] **New dependencies:** `notify` 8.2.0 and `notify-debouncer-full` 0.6.0
+      (SPEC section 3). The stable pair: notify 9 and debouncer 0.8 are still
+      release candidates, and 0.6 is the debouncer line built for notify 8.
+- [x] **Verification** (`tests/incremental.rs`, real watcher, no `rescan()`
+      calls, 16 tests, three consecutive full runs green): 1 (new file searchable
+      within 10 s), 2 (modified: old text gone from chunks, FTS and vectors, and
+      exactly the new chunks remain), 3 (touch: embed counter unchanged), 4
+      (rename: same row, new name searchable, counter unchanged), 5 (move
+      between roots: same row, `root_id` changed, counter unchanged), 6 (moved out
+      of every root: removed), 7 (deleted: gone from `files`, `chunks`,
+      `vec_text`, `vec_image`, FTS), 9 (1,000 files created while running: each
+      exactly once), 10 (5 s slow write: never indexed while growing, once with
+      the final content), 13 (exclusion added: purged; removed: indexed again).
+      With the watchers disabled the watcher tests fail on their waits.
+      224 unit tests (11 new: scan/hold/rename/folder cases, `is_wanted` against
+      a real walk, `walk_under`, `Timers`), clippy clean.
+- [ ] **CI on all three OSes** is not confirmed: this work is unpushed. Only
+      Windows has run it.
+
+**A flake, and its cause.** The move-between-roots test failed about half the
+runs with the file embedded twice. Not a test problem: the removal and the
+creation arrive from two debouncers in separate batches, and deleting on the
+first batch left nothing to match. Fixed by holding candidates (above); 10
+consecutive isolated runs and three full runs pass.
+
+**Known limits.**
+- A creation that is reported *before* its removal can miss the match if the
+  new row is already dispatched (a moved file keeps its old mtime, so it is
+  dispatched about 1 s after it is queued); it is then deleted and re-embedded.
+  The 5 s hold only helps when the removal comes first.
+- A held file stays searchable for up to 5 s after it was deleted.
+- `is_wanted` does not know the Windows hidden *attribute* or symlinked
+  ancestor folders, and a path inside an opaque bundle is ignored (the periodic
+  scan covers it).
+- A root that was missing at start, or whose watcher failed, is polled every
+  15 minutes; a root that comes back is not watched until the next start.
+- The 2 s debounce and 5 s hold are constants, not settings.

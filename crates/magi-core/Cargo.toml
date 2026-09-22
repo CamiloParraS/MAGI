@@ -45,6 +45,8 @@ ureq = { workspace = true }
 ort = { workspace = true }
 ndarray = { workspace = true }
 crossbeam-channel = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

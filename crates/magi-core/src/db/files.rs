@@ -449,6 +449,55 @@ pub fn unseen(conn: &Connection, root_id: i64, scan_id: i64) -> Result<Vec<Missi
     Ok(rows)
 }
 
+/// Rows at `prefix` or below it that scan `scan_id` did not see: what a
+/// removed file or folder left behind, or what is no longer wanted.
+pub fn unseen_under(conn: &Connection, prefix: &Path, scan_id: i64) -> Result<Vec<Missing>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, kind, size, content_hash FROM files
+         WHERE seen_scan_id < ?2
+           AND (path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || ?3)",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![
+                prefix.to_string_lossy(),
+                scan_id,
+                std::path::MAIN_SEPARATOR.to_string()
+            ],
+            |row| {
+                Ok(Missing {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    size: row.get::<_, i64>(2)? as u64,
+                    content_hash: row.get(3)?,
+                })
+            },
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Whether the row still exists and no scan at or after `scan_id` has seen it.
+pub fn is_unseen_since(conn: &Connection, file_id: i64, scan_id: i64) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM files WHERE id = ?1 AND seen_scan_id < ?2)",
+        params![file_id, scan_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// The row's current state, if it still exists.
+pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT state FROM files WHERE id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 /// Brand-new `pending` rows (no hash yet) of exactly `size` bytes: the only
 /// places a moved file can have turned up.
 pub fn new_pending_of_size(conn: &Connection, size: u64) -> Result<Vec<(i64, PathBuf)>> {

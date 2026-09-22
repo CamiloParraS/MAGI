@@ -354,3 +354,22 @@ scheduler ──► extract workers (N) ──► embed worker (1) ──► wri
 `shutdown()`. Shutdown drops queued pipeline work (rows stay `indexing`; the
 next start resets them) and applies everything already handed to the writer.
 Thread and channel details: `engine.rs`.
+
+## Watching (M5 Slice 4)
+
+`Engine::start` starts one debounced (2 s) `notify` watcher per accessible root
+before the first scan. A batch of events becomes `WriteJob::Paths(paths)`; the
+event *kinds* are ignored except that access events are dropped and an error or
+overflow becomes a full rescan. The writer runs `reconcile::scan_paths`, which
+looks at each path on disk (file: queue it if wanted; folder: walk it; missing or
+now excluded: its rows are deletion candidates). Candidates are held for 5 s and
+matched against new files by blake3 hash (`settle_held`), so a rename, a folder
+rename or a move between roots keeps the row, chunks and vectors.
+
+A ticker thread (`watch::poller`) asks for a full scan every
+`reconcile_interval_hours`, after a wall-clock jump over 5 minutes, and every 15
+minutes while a root has no watcher (status `watch_failed`, or not accessible).
+
+`EngineHandle::apply_indexing_config` replaces the shared indexing options and
+rescans. The stale-result rule: a file re-queued by a watcher event while the
+pipeline is working on it has that result dropped and is processed again.

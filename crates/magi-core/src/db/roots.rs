@@ -93,6 +93,15 @@ pub fn remove(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Sets a root's status directly (e.g. `watch_failed`).
+pub fn set_status(conn: &Connection, id: i64, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE roots SET status = ?2 WHERE id = ?1",
+        params![id, status],
+    )?;
+    Ok(())
+}
+
 /// Records what the access probe found. `ok` only replaces the statuses a probe
 /// can set, so it does not clear `watch_failed`.
 pub fn set_access(conn: &Connection, id: i64, access: &RootAccess) -> Result<()> {
