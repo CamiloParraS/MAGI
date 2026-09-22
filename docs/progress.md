@@ -1943,9 +1943,17 @@ Plan: docs/m5-plan.md. See docs/architecture.md, "Control surface".
       Unit tests: 246 (4 new). Three full runs of `tests/incremental.rs`
       (24 tests) green. Clippy clean.
 
+**Follow-up (owner review).** `add_root`, `set_root_enabled(true)` and the
+recovery of a missing or unreadable root walked every root; now they walk only
+that root (`reconcile::reconcile_roots`, `WriteJob::ReconcileRoot`; unit test:
+scanning one root leaves another's new file untouched until that root is
+scanned). Nested roots were already rejected both ways (FR-1, M1 tests); the
+engine test now also checks `add_root` on a folder inside a root fails with
+`NestedRoot`. Unit tests: 247.
+
 **Known limits.**
-- `add_root` and `set_root_enabled(true)` rescan every enabled root, not just
-  the one (a stat walk, no re-embedding).
+- Removing a root and then adding a folder inside it (or its parent) indexes
+  that folder from scratch: the purge already dropped the vectors.
 - `pause()` and root changes wait for the writer, so they can take as long as
   a running scan.
 - Ctrl-C shutdown has no automated test (the kill test uses a hard kill); it

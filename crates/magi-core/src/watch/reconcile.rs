@@ -273,15 +273,38 @@ impl ScanSummary {
     }
 }
 
-/// One scan of every enabled root: probe it, reconcile it, then remove what no
-/// root has claimed, so a move between roots is followed whichever root is
-/// walked first. A root that is missing or unreadable is skipped with its rows
-/// intact and its status set.
+/// One scan of every enabled root. See [`reconcile_roots`].
 pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Result<ScanSummary> {
+    let enabled: Vec<i64> = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.id)
+        .collect();
+    reconcile_roots(conn, options, &enabled)
+}
+
+/// One scan of the enabled roots among `ids`: probe each, reconcile it, then
+/// remove what none of them has claimed, so a move between them is followed
+/// whichever is walked first. A root that is missing or unreadable is skipped
+/// with its rows intact and its status set.
+///
+/// Scanning only some roots (one just added, enabled or readable again) is
+/// safe: a file moved *into* them is matched from the new side
+/// ([`find_old_home`]) wherever it came from, and a file moved out of them
+/// into a root not scanned here was already claimed by that root's watcher (a
+/// polled root may instead re-embed it once, at its next scan).
+pub fn reconcile_roots(
+    conn: &mut Connection,
+    options: &IndexRootOptions,
+    ids: &[i64],
+) -> Result<ScanSummary> {
     let scan_id = next_scan_id(conn)?;
     let mut summary = ScanSummary::default();
     let mut unseen = Vec::new();
-    for root in roots::list(conn)?.into_iter().filter(|r| r.enabled) {
+    let scanned = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.enabled && ids.contains(&r.id));
+    for root in scanned {
         let access = FsProbe.probe(&root.path);
         roots::set_access(conn, root.id, &access)?;
         if access != RootAccess::Ok {
@@ -296,21 +319,22 @@ pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Resul
 }
 
 /// Re-probes roots that were unreadable or missing (SPEC.md §6.1 recovery,
-/// every 30 s from the ticker). If any is back, everything is reconciled, which
-/// also clears its status. `None` when nothing came back.
-///
-/// ponytail: a recovered root triggers a scan of every root; scan just that
-/// one if roots get large enough for it to matter.
+/// every 30 s from the ticker). Those that are back are reconciled, which also
+/// clears their status. `None` when nothing came back.
 pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Option<ScanSummary>> {
-    let back = roots::list(conn)?.into_iter().any(|r| {
-        r.enabled
-            && matches!(r.status.as_str(), "permission_denied" | "missing")
-            && FsProbe.probe(&r.path) == RootAccess::Ok
-    });
-    if !back {
+    let back: Vec<i64> = roots::list(conn)?
+        .into_iter()
+        .filter(|r| {
+            r.enabled
+                && matches!(r.status.as_str(), "permission_denied" | "missing")
+                && FsProbe.probe(&r.path) == RootAccess::Ok
+        })
+        .map(|r| r.id)
+        .collect();
+    if back.is_empty() {
         return Ok(None);
     }
-    reconcile_all(conn, options).map(Some)
+    reconcile_roots(conn, options, &back).map(Some)
 }
 
 /// Deletes the candidates still unseen by `scan_id` (a later root's walk may
@@ -409,6 +433,26 @@ mod tests {
         fn hits(&self, query: &str) -> usize {
             search_fts(&self.conn, query, 10).unwrap().len()
         }
+    }
+
+    /// Adding or re-enabling a root walks that root only; a change in another
+    /// root waits for its watcher or the next full scan.
+    #[test]
+    fn reconciling_one_root_leaves_the_others_unwalked() {
+        let mut s = Setup::new();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = roots::add(&s.conn, other_dir.path()).unwrap();
+        s.write("mine.txt", "mine");
+        fs::write(other_dir.path().join("theirs.txt"), "theirs").unwrap();
+
+        let mine = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
+        assert_eq!(mine.inserted, 1);
+        let theirs = "SELECT COUNT(*) FROM files WHERE file_name = 'theirs.txt'";
+        assert_eq!(s.count(theirs), 0);
+
+        let others = reconcile_roots(&mut s.conn, &s.options, &[other.id]).unwrap();
+        assert_eq!((others.inserted, others.removed), (1, 0));
+        assert_eq!(s.count(theirs), 1);
     }
 
     /// SPEC.md §6.1 recovery: a root that was unreadable or missing and is

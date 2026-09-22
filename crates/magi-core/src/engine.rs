@@ -322,7 +322,7 @@ impl EngineHandle {
             roots::get(conn, root.id)
         })?;
         let root = self.watch(root)?;
-        let _ = self.rescan();
+        let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
         Ok(root.into())
     }
 
@@ -340,8 +340,8 @@ impl EngineHandle {
             roots::get(conn, id)
         })?;
         if enabled {
-            self.watch(root)?;
-            let _ = self.rescan();
+            let id = self.watch(root)?.id;
+            let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(id));
         } else {
             self.unwatch(id);
         }

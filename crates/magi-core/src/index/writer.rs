@@ -17,7 +17,9 @@ use crate::error::Result;
 use crate::index::pipeline::{
     Embedded, IndexRootOptions, Job, Status, store_embedded, store_keep, store_retry,
 };
-use crate::watch::reconcile::{Held, ScanSummary, reconcile_all, recover, scan_paths, settle_held};
+use crate::watch::reconcile::{
+    Held, ScanSummary, reconcile_all, reconcile_roots, recover, scan_paths, settle_held,
+};
 
 /// The indexing options in force, replaceable while running (an exclusion
 /// changed in settings). Each job reads the current ones.
@@ -51,6 +53,8 @@ pub(crate) enum WriteJob {
     /// Walk every enabled root and settle deletions and moves; the result goes
     /// to the sender, if anyone is waiting for it.
     Reconcile(Option<Sender<Result<ScanSummary>>>),
+    /// Walk just this root (added or enabled again), like `Reconcile`.
+    ReconcileRoot(i64),
     /// Reconcile if a root that was unreadable or missing is back.
     Reprobe,
     /// The watcher saw these paths change: reconcile just them.
@@ -200,6 +204,15 @@ pub(crate) fn run(
                 }
                 if let Some(reply) = reply {
                     let _ = reply.send(summary);
+                }
+                let _ = wake.try_send(());
+                continue;
+            }
+            WriteJob::ReconcileRoot(id) => {
+                let scan = stats.scanning(|| reconcile_roots(&mut conn, &current(&options), &[id]));
+                match scan {
+                    Ok(s) => stats.removed(s.removed),
+                    Err(e) => tracing::error!(root_id = id, error = %e, "could not scan root"),
                 }
                 let _ = wake.try_send(());
                 continue;

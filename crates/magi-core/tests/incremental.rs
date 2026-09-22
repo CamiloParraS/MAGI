@@ -880,6 +880,11 @@ fn roots_are_added_disabled_and_removed_while_running() {
     let root = engine.add_root(extra.path()).unwrap();
     assert_eq!((root.enabled, root.status.as_str()), (true, "ok"));
     assert!(engine.add_root(extra.path()).is_err(), "already a root");
+    std::fs::create_dir(extra.path().join("sub")).unwrap();
+    assert!(matches!(
+        engine.add_root(&extra.path().join("sub")),
+        Err(magi_core::Error::NestedRoot { .. })
+    ));
     env.wait_drained(2);
     std::fs::write(extra.path().join("second.txt"), "watched words").unwrap();
     wait_until(Duration::from_secs(30), "the new root's watcher", || {
