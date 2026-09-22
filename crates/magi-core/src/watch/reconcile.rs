@@ -38,9 +38,6 @@ enum EntryOutcome {
     Inserted,
     Changed,
     Unchanged,
-    /// Matched a held deletion candidate and was moved in place instead of
-    /// being inserted as a new row.
-    Moved,
 }
 
 /// Brings one file's row in line with what was found on disk.
@@ -111,59 +108,17 @@ pub struct PathScan {
     pub scan_id: i64,
 }
 
-/// Checks a would-be-new entry against `held` (deletion candidates from
-/// earlier batches) before it is ever inserted as its own `pending` row: two
-/// watchers debounce independently, so the removal half of a rename commonly
-/// arrives first. Matching here, inside the scan's own transaction, means the
-/// new location is never visible as an unclaimed `pending` row that the
-/// scheduler could pick up and re-embed as a fresh file before the writer
-/// gets a chance to recognize it as the other half of that rename.
-fn claim_held(
-    tx: &Connection,
-    root_id: i64,
-    root_path: &Path,
-    entry: &discovery::WalkEntry,
-    scan_id: i64,
-    held: &[Held],
-    claimed: &mut std::collections::HashSet<i64>,
-) -> Result<Option<i64>> {
-    let kind = discovery::classify(&entry.path, &[]);
-    for h in held {
-        if claimed.contains(&h.gone.id) || h.gone.size != entry.size || h.gone.kind != kind.as_str()
-        {
-            continue;
-        }
-        let Some(hash) = h.gone.content_hash.as_deref() else {
-            continue;
-        };
-        if hash_file(&entry.path).is_ok_and(|got| got.as_slice() == hash) {
-            let rel = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
-            files::rename_file_to(
-                tx,
-                h.gone.id,
-                root_id,
-                files::MoveTarget {
-                    path: &entry.path,
-                    rel_path: rel,
-                    size: entry.size,
-                    mtime_ns: entry.mtime_ns,
-                },
-                scan_id,
-            )?;
-            claimed.insert(h.gone.id);
-            return Ok(Some(h.gone.id));
-        }
-    }
-    Ok(None)
-}
-
 /// The scanning half of [`reconcile_paths`]: queues what is new or changed and
 /// returns what disappeared without deciding it, so the caller can hold it for
 /// a moment. A move between roots is reported by two watchers that debounce
-/// independently, so the removal can arrive before the creation. `held`
-/// carries deletion candidates left over from earlier batches, so their match
-/// (if this scan turns up their new location) is applied before that location
-/// is ever inserted as a new row (see [`claim_held`]).
+/// independently, so the removal can arrive before the creation; a rename
+/// within one root commonly arrives as both halves in the very same batch.
+/// Either way, before this scan's transaction commits, every deletion
+/// candidate — `held` from earlier batches, and whatever this scan just found
+/// gone — is tried against [`find_new_home`] and, if matched, moved in place
+/// right there. That means a new location is never committed as an unclaimed
+/// `pending` row the scheduler could pick up and re-embed as a fresh file
+/// before anyone recognized it as the other half of a rename.
 pub fn scan_paths(
     conn: &mut Connection,
     options: &IndexRootOptions,
@@ -188,8 +143,6 @@ pub fn scan_paths(
     let mut summary = ScanSummary::default();
     let tx = conn.transaction()?;
 
-    let mut claimed = std::collections::HashSet::new();
-    let mut resolved = Vec::new();
     let mut scanned = Vec::new();
     for path in paths {
         let Some(root) = usable.iter().find(|r| path.starts_with(&r.path)) else {
@@ -205,21 +158,10 @@ pub fn scan_paths(
             }
         };
         for entry in &entries {
-            let outcome = if !held.is_empty()
-                && files::get_stored(&tx, &entry.path)?.is_none()
-                && let Some(gone_id) =
-                    claim_held(&tx, root.id, &root.path, entry, scan_id, held, &mut claimed)?
-            {
-                resolved.push(gone_id);
-                EntryOutcome::Moved
-            } else {
-                reconcile_entry(&tx, root.id, &root.path, entry, scan_id)?
-            };
-            match outcome {
+            match reconcile_entry(&tx, root.id, &root.path, entry, scan_id)? {
                 EntryOutcome::Inserted => summary.inserted += 1,
                 EntryOutcome::Changed => summary.changed += 1,
                 EntryOutcome::Unchanged => summary.unchanged += 1,
-                EntryOutcome::Moved => summary.moved += 1,
             }
         }
         scanned.push(path);
@@ -235,6 +177,31 @@ pub fn scan_paths(
             }
         }
     }
+
+    // Try every deletion candidate (this scan's own, plus whatever earlier
+    // batches left held) against what this scan just saw, before committing
+    // any of it: a match found now is applied in place, right here, so it is
+    // never visible to another thread as an unresolved `pending` row.
+    let mut resolved = Vec::new();
+    let mut still_unseen = Vec::new();
+    for gone in unseen {
+        match find_new_home(&tx, &gone)? {
+            Some(new_id) => {
+                files::rename_pending(&tx, gone.id, new_id, scan_id)?;
+                summary.moved += 1;
+            }
+            None => still_unseen.push(gone),
+        }
+    }
+    for h in held {
+        if let Some(new_id) = find_new_home(&tx, &h.gone)? {
+            files::rename_pending(&tx, h.gone.id, new_id, scan_id)?;
+            summary.moved += 1;
+            resolved.push(h.gone.id);
+        }
+    }
+    let unseen = still_unseen;
+
     tx.commit()?;
     Ok(PathScan {
         summary,
@@ -297,7 +264,6 @@ pub fn reconcile_root(
             EntryOutcome::Inserted => inserted += 1,
             EntryOutcome::Changed => changed += 1,
             EntryOutcome::Unchanged => unchanged += 1,
-            EntryOutcome::Moved => unreachable!("reconcile_entry never returns Moved"),
         }
     }
     tx.execute(
@@ -697,6 +663,50 @@ mod tests {
         assert_eq!(s.embedder.chunks(), embedded);
         assert_eq!(s.hits("new_name"), 1);
         assert_eq!(s.hits("old_name"), 0);
+    }
+
+    /// The actual shape of the CI failure: `notify`'s debouncer commonly
+    /// reports both halves of a same-root rename in one batch (one
+    /// `scan_paths` call, `held` empty). The match must be found and applied
+    /// within that single call's own transaction — not left to a later,
+    /// separate step — so a plain `pending` row for the new name is never
+    /// committed for a scheduler thread to pick up and re-embed.
+    #[test]
+    fn scan_paths_resolves_both_halves_of_one_batch_before_committing() {
+        let mut s = Setup::new();
+        s.write("before.txt", "portable words");
+        s.run();
+        let id = s.count("SELECT id FROM files");
+        let embedded = s.embedder.chunks();
+
+        fs::rename(
+            s.root_dir.path().join("before.txt"),
+            s.root_dir.path().join("after.txt"),
+        )
+        .unwrap();
+        let scan = scan_paths(
+            &mut s.conn,
+            &s.options,
+            &[
+                s.root.path.join("before.txt"),
+                s.root.path.join("after.txt"),
+            ],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(scan.summary.moved, 1);
+        assert!(scan.unseen.is_empty(), "resolved, not left for later");
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE state = 'pending'"),
+            0,
+            "never committed as an unclaimed pending row"
+        );
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(s.count("SELECT id FROM files"), id, "same row");
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(s.hits("after"), 1);
+        assert_eq!(s.hits("before"), 0);
     }
 
     #[test]

@@ -520,14 +520,28 @@ pub fn new_pending_of_size(conn: &Connection, size: u64) -> Result<Vec<(i64, Pat
 /// vector still describes the old name.
 pub fn rename_file(conn: &mut Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
     let tx = conn.transaction()?;
-    let (root_id, path, rel_path, size, mtime_ns): (i64, String, String, i64, i64) = tx.query_row(
-        "SELECT root_id, path, rel_path, size, mtime_ns FROM files WHERE id = ?1",
-        params![new_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-    )?;
-    delete_files(&tx, &[new_id])?;
+    rename_pending(&tx, keep_id, new_id, scan_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// The same move as [`rename_file`], but within a transaction the caller
+/// already holds: lets a reconciliation scan claim a `pending` row it just
+/// inserted (or an older one still pending from an earlier scan) as the
+/// other half of a rename before ever committing it as an unclaimed new
+/// file — closing the window where the scheduler could pick up that row and
+/// re-embed it as a brand-new one before anyone recognized the rename
+/// (SPEC.md §5.4 step 4).
+pub fn rename_pending(conn: &Connection, keep_id: i64, new_id: i64, scan_id: i64) -> Result<()> {
+    let (root_id, path, rel_path, size, mtime_ns): (i64, String, String, i64, i64) = conn
+        .query_row(
+            "SELECT root_id, path, rel_path, size, mtime_ns FROM files WHERE id = ?1",
+            params![new_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )?;
+    delete_files(conn, &[new_id])?;
     rename_file_to(
-        &tx,
+        conn,
         keep_id,
         root_id,
         MoveTarget {
@@ -537,9 +551,7 @@ pub fn rename_file(conn: &mut Connection, keep_id: i64, new_id: i64, scan_id: i6
             mtime_ns,
         },
         scan_id,
-    )?;
-    tx.commit()?;
-    Ok(())
+    )
 }
 
 /// Where a move lands, for [`rename_file_to`].
