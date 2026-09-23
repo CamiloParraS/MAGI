@@ -2,65 +2,10 @@ ExtractedDoc {
     chunks: [
         RawChunk {
             source: CodeSymbol,
-            text: "//! Sample Rust fixture for code-extraction tests (see SPEC.md §7 M2).",
+            text: "//! Sample Rust fixture for code-extraction tests (see SPEC.md §7 M2).\n\n/// Adds two numbers together.\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n/// Represents a point in 2D space.\nstruct Point {\n    x: i32,\n    y: i32,\n}\n\nimpl Point {\n    fn origin() -> Self {\n        Point { x: 0, y: 0 }\n    }\n}",
             page: None,
             line_start: Some(
                 1,
-            ),
-            line_end: Some(
-                2,
-            ),
-        },
-        RawChunk {
-            source: CodeSymbol,
-            text: "/// Adds two numbers together.",
-            page: None,
-            line_start: Some(
-                3,
-            ),
-            line_end: Some(
-                4,
-            ),
-        },
-        RawChunk {
-            source: CodeSymbol,
-            text: "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}",
-            page: None,
-            line_start: Some(
-                4,
-            ),
-            line_end: Some(
-                6,
-            ),
-        },
-        RawChunk {
-            source: CodeSymbol,
-            text: "/// Represents a point in 2D space.",
-            page: None,
-            line_start: Some(
-                8,
-            ),
-            line_end: Some(
-                9,
-            ),
-        },
-        RawChunk {
-            source: CodeSymbol,
-            text: "struct Point {\n    x: i32,\n    y: i32,\n}",
-            page: None,
-            line_start: Some(
-                9,
-            ),
-            line_end: Some(
-                12,
-            ),
-        },
-        RawChunk {
-            source: CodeSymbol,
-            text: "impl Point {\n    fn origin() -> Self {\n        Point { x: 0, y: 0 }\n    }\n}",
-            page: None,
-            line_start: Some(
-                14,
             ),
             line_end: Some(
                 18,

@@ -16,8 +16,9 @@ use crate::error::Result;
 /// Bumped whenever extraction or chunking changes what a file's index rows
 /// would contain, so files indexed by older code are re-extracted instead of
 /// being kept by the hash-skip (SPEC.md §5.4, "Versioning"). Rows written
-/// before M5 carry `0` and are re-queued once.
-pub const PIPELINE_VERSION: i64 = 1;
+/// before M5 carry `0` and are re-queued once. 2: merged code symbols, data
+/// files capped to their first 64 KB.
+pub const PIPELINE_VERSION: i64 = 2;
 
 /// The identifiers of the components that produced a file's index rows. A
 /// stored id that differs from the running one means those rows are stale.

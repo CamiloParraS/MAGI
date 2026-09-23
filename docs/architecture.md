@@ -129,7 +129,12 @@ so it's unit-tested without needing a model. Counts are memoized per
 distinct word unit: a document has orders of magnitude fewer distinct words
 than words, and each miss is a real tokenizer call. `extract::text::TextExtractor`
 and `extract::paginated_doc` (PDF/DOCX/PPTX/XLSX) call `chunk_text`
-unchanged; `extract::code`'s tree-sitter/line-window chunker is unaffected.
+unchanged. `TextExtractor` passes a `.csv`/`.json` file's first 64 KB only,
+cut after the last line break (data, not prose: a 200 MB export would
+otherwise be ~150k chunks). `extract::code` merges adjacent top-level
+symbols while their summed token count fits `TARGET_MAX_TOKENS`, so a run of
+`use`/`mod` lines is one chunk; any piece still too long goes through
+`chunk_text`.
 
 ## Model manifest and manager
 
