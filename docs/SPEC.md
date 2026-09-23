@@ -601,6 +601,8 @@ CREATE TABLE files (
 CREATE INDEX idx_files_state ON files(state, next_attempt_at);
 CREATE INDEX idx_files_root  ON files(root_id);
 CREATE INDEX idx_files_hash  ON files(content_hash);
+CREATE INDEX idx_files_size  ON files(size, kind) WHERE content_hash IS NOT NULL; -- move lookup
+CREATE INDEX idx_files_pending ON files(mtime_ns DESC, id) WHERE state = 'pending'; -- scheduler queue
 
 CREATE TABLE chunks (
   id         INTEGER PRIMARY KEY,

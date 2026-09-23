@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 
-use crate::embed::embedding_to_json;
+use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::extract::RawChunk;
 
@@ -119,7 +119,7 @@ pub fn upsert_file(
     if let Some(embedding) = image_embedding {
         tx.execute(
             "INSERT INTO vec_image (file_id, embedding) VALUES (?1, vec_f32(?2))",
-            params![file_id, embedding_to_json(embedding)],
+            params![file_id, embedding_to_blob(embedding)],
         )?;
     }
     // Prepared once, not per chunk: a single large file can carry
@@ -147,7 +147,7 @@ pub fn upsert_file(
                 ],
                 |row| row.get(0),
             )?;
-            insert_vector.execute(params![chunk_id, embedding_to_json(embedding)])?;
+            insert_vector.execute(params![chunk_id, embedding_to_blob(embedding)])?;
         }
     }
 
@@ -300,18 +300,22 @@ pub struct PendingFile {
     pub mtime_ns: i64,
 }
 
+// `INDEXED BY`: left to itself the planner takes `idx_files_state` and sorts
+// every pending row per call (checked with EXPLAIN on a fresh database).
+const NEXT_PENDING_SQL: &str = "SELECT id, root_id, path, size, mtime_ns
+     FROM files INDEXED BY idx_files_pending
+     WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
+       AND root_id IN (SELECT id FROM roots
+                       WHERE enabled = 1 AND status IN ('ok', 'watch_failed'))
+     ORDER BY mtime_ns DESC, id
+     LIMIT ?2";
+
 /// The next files to work on: `pending`, not waiting out a retry delay, in a
 /// root that is enabled and readable, most recently modified first so fresh
-/// files become searchable first (SPEC.md §5.4 step 6).
+/// files become searchable first (SPEC.md §5.4 step 6). Read in order from the
+/// partial `idx_files_pending` (migration 0002), not sorted per call.
 pub fn next_pending(conn: &Connection, now: i64, limit: u32) -> Result<Vec<PendingFile>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, root_id, path, size, mtime_ns FROM files
-         WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
-           AND root_id IN (SELECT id FROM roots
-                           WHERE enabled = 1 AND status IN ('ok', 'watch_failed'))
-         ORDER BY mtime_ns DESC, id
-         LIMIT ?2",
-    )?;
+    let mut stmt = conn.prepare_cached(NEXT_PENDING_SQL)?;
     let rows = stmt
         .query_map(params![now, limit], |row| {
             Ok(PendingFile {
@@ -500,20 +504,20 @@ pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<String>> {
         .optional()?)
 }
 
+const HASHED_OF_SIZE_SQL: &str = "SELECT f.id, f.path, f.content_hash FROM files f
+     JOIN roots r ON r.id = f.root_id
+     WHERE f.size = ?1 AND f.kind = ?2 AND f.content_hash IS NOT NULL
+       AND r.enabled = 1 AND r.status IN ('ok', 'watch_failed')";
+
 /// Hashed rows of exactly `size` bytes and `kind` in a usable root, with their
 /// path and hash: what a newly found file may have been moved from.
-// ponytail: no index on size, so one scan of `files` per new path; add
-// `idx_files_size` if scans over large indexes get slow.
+/// Served by the partial `idx_files_size` (migration 0002).
 pub fn hashed_of_size(
     conn: &Connection,
     size: u64,
     kind: &str,
 ) -> Result<Vec<(i64, PathBuf, Vec<u8>)>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT f.id, f.path, f.content_hash FROM files f JOIN roots r ON r.id = f.root_id
-         WHERE f.size = ?1 AND f.kind = ?2 AND f.content_hash IS NOT NULL
-           AND r.enabled = 1 AND r.status IN ('ok', 'watch_failed')",
-    )?;
+    let mut stmt = conn.prepare_cached(HASHED_OF_SIZE_SQL)?;
     let rows = stmt
         .query_map(params![size as i64, kind], |row| {
             Ok((
@@ -940,6 +944,67 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM vec_image", [], |r| r.get(0))
             .unwrap();
         assert_eq!(vectors, 0);
+    }
+
+    /// Vectors are bound as raw f32 bytes: what `vec0` stores is exactly them.
+    #[test]
+    fn vectors_are_stored_as_their_raw_f32_bytes() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let chunks = vec![RawChunk::body("hello".into())];
+        let embedding: Vec<f32> = (0..384).map(|i| i as f32 * 0.1 - 7.3).collect();
+
+        upsert_file(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            std::slice::from_ref(&embedding),
+            None,
+        )
+        .unwrap();
+
+        let stored: Vec<u8> = conn
+            .query_row("SELECT embedding FROM vec_text", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, embedding_to_blob(&embedding));
+    }
+
+    /// The move lookup runs once per new file during a scan: it must use an
+    /// index, not read the whole table each time.
+    #[test]
+    fn the_move_lookup_uses_the_size_index() {
+        let (_dir, conn) = open_test_db();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {HASHED_OF_SIZE_SQL}"))
+            .unwrap()
+            .query_map(params![1, "text"], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains("idx_files_size")),
+            "plan: {plan:?}"
+        );
+    }
+
+    /// The scheduler asks for the newest pending rows on every poll: that must
+    /// walk an index in order, not sort every pending row each time.
+    #[test]
+    fn the_pending_queue_is_read_in_index_order() {
+        let (_dir, conn) = open_test_db();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {NEXT_PENDING_SQL}"))
+            .unwrap()
+            .query_map(params![0, 10], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|s| s.contains("idx_files_pending"))
+                && !plan.iter().any(|s| s.contains("TEMP B-TREE")),
+            "plan: {plan:?}"
+        );
     }
 
     // ---- M5 slice 1: state machine, deletion, purge ----

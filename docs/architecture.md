@@ -31,10 +31,14 @@ enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
 
 ## Database schema
 
-See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/0001_init.sql`.
-`db::open()` registers `sqlite-vec`, sets `journal_mode=WAL`/`foreign_keys=ON`/
-`busy_timeout`, and runs any pending migrations (tracked in
-`schema_migrations`, applied at most once each). The database file lives at
+See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
+(`0001_init.sql`; `0002_files_indexes.sql` adds the partial indexes
+`idx_files_size`, for the move lookup, and `idx_files_pending`, which
+`next_pending` reads in order with `INDEXED BY`). `db::open()` registers `sqlite-vec`,
+sets `journal_mode=WAL`/`synchronous=NORMAL`/`foreign_keys=ON`/`busy_timeout`,
+and runs any pending migrations (tracked in `schema_migrations`, applied at
+most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
+(`embed::embedding_to_blob`), not JSON text. The database file lives at
 `<data_dir>/magi.db`.
 
 ## Config
@@ -347,12 +351,18 @@ scheduler ──► extract workers (N) ──► embed worker (1) ──► wri
 - **Scheduler** (own read connection): `pending` rows are the queue. It holds
   each file until it has been stable (mtime over 3 s old and unchanged size
   across two stats 1 s apart), hands out newest first, and never has more than
-  `2 * workers + 2` files in the pipeline. A row is released when the writer
-  reports it done.
+  `2 * workers + 2` files in the pipeline. A file proven stable while the
+  pipeline is full waits as `Ready`, handed out when room frees without being
+  stat'd again. A row is released when the writer reports it done.
 - **Extract workers**: `pipeline::prepare`; unchanged files go straight to the
   writer, the rest to the embed worker over a bounded channel.
-- **Embed worker**: batches of at most 16 chunks; before each batch it waits
-  while any `SearchGuard` is alive (the priority lock), at most 5 s.
+- **Embed worker**: takes one file plus whatever else is already queued, up to
+  16 chunks, and embeds them together (`pipeline::embed_group`: shortest
+  chunks first, a batch ends where lengths jump so a filename chunk is not
+  padded to a full body chunk; a failed batch falls back to one file at a
+  time). Batches of
+  at most 16 chunks; before each batch it waits while any `SearchGuard` is
+  alive (the priority lock), at most 5 s.
 - **Writer**: the only thread that writes. Jobs: mark indexing, store, keep,
   retry, delete, reconcile. One transaction per file.
 

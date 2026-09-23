@@ -88,6 +88,49 @@ dominates at 100k chunks; the embedder itself is not the bottleneck
 (~13 ms/query in isolation). Not fixed in this slice — needs an
 ANN/partitioning strategy, tracked as an open item.
 
+## Indexing performance pass (branch `feat/change_detection`, 2026-09-23)
+
+**Method:** synthetic text corpus (seeded, lognormal sizes: mostly short
+notes, a tail of long documents; unique content), backdated an hour so the
+scheduler's settle window does not apply. Each run gets a fresh
+`MAGI_DATA_DIR` (models linked in) and `pause_on_battery = false`. Builds are
+run in alternating order per repetition; the table shows the median. Wall time
+covers the whole process: for `index`, start to exit; for `daemon`, start until
+the status shows `queued 0` and every file `indexed`. Same reference machine
+as above, **on battery** (so absolute numbers are throttled and noisy, about
+±5–10 %); release builds.
+
+Builds:
+- **base**: branch state before this pass (on top of `348e964`).
+- **+1,3,5**: partial `idx_files_size` for the move lookup, `synchronous=NORMAL`,
+  vectors bound as raw f32 BLOBs instead of JSON.
+- **+2,4**: plus cross-file embed batching (`pipeline::embed_group`) and the
+  scheduler's `Ready` hold with the partial `idx_files_pending`.
+- **+length split**: plus `embed_group` ending a batch where chunk lengths
+  jump, so short chunks (filenames) are not padded to full body chunks.
+
+| Scenario | Files | base | +1,3,5 | +2,4 | +length split |
+| -------- | -----:| ----:| ------:| ----:| -------------:|
+| `index`, fake embedder (3 reps) | 2,000 | 21.3 s | 15.5 s | 15.7 s | — |
+| `index` of a 2nd root, fake embedder (3 reps) | 2,000 | 30.1 s | 20.9 s | 23.0 s | — |
+| `daemon`, fake embedder (3 reps; last column 1 rep) | 2,000 | 30.6 s | 22.1 s | 10.4 s | 8.8 s |
+| `daemon`, real e5 (2 reps) | 500 | 306 s | 307 s | 301 s | — |
+| `daemon`, real e5, second session (2 reps) | 500 | — | 331 s | — | **206 s** |
+
+Reading it:
+- With the fake embedder (database and scheduling cost only), 1, 3 and 5 take
+  about 30 % off, mostly from not fsyncing every commit. 2 and 4 halve the
+  daemon's time again. They don't touch the serial `index` path.
+- With the real model, embedding is nearly all of the time (~7 chunks/s on
+  battery with 2 intra-op threads), so 1–5 alone change nothing measurable.
+  Cross-file batching helps only once short chunks stop being padded to long
+  ones: about 1.6× faster (308/331 s → 189/206 s).
+- Move lookup (item 1) at scale, measured on the query alone: 2,000 new files
+  against 100,000 indexed rows take 10.3 s without `idx_files_size` and 7 ms
+  with it (0.56 s vs 3 ms at 10,000 rows). The 2,000-row runs above are too
+  small to show it. At real sizes it would be minutes spent inside the
+  writer's scan transaction.
+
 ## Reproducing
 
 ```

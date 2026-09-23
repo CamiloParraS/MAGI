@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
 
-use crate::embed::embedding_to_json;
+use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
@@ -47,7 +47,7 @@ pub fn search_vector_text(
     // purely as sort keys and don't outlive this function.
     let mut rows = stmt
         .query_map(
-            params![embedding_to_json(query_embedding), chunk_fetch_limit(limit)],
+            params![embedding_to_blob(query_embedding), chunk_fetch_limit(limit)],
             |row| {
                 Ok((
                     FileHit {
@@ -106,7 +106,7 @@ pub fn search_vector_image(
          ORDER BY knn_matches.distance",
     )?;
     let mut rows = stmt
-        .query_map(params![embedding_to_json(query_embedding), limit], |row| {
+        .query_map(params![embedding_to_blob(query_embedding), limit], |row| {
             let file_name: String = row.get(2)?;
             Ok((
                 FileHit {

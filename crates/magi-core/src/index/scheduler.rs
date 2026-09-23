@@ -84,6 +84,9 @@ enum Hold {
     },
     /// Still changing; not looked at before `until`.
     Deferred { file: PendingFile, until: Instant },
+    /// Proven stable while the pipeline was full: handed out as soon as there
+    /// is room, without another stat.
+    Ready { file: PendingFile, entry: WalkEntry },
 }
 
 pub struct Scheduler {
@@ -116,6 +119,23 @@ impl Scheduler {
     pub fn poll(&mut self, conn: &Connection, now: Now) -> Result<Vec<Action>> {
         let mut actions = Vec::new();
         let mut room = self.max_in_flight.saturating_sub(self.in_flight());
+
+        // Already proven stable: first in line, newest first.
+        let mut ready: Vec<(std::cmp::Reverse<i64>, i64)> = self
+            .held
+            .iter()
+            .filter_map(|(&id, hold)| match hold {
+                Hold::Ready { file, .. } => Some((std::cmp::Reverse(file.mtime_ns), id)),
+                _ => None,
+            })
+            .collect();
+        ready.sort_unstable();
+        for (_, id) in ready.into_iter().take(room) {
+            if let Some(Hold::Ready { file, entry }) = self.held.insert(id, Hold::InFlight) {
+                room -= 1;
+                actions.push(Action::Extract { file, entry });
+            }
+        }
 
         // Re-check what was waiting, most recently modified first.
         let mut due: Vec<(i64, PendingFile)> = self
@@ -223,14 +243,13 @@ impl Scheduler {
             );
             return None;
         }
-        // Stable. No room yet: leave it watched and look again next poll.
+        // Stable. No room yet: wait for it without looking again.
         if *room == 0 {
             self.held.insert(
                 id,
-                Hold::Watching {
+                Hold::Ready {
                     file: file.clone(),
-                    size: entry.size,
-                    check_at: now.at,
+                    entry,
                 },
             );
             return None;
@@ -414,6 +433,38 @@ mod tests {
         s.finished(new);
         let ready = s.poll(&f.conn, t0.plus(Duration::from_secs(3))).unwrap();
         assert_eq!(extracted_ids(&ready), vec![old]);
+    }
+
+    /// A file that proved stable while the pipeline was full waits for room
+    /// without being stat'd again on every poll: once room frees it is handed
+    /// out as it was (here, even though it was deleted meanwhile — the extract
+    /// stage and the watcher deal with that).
+    #[test]
+    fn a_stable_file_waiting_for_room_is_not_looked_at_again() {
+        let f = Fixture::new();
+        let first = f.queue("first.txt", "a");
+        let second = f.queue("second.txt", "b");
+        let mut s = Scheduler::new(1);
+        let t0 = Now::current().plus(Duration::from_secs(10));
+        s.poll(&f.conn, t0).unwrap();
+        let ready = s.poll(&f.conn, t0.plus(Duration::from_secs(2))).unwrap();
+        assert_eq!(ready.len(), 1, "one slot");
+        let (handed, waiting) = if extracted_ids(&ready) == vec![first] {
+            (first, ("second.txt", second))
+        } else {
+            (second, ("first.txt", first))
+        };
+
+        fs::remove_file(f.dir.path().join(waiting.0)).unwrap();
+        assert!(
+            s.poll(&f.conn, t0.plus(Duration::from_secs(3)))
+                .unwrap()
+                .is_empty(),
+            "still no room: nothing handed out, nothing stat'd"
+        );
+        s.finished(handed);
+        let ready = s.poll(&f.conn, t0.plus(Duration::from_secs(4))).unwrap();
+        assert_eq!(extracted_ids(&ready), vec![waiting.1]);
     }
 
     /// A modification time in the future must not hold a file back for as long.

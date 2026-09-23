@@ -14,7 +14,10 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// One embedded migration: schema version and its SQL.
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_files_indexes.sql")),
+];
 
 static VEC_EXTENSION_REGISTERED: Once = Once::new();
 
@@ -41,6 +44,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     register_vec_extension();
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
+    // No fsync per commit (the writer commits per file). A power loss can
+    // drop the last commits but not corrupt the database; the files they
+    // covered are left `indexing`/`pending` and redone (SPEC.md §5.4).
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     run_migrations(&conn)?;
@@ -116,6 +123,17 @@ mod tests {
             })
             .unwrap();
         assert_eq!(applied, MIGRATIONS.len() as i64);
+    }
+
+    /// WAL + NORMAL: no fsync per commit, still corruption-safe.
+    #[test]
+    fn commits_are_not_fsynced_one_by_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("magi.db")).unwrap();
+        let synchronous: i64 = conn
+            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1, "NORMAL");
     }
 
     #[test]

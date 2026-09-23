@@ -20,28 +20,13 @@ pub const TEXT_EMBEDDING_DIM: usize = 384;
 /// Dimensionality of SigLIP 2 base embeddings (SPEC.md section 3).
 pub const IMAGE_EMBEDDING_DIM: usize = 768;
 
-/// Serializes an embedding as the JSON array text `vec_f32()` parses
-/// (sqlite-vec's documented insertion format — see
-/// https://github.com/asg017/sqlite-vec/blob/v0.1.9/site/features/knn.md).
-/// Shared by `db::files::upsert_file` (writes) and
-/// `search::vector::search_vector_text` (reads the query embedding) so the
-/// two sides of that round trip can't drift apart.
-///
-/// ponytail: text (de)serialization of ~384 floats per chunk is simpler
-/// and safer than hand-packing the raw little-endian blob `vec0` expects,
-/// at the cost of some CPU on inserts/queries. Switch to binding the raw
-/// bytes directly if indexing/search throughput profiling ever points here.
-pub(crate) fn embedding_to_json(embedding: &[f32]) -> String {
-    let mut s = String::with_capacity(embedding.len() * 12 + 2);
-    s.push('[');
-    for (i, x) in embedding.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push_str(&x.to_string());
-    }
-    s.push(']');
-    s
+/// An embedding as the raw f32 BLOB `vec_f32()` / `vec0` take directly
+/// (sqlite-vec 0.1.9 `fvec_from_value` memcpys it, so native byte order),
+/// instead of JSON text formatted here and parsed back there. Shared by
+/// `db::files::upsert_file` (writes) and `search::vector` (query
+/// embeddings) so both sides of the round trip stay the same.
+pub(crate) fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+    embedding.iter().flat_map(|x| x.to_ne_bytes()).collect()
 }
 
 /// Encodes text into vectors for `vec_text` (SPEC.md §5.6). Implementations

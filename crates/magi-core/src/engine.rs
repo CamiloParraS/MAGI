@@ -34,7 +34,7 @@ use crate::dto::{IndexState, IndexStatus, RootStatus};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::index::pipeline::{
-    Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed, prepare,
+    EMBED_BATCH, Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed_group, prepare,
 };
 use crate::index::resources::{self, Pause};
 use crate::index::scheduler::{Action, Now, Scheduler};
@@ -112,7 +112,9 @@ impl Engine {
         let (done_tx, done_rx) = crossbeam_channel::unbounded::<i64>();
         let (wake_tx, wake_rx) = crossbeam_channel::bounded::<()>(1);
         let (extract_tx, extract_rx) = crossbeam_channel::bounded::<Job>(max_in_flight);
-        let (embed_tx, embed_rx) = crossbeam_channel::bounded::<(Job, Fresh)>(workers);
+        // Room for everything in flight (the scheduler already caps that), so
+        // the embed worker finds small files queued together to batch.
+        let (embed_tx, embed_rx) = crossbeam_channel::bounded::<(Job, Fresh)>(max_in_flight);
         let stats = Arc::new(Stats::default());
         let stop = Arc::new(AtomicBool::new(false));
         let search_pending = SearchPending::default();
@@ -712,21 +714,37 @@ fn embed_worker(
     write_tx: &Sender<WriteJob>,
 ) {
     Os.lower_current_thread();
-    for (job, fresh) in jobs {
+    for first in &jobs {
         if stop.load(Ordering::SeqCst) {
             continue;
         }
+        // Whatever else is already waiting joins it, up to one model batch.
+        let mut chunks = first.1.chunks_len();
+        let mut group = vec![first];
+        while chunks < EMBED_BATCH {
+            let Ok(next) = jobs.try_recv() else { break };
+            chunks += next.1.chunks_len();
+            group.push(next);
+        }
+        let ids: Vec<i64> = group.iter().map(|(job, _)| job.stored.id).collect();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            embed(ctx, &job, fresh, &|| pending.wait_clear())
+            embed_group(ctx, group, &|| pending.wait_clear())
         }));
-        let next = match result {
-            Ok(Ok(embedded)) => WriteJob::Store {
-                job: Box::new(job),
-                embedded: Box::new(embedded),
-            },
-            Ok(Err(e)) => WriteJob::retry(job.stored.id, e.to_string()),
-            Err(_) => WriteJob::retry(job.stored.id, "embedding panicked".into()),
+        let Ok(results) = result else {
+            for id in ids {
+                let _ = write_tx.send(WriteJob::retry(id, "embedding panicked".into()));
+            }
+            continue;
         };
-        let _ = write_tx.send(next);
+        for (job, embedded) in results {
+            let next = match embedded {
+                Ok(embedded) => WriteJob::Store {
+                    job: Box::new(job),
+                    embedded: Box::new(embedded),
+                },
+                Err(e) => WriteJob::retry(job.stored.id, e.to_string()),
+            };
+            let _ = write_tx.send(next);
+        }
     }
 }

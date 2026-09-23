@@ -264,6 +264,12 @@ pub(crate) struct Fresh {
     thumb_key: Option<String>,
 }
 
+impl Fresh {
+    pub(crate) fn chunks_len(&self) -> usize {
+        self.chunks.len()
+    }
+}
+
 pub(crate) struct Embedded {
     fresh: Fresh,
     embeddings: Vec<Vec<f32>>,
@@ -378,6 +384,76 @@ pub(crate) fn embed(
         before_batch,
     )?;
     Ok(Embedded { fresh, embeddings })
+}
+
+/// Stage 2 for several files at once: small files fill a model call together
+/// instead of each paying for a nearly empty one. Chunks go shortest first and
+/// a batch ends where lengths jump ([`batches_by_length`]): the model pads a
+/// batch to its longest input, so a filename chunk batched with a full body
+/// chunk would cost as much as one. If a batch fails, every file is embedded
+/// on its own instead ([`embed`]), so a bad file costs only itself.
+pub(crate) fn embed_group(
+    ctx: &IndexContext,
+    group: Vec<(Job, Fresh)>,
+    before_batch: &dyn Fn(),
+) -> Vec<(Job, Result<Embedded>)> {
+    let chunk = |(f, c): (usize, usize)| group[f].1.chunks[c].text.as_str();
+    let mut order: Vec<(usize, usize)> = group
+        .iter()
+        .enumerate()
+        .flat_map(|(f, (_, fresh))| (0..fresh.chunks.len()).map(move |c| (f, c)))
+        .collect();
+    order.sort_by_key(|&at| chunk(at).len());
+
+    let mut vectors: Vec<Vec<Vec<f32>>> = group
+        .iter()
+        .map(|(_, fresh)| vec![Vec::new(); fresh.chunks.len()])
+        .collect();
+    for batch in batches_by_length(&order, |at| chunk(at).len()) {
+        before_batch();
+        let texts: Vec<&str> = batch.iter().map(|&at| chunk(at)).collect();
+        match ctx.embedder.embed_passages(&texts) {
+            Ok(out) if out.len() == texts.len() => {
+                for (&(f, c), v) in batch.iter().zip(out) {
+                    vectors[f][c] = v;
+                }
+            }
+            _ => {
+                return group
+                    .into_iter()
+                    .map(|(job, fresh)| {
+                        let embedded = embed(ctx, &job, fresh, before_batch);
+                        (job, embedded)
+                    })
+                    .collect();
+            }
+        }
+    }
+    group
+        .into_iter()
+        .zip(vectors)
+        .map(|((job, fresh), embeddings)| (job, Ok(Embedded { fresh, embeddings })))
+        .collect()
+}
+
+/// Splits `sorted` (shortest first) into batches of at most [`EMBED_BATCH`],
+/// starting a new one when an item is over twice as long as the batch's first.
+/// Lengths are bytes, a stand-in for tokens; under [`SHORT_BYTES`] counts as
+/// short, so names and one-liners share a batch.
+fn batches_by_length<T: Copy>(sorted: &[T], len: impl Fn(T) -> usize) -> Vec<&[T]> {
+    const SHORT_BYTES: usize = 64;
+    let mut batches = Vec::new();
+    let mut start = 0;
+    for i in 1..=sorted.len() {
+        let ends = i == sorted.len()
+            || i - start == EMBED_BATCH
+            || len(sorted[i]) > 2 * len(sorted[start]).max(SHORT_BYTES);
+        if ends {
+            batches.push(&sorted[start..i]);
+            start = i;
+        }
+    }
+    batches
 }
 
 /// Stage 3, store: one transaction per file.
@@ -514,7 +590,7 @@ fn embed_chunks(
 
 /// Chunks per model call: small enough that a waiting search is served
 /// between batches (SPEC.md §5.3 priority lock).
-const EMBED_BATCH: usize = 16;
+pub(crate) const EMBED_BATCH: usize = 16;
 
 /// A failed write costs the file its thumbnail, never its index entry.
 fn store_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
@@ -844,6 +920,71 @@ mod tests {
         let hits = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
         assert_eq!(hits("zeppelin"), 0, "content must not be read");
         assert_eq!(hits("report"), 1, "the name is still searchable");
+    }
+
+    /// Extracts one new file into a job for the embed stage.
+    fn extracted(conn: &Connection, root_id: i64, root_path: &Path, name: &str) -> (Job, Fresh) {
+        let path = root_path.join(name);
+        fs::write(
+            &path,
+            format!("notes about {name} and the electrician invoice ").repeat(12),
+        )
+        .unwrap();
+        let entry = discovery::stat(&path).unwrap();
+        files::insert_pending(
+            conn,
+            root_id,
+            &path,
+            Path::new(name),
+            entry.size,
+            entry.mtime_ns,
+            1,
+        )
+        .unwrap();
+        let job = Job {
+            root_id,
+            root_path: root_path.to_path_buf(),
+            stored: files::get_stored(conn, &path).unwrap().unwrap(),
+            entry,
+            scan_id: 1,
+        };
+        let ctx = IndexContext::new(Arc::new(FakeEmbedder));
+        let Extracted::Fresh(fresh) = prepare(&ctx, &default_options(), &job) else {
+            panic!("{name} should need embedding");
+        };
+        (job, *fresh)
+    }
+
+    /// Small files share model calls: three files of two chunks each take two
+    /// calls, one for the three names and one for the three bodies (a short
+    /// chunk is not padded to a long one), and each file still gets exactly
+    /// the vectors it would alone.
+    #[test]
+    fn small_files_are_embedded_together_with_the_same_vectors() {
+        let (_db_dir, root_dir, conn, root_id) = open_test_db();
+        let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let group: Vec<_> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|n| extracted(&conn, root_id, &root_path, n))
+            .collect();
+        let alone: Vec<Vec<Vec<f32>>> = group
+            .iter()
+            .map(|(_, fresh)| {
+                let texts: Vec<&str> = fresh.chunks.iter().map(|c| c.text.as_str()).collect();
+                FakeEmbedder.embed_passages(&texts).unwrap()
+            })
+            .collect();
+
+        let counting = Arc::new(CountingEmbedder::new(FakeEmbedder));
+        let ctx = IndexContext::new(counting.clone());
+        let embedded = embed_group(&ctx, group, &|| {});
+
+        assert_eq!((counting.calls(), counting.chunks()), (2, 6));
+        let together: Vec<Vec<Vec<f32>>> = embedded
+            .into_iter()
+            .map(|(_, e)| e.unwrap().embeddings)
+            .collect();
+        assert_eq!(together, alone);
     }
 
     #[test]
