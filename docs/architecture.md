@@ -48,6 +48,10 @@ defaults on first run; `config::save()` writes to a temp file and renames it
 into place so a crash mid-save can't corrupt the existing config.
 `Config::validate()` rejects malformed exclude globs and roots whose path
 doesn't exist on disk.
+The default `exclude_globs` also skip Unity's regenerated `Library` caches,
+`*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
+apply only when the config file is first written: an existing config keeps
+its own list.
 
 ## Roots
 

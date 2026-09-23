@@ -408,7 +408,11 @@ enabled = true
 [indexing]
 exclude_globs = ["**/node_modules/**", "**/.git/**", "**/target/**", "**/.venv/**",
                  "**/__pycache__/**", "**/*.tmp", "**/*.part", "**/*.crdownload",
-                 "**/~$*", "**/.~lock.*"]
+                 "**/~$*", "**/.~lock.*",
+                 # Unity's regenerated caches and build output
+                 "**/Library/PackageCache/**", "**/Library/Bee/**", "**/Library/ShaderCache/**",
+                 "**/Library/BurstCache/**", "**/Library/ScriptAssemblies/**", "**/*.meta",
+                 "**/*.dll", "**/*.pdb", "**/*.obj", "**/*.o"]
 include_hidden = false
 follow_symlinks = false
 max_file_size_mb = 50

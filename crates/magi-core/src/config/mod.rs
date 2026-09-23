@@ -45,6 +45,19 @@ impl Default for IndexingConfig {
                 "**/*.crdownload".into(),
                 "**/~$*".into(),
                 "**/.~lock.*".into(),
+                // Unity's regenerated caches: one project's Library held 35k
+                // of a 41k-file benchmark folder (docs/benchmarks.md).
+                "**/Library/PackageCache/**".into(),
+                "**/Library/Bee/**".into(),
+                "**/Library/ShaderCache/**".into(),
+                "**/Library/BurstCache/**".into(),
+                "**/Library/ScriptAssemblies/**".into(),
+                "**/*.meta".into(),
+                // Build output: binaries nobody searches for by name.
+                "**/*.dll".into(),
+                "**/*.pdb".into(),
+                "**/*.obj".into(),
+                "**/*.o".into(),
             ],
             include_hidden: false,
             follow_symlinks: false,
