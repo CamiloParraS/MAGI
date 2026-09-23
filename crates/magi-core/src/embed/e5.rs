@@ -2,7 +2,7 @@
 //! in M3 (see SPEC.md §7 M3).
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ort::session::Session;
@@ -32,10 +32,19 @@ pub struct E5Embedder {
     /// Loaded on first use, dropped when idle (SPEC.md §6.4).
     session: ModelSlot<Mutex<Session>>,
     model_path: PathBuf,
-    /// Shared with `chunk::count_tokens` (`embed::manager::shared_text_tokenizer`)
-    /// rather than a private copy — ADR-0005 measured a second parse of the
-    /// ~17 MB `tokenizer.json` at ~275 MB of peak RSS, pure duplication.
-    tokenizer: &'static Tokenizer,
+}
+
+/// Shared with `chunk::count_tokens` (`embed::manager::shared_text_tokenizer`)
+/// rather than a private copy — ADR-0005 measured a second parse of the
+/// ~17 MB `tokenizer.json` at ~275 MB of peak RSS, pure duplication. Fetched
+/// per use so it can be freed when idle, like the session.
+fn tokenizer() -> Result<Arc<Tokenizer>> {
+    crate::embed::manager::shared_text_tokenizer().ok_or_else(|| {
+        Error::Model(format!(
+            "no downloaded tokenizer under {} (run `just models` first)",
+            crate::embed::manager::model_dir("text").display()
+        ))
+    })
 }
 
 impl E5Embedder {
@@ -51,15 +60,7 @@ impl E5Embedder {
         let dir = crate::embed::manager::model_dir("text");
         let model_path = dir.join("model.onnx");
 
-        // Shared with `chunk::count_tokens` rather than a private
-        // `Tokenizer::from_file` copy — see the `tokenizer` field's doc
-        // comment and ADR-0005.
-        let tokenizer = crate::embed::manager::shared_text_tokenizer().ok_or_else(|| {
-            Error::Model(format!(
-                "no downloaded tokenizer under {} (run `just models` first)",
-                dir.display()
-            ))
-        })?;
+        tokenizer()?;
 
         if !model_path.is_file() {
             return Err(Error::Model(format!(
@@ -71,15 +72,15 @@ impl E5Embedder {
         Ok(Self {
             session: ModelSlot::new(),
             model_path,
-            tokenizer,
         })
     }
 
     fn load_session(&self) -> Result<Mutex<Session>> {
-        // The embed worker is architecturally single-threaded (SPEC.md §5.3:
-        // one dedicated embed thread), so there's no batch-level parallelism
-        // for more intra-op threads to exploit.
-        Ok(Mutex::new(crate::onnx::session(&self.model_path, 1)?))
+        // One embed thread (SPEC.md §5.3) drives this session; 2 intra-op
+        // threads split each batch's matmuls. Capped at 2 for NFR-8
+        // politeness (docs/m5-plan.md defaults); the same session serves
+        // search.
+        Ok(Mutex::new(crate::onnx::session(&self.model_path, 2)?))
     }
 
     /// Tokenizes, runs inference, and mean-pools + L2-normalizes each of
@@ -89,8 +90,7 @@ impl E5Embedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-        let encodings = self
-            .tokenizer
+        let encodings = tokenizer()?
             .encode_batch(texts.iter().map(String::as_str).collect(), true)
             .map_err(|e| Error::Model(format!("tokenizing: {e}")))?;
 

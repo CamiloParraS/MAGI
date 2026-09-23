@@ -148,13 +148,15 @@ local folder instead of the network. Both the download loop and the
 `ByteFetcher` HTTP fetch are separate (dependency-injected) so the
 resume/verify/atomic-rename logic is unit-tested without any network
 access. `embed::manager::shared_text_tokenizer()` lazily loads and fully
-configures `tokenizer.json` from the text slot's directory once (an
-`OnceLock`, mirroring `extract::pdf`'s `shared_pdfium`) — `TruncationParams`
+configures `tokenizer.json` from the text slot's directory into a static
+`ModelSlot<Arc<Tokenizer>>`, which the resource monitor frees after the same
+idle timeout as the models (`unload_text_tokenizer_if_idle`); callers hold
+an `Arc` clone, so unloading never pulls it out from under one — `TruncationParams`
 (`max_length = chunk::MAX_TOKENS`, i.e. 512) and `PaddingParams`
 (`BatchLongest`, `pad_id` looked up via `tokenizer.token_to_id("<pad>")`
 rather than trusting the ONNX model's own `config.json`, which disagrees
 for this model). Both `chunk::count_tokens` and `embed::e5::E5Embedder`
-borrow this single instance rather than each parsing their own copy —
+share this single instance rather than each parsing their own copy —
 ADR-0005's RSS investigation found the earlier two-copies design cost
 ~200-260 MB of pure duplication.
 

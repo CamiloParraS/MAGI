@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -295,18 +295,36 @@ fn load_tokenizer_from(path: &Path) -> Option<tokenizers::Tokenizer> {
     Some(tokenizer)
 }
 
-static TEXT_TOKENIZER: OnceLock<Option<tokenizers::Tokenizer>> = OnceLock::new();
+static TEXT_TOKENIZER: ModelSlot<Arc<tokenizers::Tokenizer>> = ModelSlot::new();
+
+/// The tokenizer in `slot`, loading it from `path` first if needed. The `Arc`
+/// is cloned out so callers don't hold the slot's lock while encoding.
+fn tokenizer_in(
+    slot: &ModelSlot<Arc<tokenizers::Tokenizer>>,
+    path: &Path,
+) -> Option<Arc<tokenizers::Tokenizer>> {
+    let tokenizer = slot.get_or_load(|| {
+        load_tokenizer_from(path)
+            .map(Arc::new)
+            .ok_or_else(|| Error::Model(format!("no usable tokenizer at {}", path.display())))
+    });
+    tokenizer.ok().map(|t| Arc::clone(&t))
+}
 
 /// The downloaded, fully-configured e5 tokenizer, once `tokenizer.json` has
 /// been placed in the text model's directory (by `ensure_model_file` or
 /// offline import). `None` before then — callers (`chunk::count_tokens`)
-/// fall back to an approximation. Cached process-wide on first use, like
-/// `extract::pdf`'s `shared_pdfium`; `E5Embedder` uses this same instance
-/// rather than loading its own (see `load_tokenizer_from`'s doc comment).
-pub fn shared_text_tokenizer() -> Option<&'static tokenizers::Tokenizer> {
-    TEXT_TOKENIZER
-        .get_or_init(|| load_tokenizer_from(&model_dir("text").join("tokenizer.json")))
-        .as_ref()
+/// fall back to an approximation. Shared process-wide: `E5Embedder` uses
+/// this same instance rather than loading its own (see `load_tokenizer_from`'s
+/// doc comment). Freed like a model by [`unload_text_tokenizer_if_idle`].
+pub fn shared_text_tokenizer() -> Option<Arc<tokenizers::Tokenizer>> {
+    tokenizer_in(&TEXT_TOKENIZER, &model_dir("text").join("tokenizer.json"))
+}
+
+/// Drops the shared tokenizer if unused for `idle` (see
+/// [`ModelSlot::unload_if_idle`]); callers still holding it keep it alive.
+pub fn unload_text_tokenizer_if_idle(idle: Duration) {
+    TEXT_TOKENIZER.unload_if_idle(idle);
 }
 
 /// Holds a model behind lazy load / idle unload (SPEC.md §7 M3: "loads
@@ -322,15 +340,15 @@ pub struct ModelSlot<T> {
 
 impl<T> Default for ModelSlot<T> {
     fn default() -> Self {
-        Self {
-            inner: Mutex::new(None),
-        }
+        Self::new()
     }
 }
 
 impl<T> ModelSlot<T> {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -655,6 +673,33 @@ mod tests {
         let path = dir.path().join("tokenizer.json");
         std::fs::write(&path, b"not a real tokenizer").unwrap();
         assert!(load_tokenizer_from(&path).is_none());
+    }
+
+    #[test]
+    fn tokenizer_unloads_when_idle_and_loads_once_it_appears() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokenizer.json");
+        let slot = ModelSlot::new();
+
+        assert!(tokenizer_in(&slot, &path).is_none(), "not downloaded yet");
+        std::fs::write(
+            &path,
+            r#"{"version":"1.0","truncation":null,"padding":null,"added_tokens":[],
+            "normalizer":null,"pre_tokenizer":{"type":"Whitespace"},"post_processor":null,
+            "decoder":null,"model":{"type":"WordLevel",
+            "vocab":{"<pad>":0,"[UNK]":1,"hello":2},"unk_token":"[UNK]"}}"#,
+        )
+        .unwrap();
+        let in_use = tokenizer_in(&slot, &path).expect("picked up after download");
+        assert!(slot.is_loaded());
+
+        assert!(slot.unload_if_idle(Duration::ZERO));
+        assert!(!slot.is_loaded());
+        assert_eq!(
+            in_use.encode("hello", false).unwrap().len(),
+            1,
+            "still usable"
+        );
     }
 
     #[test]
