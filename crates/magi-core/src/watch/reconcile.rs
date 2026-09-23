@@ -455,6 +455,34 @@ mod tests {
         assert_eq!(s.count(theirs), 1);
     }
 
+    /// Adding a parent of an indexed root reuses the child's rows: its first
+    /// scan finds them unchanged and embeds only what is new.
+    #[test]
+    fn a_collapsed_child_is_not_re_indexed_by_the_parent_scan() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let mut conn = db::open(&db_dir.path().join("magi.db")).unwrap();
+        let options = IndexRootOptions::from_config(&IndexingConfig::default()).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let child_dir = parent.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+        fs::write(child_dir.join("old.txt"), "already indexed").unwrap();
+        let child = roots::add(&conn, &child_dir).unwrap();
+        let scan_id = next_scan_id(&conn).unwrap();
+        let ctx = IndexContext::new(Arc::new(FakeEmbedder));
+        index_root(&mut conn, child.id, &child.path, &options, scan_id, &ctx).unwrap();
+        fs::write(parent.path().join("new.txt"), "brand new").unwrap();
+
+        let (root, collapsed) = roots::add_collapsing(&conn, parent.path()).unwrap();
+        let summary = reconcile_roots(&mut conn, &options, &[root.id]).unwrap();
+
+        assert_eq!(collapsed, vec![child.id]);
+        assert_eq!(
+            (summary.inserted, summary.changed, summary.unchanged),
+            (1, 0, 1),
+            "only new.txt is queued; old.txt keeps its index"
+        );
+    }
+
     /// SPEC.md §6.1 recovery: a root that was unreadable or missing and is
     /// back is reconciled at the next re-probe; a still-broken one is not.
     #[test]

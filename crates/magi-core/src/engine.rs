@@ -314,15 +314,19 @@ impl EngineHandle {
     }
 
     /// Registers a root (SPEC.md §5.7 `add_root`), rejecting a missing,
-    /// duplicate or nested path, then probes, watches and scans it. The status
+    /// duplicate or already-covered path and collapsing roots inside it (their
+    /// indexed files are kept), then probes, watches and scans it. The status
     /// returned is the probe's result.
     pub fn add_root(&self, path: &Path) -> Result<RootStatus> {
         let path = path.to_path_buf();
-        let root = self.write(move |conn| {
-            let root = roots::add(conn, &path)?;
+        let (root, collapsed) = self.write(move |conn| {
+            let (root, collapsed) = roots::add_collapsing(conn, &path)?;
             roots::set_access(conn, root.id, &FsProbe.probe(&root.path))?;
-            roots::get(conn, root.id)
+            Ok((roots::get(conn, root.id)?, collapsed))
         })?;
+        for id in collapsed {
+            self.unwatch(id);
+        }
         let root = self.watch(root)?;
         let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
         Ok(root.into())

@@ -56,8 +56,13 @@ its own list.
 ## Roots
 
 `db::roots` manages the `roots` table. `roots::add()` canonicalizes the path
-and rejects it if it's missing, already registered, or nested with (an
-ancestor or descendant of) an existing root.
+and rejects it if it's missing, already registered, or inside an existing
+root. Existing roots *inside* the new one are collapsed into it
+(`roots::add_collapsing`): in one transaction their files are re-pointed via
+`files::rename_file_to` (new `root_id`, `rel_path` relative to the parent, and
+filename chunk text), and the child root rows are deleted. Chunks and vectors
+are kept, so the parent's first scan finds those files unchanged and indexes
+only what's new. Roots never overlap, so every file belongs to exactly one root.
 
 ## Embeddings and hybrid search
 
@@ -476,7 +481,7 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
 | `status()` | `IndexStatus`: counts by state from a read connection, `paused` (user or monitor) over `scanning` (a full reconcile running) over `indexing` (anything `pending`/`indexing`) over `idle`. `current_file` is the file an extract worker last started, shown only while a row is `indexing`. |
 | `subscribe()` | A channel of `IndexStatus`, sent when it changes. The status thread checks twice a second but reads the database only after the writer applied a job, or the pause or scan flag flipped. Root status (including `permission_denied`) travels in `roots`. |
 | `pause()` / `resume()` / `is_paused()` | User pause, persisted in `meta.paused` (`1`/`0`) and restored at start. Same effect as the monitor's pause (`resources::Pause`). |
-| `add_root(path)` | `roots::add` (missing, duplicate and nested paths rejected, in both directions, against every root including disabled and missing ones: FR-1), probe, watch, then scan that root only (`WriteJob::ReconcileRoot`). Returns the root's status after the probe. |
+| `add_root(path)` | `roots::add_collapsing` (missing, duplicate and already-covered paths rejected against every root including disabled and missing ones: FR-1; roots inside the new path are collapsed into it, their files kept, and unwatched), probe, watch, then scan that root only (`WriteJob::ReconcileRoot`). Returns the root's status after the probe. |
 | `remove_root(id)` | Stops its watcher, purges its rows (`roots::remove`). |
 | `set_root_enabled(id, on)` | Off: rows kept, hidden from search, not watched, its `pending` rows not handed out. On: watched, and that root scanned. |
 | `retry_errors()` | Every `error` row back to `pending` with attempts and backoff cleared. |
