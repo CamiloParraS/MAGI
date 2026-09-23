@@ -500,4 +500,7 @@ root's watcher (a polled root may re-embed it once instead).
 `magi-cli daemon [--stats]` runs the engine headless on the dev data dir,
 prints a line per status change (and the roots when they change), and shuts
 down cleanly on Ctrl-C. `--stats` prints the process's CPU (averaged over the
-minute, 100% = one core) and RSS once a minute.
+minute, 100% = one core), RSS and private memory once a minute. Private
+memory (`PrivateUsage` on Windows) is the idle number to compare: RSS moves
+with however much the OS trims the working set. Elsewhere that column is the
+virtual size.

@@ -286,7 +286,7 @@ fn print_roots(roots: &[RootStatus]) {
     }
 }
 
-/// Prints this process's CPU and resident memory once a minute (`--stats`),
+/// Prints this process's CPU, resident and private memory once a minute (`--stats`),
 /// for the SPEC.md §7 M5 idle-CPU benchmark. CPU is averaged over the minute;
 /// 100% is one full core.
 struct Sampler {
@@ -317,10 +317,14 @@ impl Sampler {
         self.sys
             .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
         if let Some(p) = self.sys.process(self.pid) {
+            // On Windows sysinfo's `virtual_memory` is `PrivateUsage`: unlike
+            // the working set, it doesn't drop when Windows trims pages.
+            // Elsewhere it's the virtual size, so read it only on Windows.
             println!(
-                "stats: cpu {:.2}% of one core, rss {} MB",
+                "stats: cpu {:.2}% of one core, rss {} MB, private {} MB",
                 p.cpu_usage(),
-                p.memory() / (1024 * 1024)
+                p.memory() / (1024 * 1024),
+                p.virtual_memory() / (1024 * 1024)
             );
         }
     }
