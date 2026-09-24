@@ -57,7 +57,7 @@ its own list.
 
 `db::roots` manages the `roots` table. `roots::add()` canonicalizes the path
 and rejects it if it's missing, already registered, or inside an existing
-root. Existing roots *inside* the new one are collapsed into it
+root. Existing roots _inside_ the new one are collapsed into it
 (`roots::add_collapsing`): in one transaction their files are re-pointed via
 `files::rename_file_to` (new `root_id`, `rel_path` relative to the parent, and
 filename chunk text), and the child root rows are deleted. Chunks and vectors
@@ -309,6 +309,7 @@ queues a row whose root, size, mtime or `pipeline_version` differs from disk
 yes. A queued row's `state` is `pending`, so `keeps` reads the last result from
 the columns queuing leaves alone. It needs the current `PIPELINE_VERSION` and
 no `error` (kept until a result replaces it, even through `retry_errors`), and:
+
 1. for a file that will be extracted, a streamed blake3 hash equal to the stored
    `content_hash` and no `skip_reason`, so `touch` and re-saves cost no
    embedding;
@@ -394,7 +395,7 @@ Thread and channel details: `engine.rs`.
 
 `Engine::start` starts one debounced (2 s) `notify` watcher per accessible root
 before the first scan. A batch of events becomes `WriteJob::Paths(paths)`; the
-event *kinds* are ignored except that access events are dropped and an error or
+event _kinds_ are ignored except that access events are dropped and an error or
 overflow becomes a full rescan. The writer runs `reconcile::scan_paths`, which
 looks at each path on disk (file: queue it if wanted; folder: walk it; missing or
 now excluded: its rows are deletion candidates). Moves are matched from the new
@@ -432,7 +433,7 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
 
 - **Cloud placeholders.** `WalkEntry::cloud_only` comes from metadata the walk
   already has: Windows attributes `RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN |
-  OFFLINE`, macOS `st_flags & SF_DATALESS` (0x40000000), never on Linux. Such a
+OFFLINE`, macOS `st_flags & SF_DATALESS` (0x40000000), never on Linux. Such a
   file is stored `skipped` with `skip_reason = 'cloud_only'` and only its
   filename chunk; nothing opens it (`plan_entry` checks first, move matching
   does not hash it).
@@ -483,16 +484,16 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
 
 `EngineHandle` methods, the core of SPEC.md §5.7's commands:
 
-| Method | Does |
-| --- | --- |
-| `status()` | `IndexStatus`: counts by state from a read connection, `paused` (user or monitor) over `scanning` (a full reconcile running) over `indexing` (anything `pending`/`indexing`) over `idle`. `current_file` is the file an extract worker last started, shown only while a row is `indexing`. |
-| `subscribe()` | A channel of `IndexStatus`, sent when it changes. The status thread checks twice a second but reads the database only after the writer applied a job, or the pause or scan flag flipped. Root status (including `permission_denied`) travels in `roots`. |
-| `pause()` / `resume()` / `is_paused()` | User pause, persisted in `meta.paused` (`1`/`0`) and restored at start. Same effect as the monitor's pause (`resources::Pause`). |
-| `add_root(path)` | `roots::add_collapsing` (missing, duplicate and already-covered paths rejected against every root including disabled and missing ones: FR-1; roots inside the new path are collapsed into it, their files kept, and unwatched), probe, watch, then scan that root only (`WriteJob::ReconcileRoot`). Returns the root's status after the probe. |
-| `remove_root(id)` | Stops its watcher, purges its rows (`roots::remove`). |
-| `set_root_enabled(id, on)` | Off: rows kept, hidden from search, not watched, its `pending` rows not handed out. On: watched, and that root scanned. |
-| `retry_errors()` | Every `error` row back to `pending` with attempts and backoff cleared. |
-| `rescan()`, `apply_indexing_config()` | As before (`rescan_all`, exclusions). |
+| Method                                 | Does                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status()`                             | `IndexStatus`: counts by state from a read connection, `paused` (user or monitor) over `scanning` (a full reconcile running) over `indexing` (anything `pending`/`indexing`) over `idle`. `current_file` is the file an extract worker last started, shown only while a row is `indexing`.                                                     |
+| `subscribe()`                          | A channel of `IndexStatus`, sent when it changes. The status thread checks twice a second but reads the database only after the writer applied a job, or the pause or scan flag flipped. Root status (including `permission_denied`) travels in `roots`.                                                                                       |
+| `pause()` / `resume()` / `is_paused()` | User pause, persisted in `meta.paused` (`1`/`0`) and restored at start. Same effect as the monitor's pause (`resources::Pause`).                                                                                                                                                                                                               |
+| `add_root(path)`                       | `roots::add_collapsing` (missing, duplicate and already-covered paths rejected against every root including disabled and missing ones: FR-1; roots inside the new path are collapsed into it, their files kept, and unwatched), probe, watch, then scan that root only (`WriteJob::ReconcileRoot`). Returns the root's status after the probe. |
+| `remove_root(id)`                      | Stops its watcher, purges its rows (`roots::remove`).                                                                                                                                                                                                                                                                                          |
+| `set_root_enabled(id, on)`             | Off: rows kept, hidden from search, not watched, its `pending` rows not handed out. On: watched, and that root scanned.                                                                                                                                                                                                                        |
+| `retry_errors()`                       | Every `error` row back to `pending` with attempts and backoff cleared.                                                                                                                                                                                                                                                                         |
+| `rescan()`, `apply_indexing_config()`  | As before (`rescan_all`, exclusions).                                                                                                                                                                                                                                                                                                          |
 
 Every write goes through the writer: `WriteJob::Exec` carries a closure and the
 handle waits for its reply, so root management stays ordered with the rest.

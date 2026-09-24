@@ -18,7 +18,7 @@ is recorded here only once every verification item passes on all three OSes.
       win-x64, mac-arm64, mac-x64, and linux-x64.
 - [x] `just check` passes locally on the developer machine (Windows 11,
       x86_64): `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
+--all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
       `pnpm typecheck`, `pnpm test` all green.
 - [x] CI green on all three OSes — (workflow added at
       `.github/workflows/ci.yml`).
@@ -148,7 +148,7 @@ clean.
       index → extract → search pipeline.
 - [x] 83 unit tests + 9 golden tests + 1 idempotence test
       (`cargo test -p magi-core`), `cargo fmt --check` and `cargo clippy
-    --all-targets --all-features -- -D warnings` clean.
+  --all-targets --all-features -- -D warnings` clean.
 
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
@@ -327,7 +327,7 @@ verification checklist below, none of which is checked off yet.
 - [x] 130 unit tests (`cargo test -p magi-core`, plus 1 `#[ignore]`d real-
       tokenizer test run manually as above) + 9 golden + 1 idempotence
       test; `cargo fmt --check` and `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings` clean; `cargo test --workspace` green.
+  --all-features -- -D warnings` clean; `cargo test --workspace` green.
 
 ### Slice: real e5 ONNX embedder
 
@@ -338,7 +338,7 @@ verification checklist below, none of which is checked off yet.
       wrong `pad_token_id` for this model — verified by inspecting both
       files directly, not assumed), `add_special_tokens = true` (the
       tokenizer's own `TemplateProcessing` post-processor wraps `<s> ...
-    </s>`, confirmed from `tokenizer.json`), mean pooling over the
+  </s>`, confirmed from `tokenizer.json`), mean pooling over the
       attention mask (the exported ONNX graph has no pooling baked in —
       confirmed by inspecting its actual input/output tensor names and
       shapes with the `onnx` Python package, not assumed), L2
@@ -371,11 +371,11 @@ verification checklist below, none of which is checked off yet.
       manually with `MAGI_DATA_DIR` pointed at a directory containing the
       downloaded model/tokenizer, after `cargo xtask fetch-onnxruntime`).
 - [x] `magi-cli`'s `embedder_from_env()` now returns `Box<dyn
-    TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
+  TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
       under `MAGI_FAKE_EMBEDDER=1` (previously the CLI only ever bailed
       out asking for the fake one, since no real embedder existed).
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` all
+  --all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green with the new `ort`/`ndarray` dependencies.
 
 ### Slice: reference-vector parity, eval harness, quantization decision
@@ -488,7 +488,7 @@ verification checklist below, none of which is checked off yet.
       only 67 MB over (was 325 MB). Full writeup in ADR-0005's "Update:
       RSS root-cause investigation".
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` (130
+  --all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green after the `embed::e5`/`embed::manager`
       changes; the real-model `#[ignore]`d tests (parity, cross-lingual
       smoke test) re-verified manually.
@@ -538,7 +538,7 @@ and ADR-0005 rather than actioned here — each is its own scoped follow-up.
       (matches the 767.1 MB comparison measurement within noise) — 66 MB
       over the ≤700 MB target, the closest this project has measured.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` (130
+  --all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green.
 
 **Still open, unchanged**: the NFR-2/NFR-3 100k-chunk latency targets
@@ -569,16 +569,16 @@ Every number below was produced by a run on the reference machine on the
 current branch, not carried over from a summary. Machine: AMD Ryzen 7 7445HS
 (8c/16t), 16 GB, Windows 11 26200, int8 `multilingual-e5-small`.
 
-| # | SPEC.md §7 M3 verification item | Measured | Result |
-| -| ------------------------------- | -------- | ------ |
-| 1 | e5 parity vs. Python reference, cosine ≥ 0.97 (quantized) | worst-case **0.9953** (`cargo test --test e5_parity -- --ignored`) | PASS |
-| 2 | int8 recall@5 within 2 points of fp32 | 0.967 vs. 0.983 = **1.6 pts** | PASS |
-| 3 | Cross-lingual smoke test, both queries top-3 | both at **rank 2** (MRR 0.500 over the 2 queries ⇒ 1/2 + 1/2) | PASS |
-| 4 | Eval baseline; hybrid clauses (a) and (b) | (a) 0.971 = max(0.486, 0.971); (b) `kw` MRR 1.000 > 0.950, `cross` 0.413 > 0.000 | PASS |
-| 5 | 100k-chunk latency NFR-2 / NFR-3 | cold **1,443.7 ms** (≤ 3,000), warm **p95 230.0 ms** (≤ 300), p50 220.0, max 300.9 | PASS |
-| 6 | Peak RSS indexing the fixture corpus ≤ 700 MB | **581.9 MB** (`PeakWorkingSet64`, 50 ms polling, isolated `MAGI_DATA_DIR`) | PASS |
-| 7 | Download interrupted/resumed; corrupted rejected and re-downloaded | 4 tests in `embed/manager.rs`: `fresh_download_writes_verified_file_and_removes_partial`, `resumes_from_existing_partial_file_via_range`, `corrupted_download_is_rejected_and_can_be_retried`, `cancel_flag_stops_download_leaving_a_resumable_partial` | PASS |
-| 8 | `just test` needs no network | green with `MAGI_FAKE_EMBEDDER=1`, no network calls | PASS |
+| #   | SPEC.md §7 M3 verification item                                    | Measured                                                                                                                                                                                                                                                | Result |
+| --- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| 1   | e5 parity vs. Python reference, cosine ≥ 0.97 (quantized)          | worst-case **0.9953** (`cargo test --test e5_parity -- --ignored`)                                                                                                                                                                                      | PASS   |
+| 2   | int8 recall@5 within 2 points of fp32                              | 0.967 vs. 0.983 = **1.6 pts**                                                                                                                                                                                                                           | PASS   |
+| 3   | Cross-lingual smoke test, both queries top-3                       | both at **rank 2** (MRR 0.500 over the 2 queries ⇒ 1/2 + 1/2)                                                                                                                                                                                           | PASS   |
+| 4   | Eval baseline; hybrid clauses (a) and (b)                          | (a) 0.971 = max(0.486, 0.971); (b) `kw` MRR 1.000 > 0.950, `cross` 0.413 > 0.000                                                                                                                                                                        | PASS   |
+| 5   | 100k-chunk latency NFR-2 / NFR-3                                   | cold **1,443.7 ms** (≤ 3,000), warm **p95 230.0 ms** (≤ 300), p50 220.0, max 300.9                                                                                                                                                                      | PASS   |
+| 6   | Peak RSS indexing the fixture corpus ≤ 700 MB                      | **581.9 MB** (`PeakWorkingSet64`, 50 ms polling, isolated `MAGI_DATA_DIR`)                                                                                                                                                                              | PASS   |
+| 7   | Download interrupted/resumed; corrupted rejected and re-downloaded | 4 tests in `embed/manager.rs`: `fresh_download_writes_verified_file_and_removes_partial`, `resumes_from_existing_partial_file_via_range`, `corrupted_download_is_rejected_and_can_be_retried`, `cancel_flag_stops_download_leaving_a_resumable_partial` | PASS   |
+| 8   | `just test` needs no network                                       | green with `MAGI_FAKE_EMBEDDER=1`, no network calls                                                                                                                                                                                                     | PASS   |
 
 **All 8 verification items pass.** Full suite on the same commit: `cargo fmt
 --check` clean, `cargo clippy --workspace --all-targets --all-features -- -D
@@ -638,7 +638,7 @@ Caveats stated rather than smoothed over:
       time is asserted via a `0s`/`3600s` timeout comparison against a real
       `Instant`, not a mocked clock.
 - [x] **Scoped honestly, not wired into anything yet — and said so.**
-      `ModelSlot` is deliberately *not* plugged into `magi-cli`'s
+      `ModelSlot` is deliberately _not_ plugged into `magi-cli`'s
       `embedder_from_env()`: every `magi-cli` invocation is a one-shot
       process that exits when the command finishes, so there is nothing for
       an idle timer to usefully unload from (process exit already frees
@@ -646,7 +646,7 @@ Caveats stated rather than smoothed over:
       embed worker thread `engine.rs` will spawn (SPEC.md §5.3), whose
       `recv_timeout` loop is the natural place to call `unload_if_idle` on
       each tick — doesn't have to invent this from scratch. SPEC.md itself
-      splits it this way: M3 lists the lazy-load/idle-unload *mechanism* as
+      splits it this way: M3 lists the lazy-load/idle-unload _mechanism_ as
       a deliverable, while M7 ("Permissions and background-behavior
       hardening") separately lists "model idle unload" as its own
       deliverable with its own real-RSS verification item ("10 minutes idle
@@ -656,7 +656,7 @@ Caveats stated rather than smoothed over:
       a real fix — recorded as a conscious scope boundary rather than
       silently left out.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` all
+  --all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green after the change.
 - [x] **Re-embed-on-model-change: reconfirmed as correctly deferred, not a
       gap to close here.** `TextEmbedder::model_id()`'s doc comment has said
@@ -702,7 +702,7 @@ marked complete — the idle-unload mechanism gap above is now closed.
       downloaded and SHA-256-verified the real `model.onnx` (118,346,824
       bytes) and `tokenizer.json` (17,082,730 bytes) into
       `<data_dir>/models/text/`; `cargo test -p magi-core --release --
-      --ignored` then passed all 3 real-model tests (parity, cross-lingual
+    --ignored` then passed all 3 real-model tests (parity, cross-lingual
       smoke test, repeated-load-is-safe) against those freshly-downloaded
       files.
 - [x] **RSS target closed for real, using the now-working fetch path to
@@ -716,18 +716,18 @@ marked complete — the idle-unload mechanism gap above is now closed.
       (`.with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])`)
       and re-measuring peak RSS the same way as ADR-0005 (Windows
       `PeakWorkingSet64`, polled every 50 ms, `magi-cli index
-      fixtures/corpus`, average of two runs, same reference machine): **from
+    fixtures/corpus`, average of two runs, same reference machine): **from
       766.55 MB (767.8/765.3, confirms ADR-0005's 766.4 MB was reproducible)
       down to 682.8 MB (683.8/681.8)** — SPEC.md §7 M3's ≤ 700 MB target is
       now **met**, not just closer. Re-verified this wasn't a silent
       correctness regression: `e5_parity` (cosine 0.9953, unchanged),
       `real_model_embeds_plausible_vectors` (cross-lingual smoke test,
       unchanged), and `magi-cli eval eval/queries.jsonl --corpus
-      fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
+    fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
       same numbers ADR-0005 recorded) all still pass — disabling the arena
       only changes allocation strategy, never model output. `cargo fmt`,
       `cargo clippy --workspace --all-targets --all-features -- -D
-      warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
+    warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
       idempotence) all clean/green.
 
 **Still open**: the NFR-2/NFR-3 100k-chunk latency targets (root cause is
@@ -746,7 +746,7 @@ lint`/`typecheck`/`test`) are green, and the real-model `#[ignore]`d tests
 were re-run manually against the actual downloaded int8 model.
 
 - [x] **The ≤700 MB RSS evidence didn't cover the case that decides it.**
-      `index_root` passed *every* chunk of a file to `embed_passages` in one
+      `index_root` passed _every_ chunk of a file to `embed_passages` in one
       call, and ONNX Runtime materializes a `batch × seq_len × 384` f32
       `last_hidden_state` for the whole batch. Measured, not assumed: the
       largest file in `fixtures/corpus` yields **39 chunks**, but a 15 MB
@@ -804,7 +804,7 @@ were re-run manually against the actual downloaded int8 model.
       upsert's follow-up `SELECT id` went the same way. Both statements are
       also prepared once instead of re-prepared per chunk.
 - [x] **Token counts memoized per distinct word.** `chunk_by_token_counter`
-      called the real tokenizer once per *word*; a document has orders of
+      called the real tokenizer once per _word_; a document has orders of
       magnitude fewer distinct words than words. The counting closure and its
       9 pure-function tests are unchanged — just a `HashMap` in front.
 - [x] **`just setup` now vendors the ONNX Runtime.** A fresh clone following
@@ -820,8 +820,8 @@ were re-run manually against the actual downloaded int8 model.
 - [x] **NFR-2/NFR-3 both pass now — and the old FAIL was partly a harness
       bug.** The recorded cold 3,176 ms / warm p95 585 ms failures were
       re-measured after the `hybrid_search` fix above. Cold dropped to
-      1,234-1,303 ms (**PASS**), but warm p95 came back *bimodal for
-      identical code*: 231, 239, 423, 436, 478 ms across five runs. Root
+      1,234-1,303 ms (**PASS**), but warm p95 came back _bimodal for
+      identical code_: 231, 239, 423, 436, 478 ms across five runs. Root
       cause, found by reading the harness rather than averaging the noise
       away: `xtask bench-corpus` bulk-loads 100k rows through 5,000
       transactions and then measures reads against the resulting large WAL,
@@ -846,7 +846,7 @@ were re-run manually against the actual downloaded int8 model.
       reference), the cross-lingual smoke test (`electrician invoice` →
       `factura_electricista.pdf`, `receta de arepas` → `arepas_recipe.txt`,
       both top-3), and `magi-cli eval eval/queries.jsonl --corpus
-      fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
+    fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
       preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
       green; the 5 `#[ignore]`d real-model tests were run manually against
       the actual downloaded int8 model.
@@ -886,7 +886,7 @@ tests, `cargo fmt --check` and `cargo clippy --workspace --all-targets
       contract; CLAUDE.md and AGENTS.md updated to match.
 - [x] **Two `.unwrap()`s on a mutex removed** (`discovery/walk.rs`), per
       CLAUDE.md's no-`unwrap` rule: `unwrap_or_else(|poisoned|
-      poisoned.into_inner())` — nothing in that closure breaks an invariant
+    poisoned.into_inner())` — nothing in that closure breaks an invariant
       when a walk panics.
 - [x] **Crate-wide `#![allow(dead_code)]` deleted** (`lib.rs`). An M0 stub
       leftover: removing it produces zero warnings with or without
@@ -917,7 +917,7 @@ recorded in the new `fixtures/README.md`:
       **CI loses nothing measurable:** `phone_text_es.heic` (3000 × 4000) and
       `shelf_christmas.heic` (4000 × 3000) are 12 MP iPhone HEICs in both
       orientations, and SPEC.md §7 M4 only requires OCR CER on the English and
-      Spanish *screenshot* fixtures, which are committed. Redaction, not Git
+      Spanish _screenshot_ fixtures, which are committed. Redaction, not Git
       LFS, is the answer if one of these ever has to ship.
 - [x] **`phone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
       export (5492 × 3672, 16-bit) behind the name — both decoders reject it at
@@ -933,7 +933,7 @@ recorded in the new `fixtures/README.md`:
       `fixtures/scrub_metadata.py` removes all of it without re-encoding a
       pixel — JPEG metadata segments dropped from the marker stream (and the
       file truncated at the primary image's EOI, because a phone JPEG appends
-      a *second* complete JPEG after it, MPF-style, carrying its own EXIF and
+      a _second_ complete JPEG after it, MPF-style, carrying its own EXIF and
       XMP), HEIF metadata item payloads overwritten in place with a valid
       empty replacement of the same length so no `iloc` offset moves, and the
       `sefd` box truncated. **Nothing that a test needs was lost:** HEIC
@@ -946,7 +946,7 @@ recorded in the new `fixtures/README.md`:
       before committing a new image fixture.
 - [x] **The "iPhone" fixtures are not iPhone photos.** EXIF named a Samsung
       Galaxy S24 FE, and a Galaxy A32 for `shelf_christmas.heic`. SPEC.md §7
-      M4 asks for self-shot *iPhone* HEICs. The filenames were kept so a real
+      M4 asks for self-shot _iPhone_ HEICs. The filenames were kept so a real
       iPhone shot can replace a file in place; structurally these are close
       (tile grid, HEVC, aux HDR gain map) but Apple's Live Photo `.MOV`
       sibling and 10-bit variants stay untested. Either supply iPhone shots
@@ -985,7 +985,7 @@ recorded in the new `fixtures/README.md`:
       `Heic`. Local-only fixtures are skipped, never failed.
 - [x] `just check` green: 145 unit + 9 golden + 1 idempotence tests,
       `cargo fmt --check` and `cargo clippy --workspace --all-targets
-      --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+    --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
 
 - [x] **CI green on all three runners** (ubuntu-22.04, macos-14,
       windows-latest), which is SPEC.md §7 M4's "a spike branch must produce a
@@ -1001,7 +1001,7 @@ Open, carried into Slice 2:
      even with "High efficiency pictures" enabled.
   2. **Converting those JPEGs to HEIC produced corrupt files** (tool and error
      text not captured — record them next time). This repo has no HEIF
-     *encoder* to do it properly either: `heic-rs` is decode-only, and the
+     _encoder_ to do it properly either: `heic-rs` is decode-only, and the
      vcpkg libheif install ships no `heif-enc`.
 
   So SPEC.md §7 M4's "decoding a 48 MP HEIC keeps the RSS delta < 400 MB and
@@ -1011,21 +1011,22 @@ Open, carried into Slice 2:
   that number more than pixel count does, so the extrapolation is not
   evidence. Three ways out, in order of cost — **needs a human decision**:
   a. Shoot 50 MP with HEIF forced on the Galaxy (Camera → Advanced picture
-     options → High efficiency pictures), or borrow an iPhone 14 Pro or later
-     with Resolution Control on. This also closes the separate "these are not
-     iPhone photos" gap.
+  options → High efficiency pictures), or borrow an iPhone 14 Pro or later
+  with Resolution Control on. This also closes the separate "these are not
+  iPhone photos" gap.
   b. ~~Generate one~~ — **rejected 2026-09-20.** It would mean building
-     libheif (and so cmake, libde265 and x265) from source purely to make one
-     test fixture, and the result would not be tile-gridded the way a phone's
-     is unless the encoder were told to tile it. High cost, and it would test
-     the budget against a decode path we do not actually ship against.
+  libheif (and so cmake, libde265 and x265) from source purely to make one
+  test fixture, and the result would not be tile-gridded the way a phone's
+  is unless the encoder were told to tile it. High cost, and it would test
+  the budget against a decode path we do not actually ship against.
   c. Amend SPEC.md §7 M4 to state the budget against the largest available
-     fixture, scaled by pixel count, and record why. Cheapest, and honest,
-     but it drops a real verification item.
+  fixture, scaled by pixel count, and record why. Cheapest, and honest,
+  but it drops a real verification item.
 
   **Parked as a known gap** (option a, deferred): the item stays open and
   unmeasured, and the number gets filled in when a real 48 MP HEIC exists.
   Nothing else in M4 is blocked on it.
+
 - **`embedded_thumbnail` was not written.** `heic-rs` decodes the primary item
   only and exposes no way to select the `thmb` item, so the function could
   only ever return `Ok(None)`. Slice 2 downscales the thumbnail from the
@@ -1147,7 +1148,7 @@ deletion on re-index, and reclaiming timed-out extraction threads.
       people learn to ignore, so the exemption is explicit and nothing else
       is exempt. The gate is now clean over every tracked fixture.
 - [x] **SPEC.md §7 M4 no longer names a vendor** (2026-09-20). It asked for
-      self-shot *iPhone* HEICs; what the decoder actually has to cope with is
+      self-shot _iPhone_ HEICs; what the decoder actually has to cope with is
       the container — a tile grid, an aux HDR gain map, a rotation transform
       — not who made the phone. The fixtures were renamed `iphone_*` →
       `phone_*` to stop the filenames claiming something untrue, and SPEC.md
@@ -1406,17 +1407,17 @@ too); this section is the record.
 
 ### Verification items
 
-| # | SPEC.md item | Result | Evidence |
-| - | --- | --- | --- |
-| 1 | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32 | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries). | ADR-0007, slice 4 |
-| 2 | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7 |
-| 3 | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly. | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
-| 4 | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11) | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries. | docs/eval.md |
-| 5 | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why. | ADR-0006, slice 3 |
-| 6 | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3 | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3. | slices 2, 4 |
-| 7 | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3 | **Pass.** | slice 4 |
-| 8 | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error. | slice 5, slice 7 |
-| 9 | Eval extended with >= 20 image queries, results in `docs/eval.md` | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900. | docs/eval.md |
+| #   | SPEC.md item                                                                                                                                                                      | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Evidence                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1   | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32                                                                    | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries).                                                                                                                                                                                                                                                                                                                                                                                       | ADR-0007, slice 4                                               |
+| 2   | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7                                     |
+| 3   | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s                                                                                                                                      | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
+| 4   | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11)                                                                                                       | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | docs/eval.md                                                    |
+| 5   | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear                                                                                          | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why.                                                                                                                                                                                                                                                                                                                                                                                                        | ADR-0006, slice 3                                               |
+| 6   | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3                                                                                     | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | slices 2, 4                                                     |
+| 7   | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3                                                                                                    | **Pass.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | slice 4                                                         |
+| 8   | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB                                                                                                              | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | slice 5, slice 7                                                |
+| 9   | Eval extended with >= 20 image queries, results in `docs/eval.md`                                                                                                                 | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900.                                                                                                                                                                                                                                                                                                                                                                                                                                                 | docs/eval.md                                                    |
 
 Also true at sign-off: `cargo fmt` and `cargo clippy --workspace --all-targets
 --all-features -D warnings` clean; 175 unit tests plus the golden, idempotence,
@@ -1457,7 +1458,7 @@ files). Behaviour is unchanged apart from the panic-message bug below. Net
   contents. Fixed with `&*payload`, and a new `isolate` test covers it.
 - **`discovery/classify.rs` held raw NUL bytes** in a test's TIFF literal, so git
   treated it as a binary file and showed no diffs for it. The bytes are now written
-  as ` ` escapes.
+  as `\0` escapes.
 - **`OcrEngine::engine_id`'s doc claimed a `meta.ocr_engine_id` key.** Nothing
   writes that key, and SPEC.md §5.5 doesn't list it. The doc is corrected; see
   "For M5".
@@ -1568,7 +1569,7 @@ three misses), so the refactor of the per-file path changed no retrieval result.
       `unchanged`, zero chunks embedded). It also runs in ~100 s instead of
       200-400 s.
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets --all-features -D
-      warnings` clean; workspace tests pass (192 unit).
+    warnings` clean; workspace tests pass (192 unit).
 
 **Deviations from the plan.** `insert_pending`, `rename_file`, `find_by_hash` and
 `purge_excluded` were listed for Slice 1 but are only used by reconciliation and
@@ -1577,6 +1578,7 @@ code here. `purge_excluded` also depends on how the walker matches exclusion
 globs, which Slice 2 reads anyway.
 
 **Known limits.**
+
 - Turning a kind on or off in `indexing.file_types` does not invalidate existing
   rows: a file with unchanged size and mtime keeps whatever it was indexed as.
   Slice 7's `apply_config` handles it.
@@ -1609,8 +1611,7 @@ renames and moves, and `magi-cli index` is incremental against a changing folder
       `enabled = 0`.
 - [x] **Verification, at function level:** item 4 (edited while stopped:
       re-embedded, old text gone), 5 (rename: same row, zero embeds, found by the
-      new name only), 6/7 (deleted: files, chunks, vectors, FTS all gone), 8 (move
-      + edit is a delete plus a new file), 12 (missing root keeps rows, hidden, and
+      new name only), 6/7 (deleted: files, chunks, vectors, FTS all gone), 8 (move + edit is a delete plus a new file), 12 (missing root keeps rows, hidden, and
       visible again on return; disabled root hidden), 13 (a newly excluded file is
       deleted by the next scan), 15 (move between roots). 10 new unit tests plus a
       probe test; 203 unit tests and the integration suite pass, clippy clean.
@@ -1618,6 +1619,7 @@ renames and moves, and `magi-cli index` is incremental against a changing folder
       `next_scan_id` instead of a fixed 1.
 
 **Deviations from the plan.**
+
 - `purge_excluded` is not needed: an excluded file is simply not walked, so it is
   an unseen row and the deletion pass removes it (test above). It would only add
   a second code path.
@@ -1627,11 +1629,12 @@ renames and moves, and `magi-cli index` is incremental against a changing folder
   errored.
 
 **Known limits.**
+
 - A walk that could not read a subfolder (permissions) yields no entries for it,
   so its files look deleted and their rows are removed until the next scan finds
   them again. Slice 5 (platform behaviour) reports unreadable subtrees.
-- A renamed file's filename *chunk text* is updated (so it is searchable by the
-  new name) but its filename *vector* still describes the old name; SPEC's "no
+- A renamed file's filename _chunk text_ is updated (so it is searchable by the
+  new name) but its filename _vector_ still describes the old name; SPEC's "no
   re-embedding" is kept.
 - A root that is mounted but empty (an unmounted volume's mount point) is
   indistinguishable from an emptied folder and is reconciled as such.
@@ -1685,7 +1688,8 @@ threads.
       scheduler 5, gate 1), clippy clean.
 
 **Deviations from the plan.**
-- Item 11's *real process kill* moves to Slice 7: it needs `magi-cli daemon`.
+
+- Item 11's _real process kill_ moves to Slice 7: it needs `magi-cli daemon`.
   The in-process version above covers the recovery logic.
 - Image embedding still happens inside extraction (`extract_image` calls the
   image embedder), so image vectors are computed on the extract workers, not the
@@ -1695,6 +1699,7 @@ threads.
 - Threads run at normal priority (`ThreadPriority` is Slice 5).
 
 **Known limits.**
+
 - The scheduler polls every 250 ms even when idle; idle CPU is measured in
   Slice 8.
 - A worker that panics is contained per file (`catch_unwind`), but the
@@ -1708,7 +1713,7 @@ longer the only way.
 
 - [x] **`watch/watcher.rs`**: one `notify` watcher per root, debounced 2 s, started
       **before** the first scan (events queue behind it on the writer's channel
-      and are applied afterwards). It reports only *which paths changed*
+      and are applied afterwards). It reports only _which paths changed_
       (`WriteJob::Paths`); an error or an overflow flag falls back to a full
       rescan. Instead of mirroring SPEC's event table case by case, each path is
       looked at on disk by `reconcile::scan_paths`: a file is queued, a folder is
@@ -1780,10 +1785,11 @@ first batch left nothing to match. Fixed by holding candidates (above); 10
 consecutive isolated runs and three full runs pass.
 
 **Known limits.**
+
 - A moved file whose kind has no content hash (filename-only kinds) cannot
   be matched; it is re-created, which costs one filename chunk.
 - A held file stays searchable for up to 5 s after it was deleted.
-- `is_wanted` does not know the Windows hidden *attribute* or symlinked
+- `is_wanted` does not know the Windows hidden _attribute_ or symlinked
   ancestor folders, and a path inside an opaque bundle is ignored (the periodic
   scan covers it).
 - A root that was missing at start, or whose watcher failed, is polled every
@@ -1840,6 +1846,7 @@ stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
       macOS 14), checked 2026-09-22.
 
 **Known limits.**
+
 - A placeholder that is hydrated in place with the same size and mtime stays
   `skipped` / `cloud_only` until it next changes.
 - The scheduler's stability `stat` on Windows opens a handle without data
@@ -1891,6 +1898,7 @@ Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
       gets the model once the other user is done.
 
 **Known limits.**
+
 - A file already in the pipeline when the pause starts may load the image
   model again; the next check (10 s) unloads it again.
 - The pause is not in `IndexStatus` or persisted yet; user pause/resume and
@@ -1952,6 +1960,7 @@ engine test now also checks `add_root` on a folder inside a root fails with
 `NestedRoot`. Unit tests: 247.
 
 **Known limits.**
+
 - Removing a root and then adding a folder inside it (or its parent) indexes
   that folder from scratch: the purge already dropped the vectors.
 - `pause()` and root changes wait for the writer, so they can take as long as

@@ -22,13 +22,13 @@ dilutes the fixed ~85 ms process/DB-open/migration overhead (measured by
 timing a single-file run per type) across many files, giving a rate closer
 to steady-state than a bare 1-3-file run would.
 
-| Type   | Files indexed | Wall time | Throughput  |
-| ------ | -------------:| ---------:| -----------:|
-| code   | 50            | 153 ms    | ~327 files/s |
-| pdf    | 50            | 221 ms    | ~226 files/s |
-| office | 75            | 190 ms    | ~395 files/s |
-| text (en) | 25         | 112 ms    | ~223 files/s |
-| text (es) | 25         | 124 ms    | ~202 files/s |
+| Type      | Files indexed | Wall time |   Throughput |
+| --------- | ------------: | --------: | -----------: |
+| code      |            50 |    153 ms | ~327 files/s |
+| pdf       |            50 |    221 ms | ~226 files/s |
+| office    |            75 |    190 ms | ~395 files/s |
+| text (en) |            25 |    112 ms | ~223 files/s |
+| text (es) |            25 |    124 ms | ~202 files/s |
 
 All runs report `skipped: 0, errors: 0` — every copy indexed successfully.
 
@@ -52,14 +52,14 @@ All runs report `skipped: 0, errors: 0` — every copy indexed successfully.
 Included for comparison — shows the fixed per-run overhead that the
 replicated numbers above dilute away:
 
-| Type   | Files | Trials (ms)     | Notes |
-| ------ | -----:| ---------------- | ----- |
-| code   | 2     | 92, 87, 89       | `code/sample.rs`, `code/muestra.py` |
-| pdf    | 2     | 92, 96, 100      | `pdf/report.pdf`, `pdf/factura_electricista.pdf` |
-| office | 3     | 93, 98, 86       | `office/notes.docx`, `kickoff.pptx`, `inventory.xlsx` |
-| en     | 1     | 99, 88, 89       | `en/onboarding_notes.txt` |
-| es     | 1     | 87, 85, 91       | `es/notas_incorporacion.txt` |
-| edge   | 5     | 694, 706, 699    | `edge/*` — 3 indexed, 2 errored (password-protected + truncated PDFs), 0 crashes; run under the default 50 MB size cap, so `huge_real.pdf` (~1.4 MB) is indexed rather than skipped here (the pipeline's dedicated 1 MB-cap test covers the skip path — see `crates/magi-core/tests` and `index::pipeline::tests::real_file_over_cap_is_skipped_with_reason`) |
+| Type   | Files | Trials (ms)   | Notes                                                                                                                                                                                                                                                                                                                                                         |
+| ------ | ----: | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| code   |     2 | 92, 87, 89    | `code/sample.rs`, `code/muestra.py`                                                                                                                                                                                                                                                                                                                           |
+| pdf    |     2 | 92, 96, 100   | `pdf/report.pdf`, `pdf/factura_electricista.pdf`                                                                                                                                                                                                                                                                                                              |
+| office |     3 | 93, 98, 86    | `office/notes.docx`, `kickoff.pptx`, `inventory.xlsx`                                                                                                                                                                                                                                                                                                         |
+| en     |     1 | 99, 88, 89    | `en/onboarding_notes.txt`                                                                                                                                                                                                                                                                                                                                     |
+| es     |     1 | 87, 85, 91    | `es/notas_incorporacion.txt`                                                                                                                                                                                                                                                                                                                                  |
+| edge   |     5 | 694, 706, 699 | `edge/*` — 3 indexed, 2 errored (password-protected + truncated PDFs), 0 crashes; run under the default 50 MB size cap, so `huge_real.pdf` (~1.4 MB) is indexed rather than skipped here (the pipeline's dedicated 1 MB-cap test covers the skip path — see `crates/magi-core/tests` and `index::pipeline::tests::real_file_over_cap_is_skipped_with_reason`) |
 
 The edge run's higher per-file cost reflects three PDFs in a five-file
 batch (one genuinely larger, two exercised via the extraction-error path)
@@ -75,10 +75,10 @@ the real `E5Embedder`, since retrieval quality isn't what this measures —
 see `magi-cli eval` / `docs/eval.md` for that). Same reference machine as
 above, release build, fp32 model.
 
-| Metric                            |  Measured | Target (SPEC.md §2.2) | Result |
-| ---------------------------------- | ---------:| -----------------------:| ------:|
-| Cold (model load + first search)   |  3,176 ms |                ≤ 3,000 ms | **FAIL** |
-| Warm p95 (200 queries)             |    585 ms |                  ≤ 300 ms | **FAIL** |
+| Metric                           | Measured | Target (SPEC.md §2.2) |   Result |
+| -------------------------------- | -------: | --------------------: | -------: |
+| Cold (model load + first search) | 3,176 ms |            ≤ 3,000 ms | **FAIL** |
+| Warm p95 (200 queries)           |   585 ms |              ≤ 300 ms | **FAIL** |
 
 Neither target is met. Root cause and the fts/vector/hybrid latency
 breakdown by corpus size are in `docs/eval.md`'s "Latency (NFR-2/NFR-3) on
@@ -101,6 +101,7 @@ as above, **on battery** (so absolute numbers are throttled and noisy, about
 ±5–10 %); release builds.
 
 Builds:
+
 - **base**: branch state before this pass (on top of `348e964`).
 - **+1,3,5**: partial `idx_files_size` for the move lookup, `synchronous=NORMAL`,
   vectors bound as raw f32 BLOBs instead of JSON.
@@ -109,15 +110,16 @@ Builds:
 - **+length split**: plus `embed_group` ending a batch where chunk lengths
   jump, so short chunks (filenames) are not padded to full body chunks.
 
-| Scenario | Files | base | +1,3,5 | +2,4 | +length split |
-| -------- | -----:| ----:| ------:| ----:| -------------:|
-| `index`, fake embedder (3 reps) | 2,000 | 21.3 s | 15.5 s | 15.7 s | — |
-| `index` of a 2nd root, fake embedder (3 reps) | 2,000 | 30.1 s | 20.9 s | 23.0 s | — |
-| `daemon`, fake embedder (3 reps; last column 1 rep) | 2,000 | 30.6 s | 22.1 s | 10.4 s | 8.8 s |
-| `daemon`, real e5 (2 reps) | 500 | 306 s | 307 s | 301 s | — |
-| `daemon`, real e5, second session (2 reps) | 500 | — | 331 s | — | **206 s** |
+| Scenario                                            | Files |   base | +1,3,5 |   +2,4 | +length split |
+| --------------------------------------------------- | ----: | -----: | -----: | -----: | ------------: |
+| `index`, fake embedder (3 reps)                     | 2,000 | 21.3 s | 15.5 s | 15.7 s |             — |
+| `index` of a 2nd root, fake embedder (3 reps)       | 2,000 | 30.1 s | 20.9 s | 23.0 s |             — |
+| `daemon`, fake embedder (3 reps; last column 1 rep) | 2,000 | 30.6 s | 22.1 s | 10.4 s |         8.8 s |
+| `daemon`, real e5 (2 reps)                          |   500 |  306 s |  307 s |  301 s |             — |
+| `daemon`, real e5, second session (2 reps)          |   500 |      — |  331 s |      — |     **206 s** |
 
 Reading it:
+
 - With the fake embedder (database and scheduling cost only), 1, 3 and 5 take
   about 30 % off, mostly from not fsyncing every commit. 2 and 4 halve the
   daemon's time again. They don't touch the serial `index` path.

@@ -26,19 +26,19 @@ measurement only — see `models/manifest.toml`), fresh temp DB.
 intentionally-broken fixtures that M2's own tests assert error cleanly —
 not a regression).
 
-| Mode        |  n | recall@5 | recall@10 |   MRR |
-| ----------- | -:| -------:| --------:| -----:|
-| fts-only    | 60 |   0.417 |    0.417 | 0.408 |
-| vector-only | 60 |   0.983 |    0.983 | 0.818 |
-| hybrid      | 60 |   0.983 |    0.983 | 0.807 |
+| Mode        |   n | recall@5 | recall@10 |   MRR |
+| ----------- | --: | -------: | --------: | ----: |
+| fts-only    |  60 |    0.417 |     0.417 | 0.408 |
+| vector-only |  60 |    0.983 |     0.983 | 0.818 |
+| hybrid      |  60 |    0.983 |     0.983 | 0.807 |
 
 By `lang` (hybrid):
 
-| lang  |  n | recall@5 | recall@10 |   MRR |
-| ----- | -:| -------:| --------:| -----:|
-| en    | 20 |   1.000 |    1.000 | 1.000 |
-| es    | 20 |   1.000 |    1.000 | 1.000 |
-| cross | 20 |   0.950 |    0.950 | 0.422 |
+| lang  |   n | recall@5 | recall@10 |   MRR |
+| ----- | --: | -------: | --------: | ----: |
+| en    |  20 |    1.000 |     1.000 | 1.000 |
+| es    |  20 |    1.000 |     1.000 | 1.000 |
+| cross |  20 |    0.950 |     0.950 | 0.422 |
 
 **Measured before the ranking path was equalized** (see "Resolved" below):
 the `vector-only` row here is raw `search_vector_text` with no filename or
@@ -49,11 +49,11 @@ int8 comparison, which is a like-for-like swap of the model file only.
 By `lang` (fts-only, for contrast — keyword search has zero cross-lingual
 signal by construction):
 
-| lang  |  n | recall@5 | recall@10 |   MRR |
-| ----- | -:| -------:| --------:| -----:|
-| en    | 20 |   0.550 |    0.550 | 0.550 |
-| es    | 20 |   0.700 |    0.700 | 0.675 |
-| cross | 20 |   0.000 |    0.000 | 0.000 |
+| lang  |   n | recall@5 | recall@10 |   MRR |
+| ----- | --: | -------: | --------: | ----: |
+| en    |  20 |    0.550 |     0.550 | 0.550 |
+| es    |  20 |    0.700 |     0.700 | 0.675 |
+| cross |  20 |    0.000 |     0.000 | 0.000 |
 
 ### Resolved: item 4's comparison was mis-specified, not hybrid
 
@@ -93,20 +93,20 @@ that discriminates is query type, not document count.
 `just eval`, reference machine above, shipped int8 model, fresh temp DB,
 `fixtures/corpus` indexed 37 files (same 2 intentional errors as above).
 
-| Mode        |  n | recall@5 | recall@10 |   MRR |
-| ----------- | -:| -------:| --------:| -----:|
-| fts-only    | 70 |   0.486 |    0.486 | 0.486 |
-| vector-only | 70 |   0.971 |    0.986 | 0.818 |
-| hybrid      | 70 |   0.971 |    0.986 | **0.825** |
+| Mode        |   n | recall@5 | recall@10 |       MRR |
+| ----------- | --: | -------: | --------: | --------: |
+| fts-only    |  70 |    0.486 |     0.486 |     0.486 |
+| vector-only |  70 |    0.971 |     0.986 |     0.818 |
+| hybrid      |  70 |    0.971 |     0.986 | **0.825** |
 
 By bucket, MRR:
 
-| bucket |  n | fts-only | vector-only | hybrid |
-| ------ | -:| -------:| ----------:| -----:|
-| en     | 20 |    0.550 |       0.975 |  0.975 |
-| es     | 20 |    0.700 |       1.000 |  1.000 |
-| cross  | 20 |    0.000 |       0.413 |  0.413 |
-| kw     | 10 |    0.900 |       0.950 | **1.000** |
+| bucket |   n | fts-only | vector-only |    hybrid |
+| ------ | --: | -------: | ----------: | --------: |
+| en     |  20 |    0.550 |       0.975 |     0.975 |
+| es     |  20 |    0.700 |       1.000 |     1.000 |
+| cross  |  20 |    0.000 |       0.413 |     0.413 |
+| kw     |  10 |    0.900 |       0.950 | **1.000** |
 
 **SPEC.md §7 M3 item 4 now passes, on a comparison that can fail.**
 
@@ -176,11 +176,11 @@ reference machine as above.
 **Both targets now pass.** Six consecutive clean runs, reference machine
 above, int8:
 
-| Metric                            |        Measured | Target (SPEC.md §2.2) | Result |
-| --------------------------------- | --------------:| ----------------------:| ------:|
-| Cold (model load + first search)  | 1,234-1,303 ms |               ≤ 3,000 ms | **PASS** |
-| Warm p95 (200 queries)            |  227.5-230.8 ms |                 ≤ 300 ms | **PASS** |
-| Warm p50 / max                    | ~223 / ~235 ms |                       — | — |
+| Metric                           |       Measured | Target (SPEC.md §2.2) |   Result |
+| -------------------------------- | -------------: | --------------------: | -------: |
+| Cold (model load + first search) | 1,234-1,303 ms |            ≤ 3,000 ms | **PASS** |
+| Warm p95 (200 queries)           | 227.5-230.8 ms |              ≤ 300 ms | **PASS** |
+| Warm p50 / max                   | ~223 / ~235 ms |                     — |        — |
 
 Per-run p95: 227.5, 228.6, 227.7, 227.8, 230.8, 229.6 ms — a 3.3 ms spread.
 
@@ -214,7 +214,7 @@ Two things were actually wrong, one in the product and one in this harness:
 **Attribution caveat, stated rather than glossed:** the old 585 ms was
 measured with the unfixed harness, so it was itself partly WAL noise and the
 585 → 228 ms delta cannot be cleanly split between the two fixes. What is
-solid: the clean runs of the new code *before* the harness fix already sat at
+solid: the clean runs of the new code _before_ the harness fix already sat at
 231-239 ms, so the product-side fix carries most of it, and the current code
 under a fixed harness passes both targets repeatably. Re-running the old code
 against the fixed harness would settle the split; not done.
@@ -228,10 +228,10 @@ before measuring.
 bottleneck; `search_vector_text` remains a brute-force scan (`vec0` has no
 ANN index in its default configuration) and still grows with corpus size:
 
-| Chunks  | fts    | vector  | hybrid (incl. embed_query) |
-| ------: | ------:| -------:| ---------------------------:|
-| 5,000   | 14 ms  | 22 ms   | 42 ms |
-| 25,000  | 43 ms  | 87 ms   | 144 ms |
+| Chunks |   fts | vector | hybrid (incl. embed_query) |
+| -----: | ----: | -----: | -------------------------: |
+|  5,000 | 14 ms |  22 ms |                      42 ms |
+| 25,000 | 43 ms |  87 ms |                     144 ms |
 
 100k chunks now fits inside the 300 ms budget with ~70 ms of headroom, but
 the growth is real, so a corpus several times larger will need sqlite-vec's
@@ -271,10 +271,10 @@ and the tokenizer no longer re-copies its inputs — three copies of a file's
 text before inference became one. Re-measured the same way (Windows
 `PeakWorkingSet64`, polled every 50 ms, reference machine above), int8:
 
-| Corpus                                  | Chunks | Largest batch |   Peak RSS |
-| --------------------------------------- | -----:| ------------:| ---------:|
-| `fixtures/corpus` (37 files)             |    ~200 |            39 |  **582.9 MB** |
-| one 15 MB text file                      |   5,716 |            16 |  **593.6 MB** |
+| Corpus                       | Chunks | Largest batch |     Peak RSS |
+| ---------------------------- | -----: | ------------: | -----------: |
+| `fixtures/corpus` (37 files) |   ~200 |            39 | **582.9 MB** |
+| one 15 MB text file          |  5,716 |            16 | **593.6 MB** |
 
 **Re-verified for M3 sign-off**: `fixtures/corpus` peaks at **581.9 MB**
 (1.0 MB under the 582.9 MB above — noise), measured the same way against an
@@ -314,22 +314,22 @@ SPEC.md M4 pair `dog on the beach` / `perro en la playa`), 3 OCR-text queries
 (one with accents), and 4 QR queries (including SPEC.md's `qr code` /
 `código QR`, where any of the four QR fixtures is a correct hit).
 
-| Mode | n | recall@5 | recall@10 | MRR |
-| --- | -: | -: | -: | -: |
-| fts-only | 99 | 0.434 | 0.434 | 0.434 |
-| vector-only (text) | 99 | 0.970 | 0.990 | 0.804 |
-| visual-only | 99 | 0.263 | 0.263 | 0.263 |
-| **hybrid** | 99 | **0.980** | **0.990** | **0.843** |
+| Mode               |   n |  recall@5 | recall@10 |       MRR |
+| ------------------ | --: | --------: | --------: | --------: |
+| fts-only           |  99 |     0.434 |     0.434 |     0.434 |
+| vector-only (text) |  99 |     0.970 |     0.990 |     0.804 |
+| visual-only        |  99 |     0.263 |     0.263 |     0.263 |
+| **hybrid**         |  99 | **0.980** | **0.990** | **0.843** |
 
 Hybrid by bucket:
 
-| bucket | n | recall@5 | MRR |
-| --- | -: | -: | -: |
-| en | 20 | 1.000 | 0.975 |
-| es | 20 | 1.000 | 0.925 |
-| cross | 20 | 0.900 | 0.399 |
-| kw | 10 | 1.000 | 0.950 |
-| **img** | 29 | **1.000** | **0.966** |
+| bucket  |   n |  recall@5 |       MRR |
+| ------- | --: | --------: | --------: |
+| en      |  20 |     1.000 |     0.975 |
+| es      |  20 |     1.000 |     0.925 |
+| cross   |  20 |     0.900 |     0.399 |
+| kw      |  10 |     1.000 |     0.950 |
+| **img** |  29 | **1.000** | **0.966** |
 
 On the `img` bucket alone: fts-only 0.310, visual-only 0.897 (0.963 on the
 earlier 27-query set before the cosine floor below), text-vector-only 0.966,
@@ -386,26 +386,26 @@ Every expected answer was written from looking at the image, not its file name
 `visual` row, which has no filename and no OCR, is the clean measure of the
 image model; hybrid is what a user sees.
 
-| Mode | n | recall@5 | recall@10 | MRR |
-| --- | -: | -: | -: | -: |
-| fts-only | 164 | 0.299 | 0.299 | 0.295 |
-| vector-only (text) | 164 | 0.866 | 0.933 | 0.710 |
-| visual-only | 164 | 0.494 | 0.494 | 0.486 |
-| **hybrid** | 164 | **0.957** | **0.988** | **0.867** |
+| Mode               |   n |  recall@5 | recall@10 |       MRR |
+| ------------------ | --: | --------: | --------: | --------: |
+| fts-only           | 164 |     0.299 |     0.299 |     0.295 |
+| vector-only (text) | 164 |     0.866 |     0.933 |     0.710 |
+| visual-only        | 164 |     0.494 |     0.494 |     0.486 |
+| **hybrid**         | 164 | **0.957** | **0.988** | **0.867** |
 
 Hybrid by bucket:
 
-| bucket | n | recall@5 | MRR | visual-only recall@5 |
-| --- | -: | -: | -: | -: |
-| en | 20 | 1.000 | 0.967 | - |
-| es | 20 | 1.000 | 0.925 | - |
-| kw | 10 | 1.000 | 0.925 | - |
-| cross | 20 | **0.750** | 0.312 | - |
-| img (first batch) | 29 | 1.000 | 0.938 | 0.897 |
-| **img2 (new photos)** | 54 | **0.981** | 0.954 | **0.963** |
-| ocr | 7 | 1.000 | 1.000 | 0.429 |
-| qr | 3 | 0.667 | 0.700 | 0.000 |
-| skip | 1 | 1.000 | 1.000 | 0.000 |
+| bucket                |   n |  recall@5 |   MRR | visual-only recall@5 |
+| --------------------- | --: | --------: | ----: | -------------------: |
+| en                    |  20 |     1.000 | 0.967 |                    - |
+| es                    |  20 |     1.000 | 0.925 |                    - |
+| kw                    |  10 |     1.000 | 0.925 |                    - |
+| cross                 |  20 | **0.750** | 0.312 |                    - |
+| img (first batch)     |  29 |     1.000 | 0.938 |                0.897 |
+| **img2 (new photos)** |  54 | **0.981** | 0.954 |            **0.963** |
+| ocr                   |   7 |     1.000 | 1.000 |                0.429 |
+| qr                    |   3 |     0.667 | 0.700 |                0.000 |
+| skip                  |   1 |     1.000 | 1.000 |                0.000 |
 
 **The image model holds up on a bigger, more confusable set.** 53 of 54 new
 visual queries land in the top 5 through hybrid, and 52 of 54 through the
@@ -446,14 +446,14 @@ two runs** (limit 1.5 GB), including a 50 MP JPEG.
 Character error rate after collapsing whitespace, computed from the indexed
 `ocr` chunks:
 
-| image | CER | note |
-| --- | -: | --- |
-| barcode "Hello World!" | 0.00 | |
-| code screenshot (Rust) | 0.01 | |
-| Wikipedia article screenshot | 0.09 | `¿` `¡` lost in the running text |
-| war-grave headstone | 0.13 | engraved text on stone |
-| handwriting-style Spanish page | 0.29 | `¡Hola!` came back as `iHola!`: the known `¡` gap |
-| Pepsi can, curved label | **0.92** | read only "PERS N" |
+| image                          |      CER | note                                              |
+| ------------------------------ | -------: | ------------------------------------------------- |
+| barcode "Hello World!"         |     0.00 |                                                   |
+| code screenshot (Rust)         |     0.01 |                                                   |
+| Wikipedia article screenshot   |     0.09 | `¿` `¡` lost in the running text                  |
+| war-grave headstone            |     0.13 | engraved text on stone                            |
+| handwriting-style Spanish page |     0.29 | `¡Hola!` came back as `iHola!`: the known `¡` gap |
+| Pepsi can, curved label        | **0.92** | read only "PERS N"                                |
 
 ### QR and barcodes
 
@@ -489,11 +489,11 @@ hit for `team meeting notes`.
 **Fix:** `extract_image` drops OCR output with fewer than 6 letters and digits
 (`MIN_OCR_ALNUM`). Same corpus, same 164 queries, release build:
 
-| | cross r@5 | overall hybrid r@5 | MRR | img / img2 / ocr / qr |
-| --- | -: | -: | -: | --- |
-| before (no filter) | 0.750 | 0.957 | 0.867 | 1.000 / 0.981 / 1.000 / 0.667 |
-| threshold 4 | 0.850 | 0.976 | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
-| **threshold 6 (shipped)** | **0.900** | **0.982** | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+|                           | cross r@5 | overall hybrid r@5 |   MRR | img / img2 / ocr / qr         |
+| ------------------------- | --------: | -----------------: | ----: | ----------------------------- |
+| before (no filter)        |     0.750 |              0.957 | 0.867 | 1.000 / 0.981 / 1.000 / 0.667 |
+| threshold 4               |     0.850 |              0.976 | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
+| **threshold 6 (shipped)** | **0.900** |          **0.982** | 0.880 | 1.000 / 0.981 / 1.000 / 1.000 |
 
 (`qr` 0.667 -> 1.000 is the separate tiled-QR fix.) `cross` is back at its
 pre-batch 0.900; the two remaining misses are `informe de ingresos trimestrales`
@@ -504,7 +504,7 @@ off a can). The cost is real short text alone in a photo (a sign reading `EXIT`)
 which is no longer indexed; the threshold is a marked constant.
 
 **What did not work, so nobody tries it again.** The first hypothesis was that
-image *file name* chunks were the crowders. Splitting the vector list and
+image _file name_ chunks were the crowders. Splitting the vector list and
 down-weighting image-filename-best hits (weights 0.5 and 0) left `cross` at
 0.750 and hurt the image buckets: at weight 0 the `img` bucket collapsed
 (`a dog on the beach` fell to rank 9, `perro en la playa` out of the top 100).
