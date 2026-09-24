@@ -1961,3 +1961,26 @@ engine test now also checks `add_root` on a folder inside a root fails with
   `stopped`, 2026-09-22).
 - A file already waiting out the stability check when its root is disabled
   may still be indexed once.
+
+### M5 Slice 8 - verification gaps, manual run (in progress)
+
+- [x] **Item 3b through the engine** (`a_changed_text_model_id_re_embeds_unchanged_files`):
+      a restart with the same model embeds nothing; with `meta.text_model_id`
+      set to another model, every chunk is re-embedded once and the running id
+      is stored.
+- [x] **Item 8 through the engine** (`changes_made_while_stopped_converge_on_restart`):
+      edit, delete, rename and create while stopped; after restart the file
+      names in the DB equal the folder's, old text is gone, `vec_text` matches
+      `chunks`, `integrity_check` ok, and only the edited and created files
+      were embedded (the rename was not). `tests/incremental.rs`: 26 tests green.
+- [x] **Manual item: idle CPU** 0.05-0.37% (one sample 0.63%) of one core over
+      ~80 minutes of normal use, private memory flat at 93 MB after idle unload.
+      See docs/benchmarks.md, "M5 — idle cost".
+      **Exception the owner accepted:** 232 files instead of 20k+.
+- [x] **Fix found by the manual run:** the low-memory pause had no hysteresis;
+      with available RAM near 1 GiB it flipped `paused` / `idle` every 10 s
+      check. It now resumes only above 1.25 GiB (`memory_low`, unit test; item
+      17 test still green).
+- [ ] NFR-11 peak RSS with the engine running; search latency while indexing.
+- [ ] ADR-0008 (runtime and threading), ADR-0009 (watcher, rename and
+      reconciliation policy); M5 sign-off table.

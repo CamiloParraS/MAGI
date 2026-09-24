@@ -131,6 +131,31 @@ Reading it:
   small to show it. At real sizes it would be minutes spent inside the
   writer's scan transaction.
 
+## M5 — idle cost of `magi-cli daemon` (manual item, 2026-09-23)
+
+`magi-cli daemon --stats`, release build, real e5 / SigLIP / OCR, reference
+machine on AC power, owner doing normal work alongside (about 15 of 16 GB RAM
+in use). One root of **232 files** (225 indexed, 4 skipped, 3 errors); first
+index finished at 313 s, then about 80 minutes of normal use until Ctrl-C.
+
+| Phase                        | CPU (% of one core, per-minute samples) | Private memory | RSS         |
+| ---------------------------- | --------------------------------------- | -------------- | ----------- |
+| First minute after the index | 43.6 (tail of indexing)                 | 560 MB         | 579 MB      |
+| Models loaded, idle (~5 min) | 0.10–0.23                               | 560 MB         | 579 MB      |
+| After idle unload, ~75 min   | **0.05–0.37**, one sample 0.63          | 91–93 MB, flat | 113 → 40 MB |
+
+- **Pass:** idle CPU under 1% (SPEC §7 M5 manual item). Private memory stays
+  flat after the models unload, so no leak over the hour. RSS keeps falling only
+  because Windows trims the working set.
+- **Exception the owner accepted:** SPEC asks for a 20k+ file folder; this run
+  used 232 files, to avoid another overnight first index. Idle cost comes from
+  the scheduler poll, timers and one watcher handle per root, none of which
+  grows with the file count; the 20k-file run is still worth doing later.
+- **Found by it:** from ~4,100 s the status flipped `paused` / `idle` as often
+  as every 10 s. Available memory hovered around the 1 GiB NFR-13 threshold, and
+  the pause had no hysteresis. Fixed: it now resumes only above 1.25 GiB
+  (`index::resources::memory_low`, unit test).
+
 ## Reproducing
 
 ```
