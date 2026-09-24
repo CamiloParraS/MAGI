@@ -965,3 +965,116 @@ fn status_counts_the_queue_and_events_follow_changes() {
     assert_eq!(status.roots.len(), 1);
     assert_eq!(status.roots[0].status, "ok");
 }
+
+/// Item 3b: a text model id that differs from the one stored at the last
+/// index re-embeds every file even though no content changed; with the id
+/// unchanged, a restart embeds nothing.
+#[test]
+fn a_changed_text_model_id_re_embeds_unchanged_files() {
+    let env = Env::new();
+    env.write("model_a.txt", "first model text");
+    env.write("model_b.txt", "second model text");
+    let engine = env.start();
+    env.wait_drained(2);
+    engine.shutdown();
+
+    // Same model: the hash-skip holds.
+    let embedded = env.embedder.chunks();
+    let engine = env.start();
+    env.wait_drained(2);
+    engine.shutdown();
+    assert_eq!(
+        env.embedder.chunks(),
+        embedded,
+        "same model id: nothing embedded"
+    );
+
+    // The last index was made by another model.
+    env.conn()
+        .execute(
+            "UPDATE meta SET value = 'some-older-model' WHERE key = 'text_model_id'",
+            [],
+        )
+        .unwrap();
+    let _engine = env.start();
+    env.wait_drained(2);
+    assert_eq!(
+        (env.embedder.chunks() - embedded) as i64,
+        env.count("SELECT COUNT(*) FROM chunks"),
+        "every chunk re-embedded once"
+    );
+    assert_eq!(
+        env.count(
+            "SELECT COUNT(*) FROM meta WHERE key = 'text_model_id' AND value = 'some-older-model'"
+        ),
+        0,
+        "the running model's id replaced the old one"
+    );
+    assert_eq!(env.hits("model"), 2);
+}
+
+/// Item 8: files created, modified, deleted and renamed while the engine is
+/// stopped are all picked up on restart, and the database matches the folder.
+#[test]
+fn changes_made_while_stopped_converge_on_restart() {
+    let env = Env::new();
+    env.write("edited.txt", "original wording");
+    env.write("doomed.txt", "soon deleted");
+    env.write("renamed.txt", "travelling content");
+    let engine = env.start();
+    env.wait_drained(3);
+    engine.shutdown();
+    let embedded = env.embedder.chunks();
+
+    env.write("edited.txt", "rewritten with a longer replacement wording");
+    std::fs::remove_file(env.root().join("doomed.txt")).unwrap();
+    std::fs::rename(
+        env.root().join("renamed.txt"),
+        env.root().join("arrived.txt"),
+    )
+    .unwrap();
+    env.write("created.txt", "brand new arrival");
+
+    let _engine = env.start();
+    env.wait_drained(3);
+
+    let mut on_disk: Vec<String> = std::fs::read_dir(env.root())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    on_disk.sort();
+    let mut in_db: Vec<String> = env
+        .conn()
+        .prepare("SELECT file_name FROM files ORDER BY file_name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    in_db.sort();
+    assert_eq!(in_db, on_disk);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE state = 'indexed'"),
+        3
+    );
+
+    assert_eq!(env.hits("original"), 0, "the old text is gone");
+    assert_eq!(env.hits("rewritten"), 1);
+    assert_eq!(env.hits("doomed"), 0);
+    assert_eq!(env.hits("travelling"), 1);
+    assert_eq!(env.hits("arrival"), 1);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM vec_text"),
+        env.count("SELECT COUNT(*) FROM chunks"),
+        "no orphaned vectors"
+    );
+    // Only the edited and the created file were embedded; the rename was not.
+    assert_eq!(
+        (env.embedder.chunks() - embedded) as i64,
+        env.count(
+            "SELECT COUNT(*) FROM chunks JOIN files ON files.id = chunks.file_id
+             WHERE files.file_name IN ('edited.txt', 'created.txt')"
+        ),
+    );
+    env.integrity_ok();
+}
