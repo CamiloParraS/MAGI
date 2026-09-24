@@ -469,7 +469,8 @@ pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
   never waited on. `PaddleOcr` waits at most 30 s for another extract worker's
   OCR (`get_or_load_within`), so a hung run cannot pile up stuck threads.
 - **Monitor.** Every 10 s (or when woken) it reads available memory; below 1 GiB
-  (NFR-13) it pauses indexing and unloads the image model at once. With
+  (NFR-13) it pauses indexing and unloads the image model at once, and resumes
+  only above 1.25 GiB so memory hovering near 1 GiB does not flip the pause. With
   `pause_on_battery`, being on battery (read at most once a minute) also pauses.
   Each check also unloads models idle longer than the idle timeout, including
   after searches.

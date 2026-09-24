@@ -19,6 +19,9 @@ const CHECK: Duration = Duration::from_secs(10);
 const BATTERY_CHECK: Duration = Duration::from_secs(60);
 /// NFR-13: below this much available RAM, indexing pauses.
 const LOW_AVAILABLE: u64 = GIB;
+/// Once paused for memory, indexing resumes only above this, so available
+/// RAM hovering around [`LOW_AVAILABLE`] does not flip the pause every check.
+const RESUME_AVAILABLE: u64 = GIB + GIB / 4;
 
 /// Total RAM in whole GB as sold: an "8 GB" machine reports about 7.8 GiB.
 fn ram_gb(total_bytes: u64) -> u64 {
@@ -48,10 +51,16 @@ pub fn idle_unload(minutes: u32, total_bytes: u64) -> Duration {
     Duration::from_secs(u64::from(minutes) * 60)
 }
 
-/// Whether available RAM is low enough to pause (NFR-13). `0` means the OS
-/// did not say, which is not treated as low.
-pub fn memory_low(available_bytes: u64) -> bool {
-    available_bytes > 0 && available_bytes < LOW_AVAILABLE
+/// Whether available RAM is low enough to pause (NFR-13), given whether it
+/// was low at the last check. `0` means the OS did not say, which is not
+/// treated as low.
+pub fn memory_low(available_bytes: u64, was_low: bool) -> bool {
+    let threshold = if was_low {
+        RESUME_AVAILABLE
+    } else {
+        LOW_AVAILABLE
+    };
+    available_bytes > 0 && available_bytes < threshold
 }
 
 /// Total RAM, and the extract worker count for `worker_threads` (0 = auto).
@@ -102,9 +111,11 @@ pub(crate) struct Monitor {
 pub(crate) fn run(m: Monitor, stop: &AtomicBool, wake: Receiver<()>) {
     let mut sys = System::new();
     let mut battery: Option<(Instant, bool)> = None;
+    let mut memory_was_low = false;
     while !stop.load(Ordering::SeqCst) {
         sys.refresh_memory();
-        let low = m.force_low_memory.load(Ordering::SeqCst) || memory_low(sys.available_memory());
+        memory_was_low = memory_low(sys.available_memory(), memory_was_low);
+        let low = m.force_low_memory.load(Ordering::SeqCst) || memory_was_low;
         let on_battery = m.pause_on_battery && {
             if battery.is_none_or(|(at, _)| at.elapsed() >= BATTERY_CHECK) {
                 battery = Some((Instant::now(), Os.on_battery() == Some(true)));
@@ -155,8 +166,18 @@ mod tests {
 
     #[test]
     fn under_one_gib_available_is_low_but_unknown_is_not() {
-        assert!(memory_low(GIB - 1));
-        assert!(!memory_low(GIB));
-        assert!(!memory_low(0));
+        assert!(memory_low(GIB - 1, false));
+        assert!(!memory_low(GIB, false));
+        assert!(!memory_low(0, false));
+        assert!(!memory_low(0, true));
+    }
+
+    #[test]
+    fn once_low_it_stays_low_until_a_quarter_gib_above_the_threshold() {
+        // Hovering just over 1 GiB must not flip the pause every check.
+        assert!(memory_low(GIB + 100 * 1024 * 1024, true));
+        assert!(memory_low(RESUME_AVAILABLE - 1, true));
+        assert!(!memory_low(RESUME_AVAILABLE, true));
+        assert!(!memory_low(GIB + 100 * 1024 * 1024, false));
     }
 }
