@@ -302,7 +302,7 @@ crash leaves rows `indexing`; startup puts them back), `next_pending(now, limit)
 which retries after 30 s, then 2 min, and gives up to `error` on the third
 failure (`backoff_secs`, `MAX_ATTEMPTS`).
 
-**Is this file unchanged?** `pipeline::index_file` asks in three steps and stops
+**Is this file unchanged?** `pipeline::prepare` asks in three steps and stops
 at the first yes, updating only `size`, `mtime_ns` and `seen_scan_id`:
 1. same size and mtime as the stored row, and the row is settled (`indexed`,
    `skipped` or `error`) at the current `PIPELINE_VERSION`: nothing is read;
@@ -415,7 +415,10 @@ are walked (`reconcile_roots`).
 rescans. The stale-result rule: a result is stored only if its row is still
 `indexing`. A file re-queued by a watcher event while the pipeline works on it
 is processed again; one deleted, or whose root was removed, in the meantime is
-not brought back (`writer::superseded`).
+not brought back. Both drivers make every per-file state change through
+`index::lifecycle` (`begin`, then `apply` in the engine or `apply_alone` in the
+one-shot `index_root`, which as the only writer skips the `indexing` mark and
+this check).
 
 ## Platform behaviour (M5 Slice 5)
 

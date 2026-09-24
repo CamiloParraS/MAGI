@@ -195,6 +195,7 @@ pub fn backoff_secs(attempt: u32) -> i64 {
 }
 
 /// The columns change detection needs about a file already in the index.
+#[derive(Clone)]
 pub struct StoredFile {
     pub id: i64,
     pub root_id: i64,

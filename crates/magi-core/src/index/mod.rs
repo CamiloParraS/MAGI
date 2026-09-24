@@ -3,6 +3,7 @@
 
 pub mod gate;
 mod isolate;
+pub(crate) mod lifecycle;
 pub mod pipeline;
 pub mod resources;
 pub mod scheduler;

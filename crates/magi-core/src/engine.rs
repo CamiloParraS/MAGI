@@ -33,6 +33,7 @@ use crate::db::{self, files, meta, roots};
 use crate::dto::{IndexState, IndexStatus, RootStatus};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
+use crate::index::lifecycle::{self, FileStep};
 use crate::index::pipeline::{
     EMBED_BATCH, Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed_group, prepare,
 };
@@ -644,29 +645,12 @@ fn dispatch(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     for action in actions {
-        match action {
-            Action::Delete(id) => {
-                let _ = write_tx.send(WriteJob::Delete(id));
-            }
-            Action::Fail { id, message } => {
-                let _ = write_tx.send(WriteJob::retry(id, message));
-            }
-            Action::Extract { file, entry } => {
-                let stored = files::get_stored(conn, &entry.path).ok().flatten();
-                let (Some(stored), Some(root_path)) = (stored, roots.get(&file.root_id)) else {
-                    // The row or its root vanished since it was queued.
-                    let _ = write_tx.send(WriteJob::Delete(file.id));
-                    continue;
-                };
-                let _ = write_tx.send(WriteJob::MarkIndexing(file.id));
-                let _ = extract_tx.send(Job {
-                    root_id: file.root_id,
-                    root_path: root_path.clone(),
-                    entry,
-                    scan_id,
-                    stored,
-                });
-            }
+        let (step, job) = lifecycle::begin(conn, action, &roots, scan_id);
+        // Ahead of the job on the writer's one channel, so its result finds
+        // the row `indexing`.
+        let _ = write_tx.send(step.into());
+        if let Some(job) = job {
+            let _ = extract_tx.send(job);
         }
     }
 }
@@ -695,18 +679,18 @@ fn extract_worker(
                 let _ = embed_tx.send((job, *fresh));
                 continue;
             }
-            Ok(Extracted::Keep { state }) => WriteJob::Keep {
+            Ok(Extracted::Keep { state }) => FileStep::Keep {
                 job: Box::new(job),
                 state,
             },
-            Ok(Extracted::Retry { message, locked }) => WriteJob::Retry {
+            Ok(Extracted::Retry { message, locked }) => FileStep::Retry {
                 file_id: job.stored.id,
                 message,
                 locked,
             },
-            Err(_) => WriteJob::retry(job.stored.id, "extraction panicked".into()),
+            Err(_) => FileStep::retry(job.stored.id, "extraction panicked".into()),
         };
-        let _ = write_tx.send(next);
+        let _ = write_tx.send(next.into());
     }
 }
 
@@ -736,19 +720,19 @@ fn embed_worker(
         }));
         let Ok(results) = result else {
             for id in ids {
-                let _ = write_tx.send(WriteJob::retry(id, "embedding panicked".into()));
+                let _ = write_tx.send(FileStep::retry(id, "embedding panicked".into()).into());
             }
             continue;
         };
         for (job, embedded) in results {
             let next = match embedded {
-                Ok(embedded) => WriteJob::Store {
+                Ok(embedded) => FileStep::Store {
                     job: Box::new(job),
                     embedded: Box::new(embedded),
                 },
-                Err(e) => WriteJob::retry(job.stored.id, e.to_string()),
+                Err(e) => FileStep::retry(job.stored.id, e.to_string()),
             };
-            let _ = write_tx.send(next);
+            let _ = write_tx.send(next.into());
         }
     }
 }

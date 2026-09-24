@@ -22,6 +22,8 @@ use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{reconcile_root, remove_unseen};
 
 use super::gate::ImageGate;
+use super::lifecycle::{self, FileStep};
+use super::scheduler::{self, Action};
 use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
 
 /// Pixels above which an image counts as large for the decode gate (12 MP).
@@ -162,9 +164,10 @@ pub fn index_root(
     Ok(summary)
 }
 
-/// Works the `pending` queue, newest first, until nothing is ready. A file
-/// that has vanished since the scan is deleted instead; one that cannot be
-/// stat'd is put back with a delay ([`files::record_failure`]).
+/// Works the `pending` queue, newest first, until nothing is ready, making the
+/// same state changes as the engine ([`lifecycle::apply_alone`]). A file that has vanished
+/// since the scan is deleted instead; one that cannot be stat'd is put back
+/// with a delay.
 fn drain_pending(
     conn: &mut Connection,
     ctx: &IndexContext,
@@ -183,38 +186,33 @@ fn drain_pending(
             return Ok(());
         }
         for pending in batch {
-            let entry = match discovery::stat(&pending.path) {
-                Ok(entry) => entry,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    files::delete_file(conn, pending.id)?;
-                    summary.removed += 1;
-                    continue;
-                }
-                Err(e) => {
-                    files::record_failure(conn, pending.id, &e.to_string(), now)?;
-                    continue;
-                }
+            // No stability wait: a one-shot run takes the files as they are.
+            let action = match discovery::stat(&pending.path) {
+                Ok(entry) => Action::Extract {
+                    file: pending,
+                    entry,
+                },
+                Err(e) => scheduler::gone_or_failed(pending.id, &e),
             };
-            let (Some(root_path), Some(stored)) = (
-                root_paths.get(&pending.root_id),
-                files::get_stored(conn, &pending.path)?,
-            ) else {
-                continue;
-            };
-            let job = Job {
-                root_id: pending.root_id,
-                root_path: root_path.clone(),
-                entry,
-                scan_id,
-                stored,
-            };
-            match index_file(conn, ctx, options, &job)? {
-                Status::Indexed => summary.indexed += 1,
-                Status::Skipped => summary.skipped += 1,
-                Status::Errored => summary.errored += 1,
-                Status::Unchanged => summary.unchanged += 1,
-                Status::Retried => {}
+            let (step, job) = lifecycle::begin(conn, action, &root_paths, scan_id);
+            count(summary, lifecycle::apply_alone(conn, step)?);
+            if let Some(job) = job {
+                let step = index_file(ctx, options, job)?;
+                count(summary, lifecycle::apply_alone(conn, step)?);
             }
+        }
+    }
+}
+
+fn count(summary: &mut IndexSummary, status: Option<Status>) {
+    if let Some(status) = status {
+        match status {
+            Status::Indexed => summary.indexed += 1,
+            Status::Skipped => summary.skipped += 1,
+            Status::Errored => summary.errored += 1,
+            Status::Unchanged => summary.unchanged += 1,
+            Status::Retried => {}
+            Status::Removed => summary.removed += 1,
         }
     }
 }
@@ -227,6 +225,7 @@ pub(crate) fn unix_now() -> i64 {
 
 /// One file to bring up to date, where it was found, and what the index knows
 /// of it. Owned, so it can cross threads.
+#[derive(Clone)]
 pub(crate) struct Job {
     pub root_id: i64,
     pub root_path: PathBuf,
@@ -243,6 +242,8 @@ pub(crate) enum Status {
     Unchanged,
     /// Failed for a reason that may pass; back in the queue with a delay.
     Retried,
+    /// Gone from disk: its row, chunks and vectors were deleted.
+    Removed,
 }
 
 /// What the extract stage decided. It touches no database: the writer applies
@@ -512,50 +513,26 @@ pub(crate) fn store_embedded(
     })
 }
 
-pub(crate) fn store_keep(conn: &Connection, job: &Job, state: &str) -> Result<Status> {
-    files::touch_unchanged(
-        conn,
-        job.stored.id,
-        job.entry.size,
-        job.entry.mtime_ns,
-        job.scan_id,
-        state,
-    )?;
-    Ok(Status::Unchanged)
-}
-
-pub(crate) fn store_retry(
-    conn: &Connection,
-    file_id: i64,
-    message: &str,
-    locked: bool,
-) -> Result<Status> {
-    let record = if locked {
-        files::record_locked
-    } else {
-        files::record_failure
-    };
-    Ok(match record(conn, file_id, message, unix_now())? {
-        files::Failure::Retry { .. } => Status::Retried,
-        files::Failure::GaveUp { .. } => Status::Errored,
-    })
-}
-
-/// The three stages for one file in a row, on the calling thread.
-fn index_file(
-    conn: &mut Connection,
-    ctx: &IndexContext,
-    options: &IndexRootOptions,
-    job: &Job,
-) -> Result<Status> {
-    match prepare(ctx, options, job) {
-        Extracted::Keep { state } => store_keep(conn, job, &state),
-        Extracted::Retry { message, locked } => store_retry(conn, job.stored.id, &message, locked),
+/// Extracts and embeds one file on the calling thread; the step stores it.
+fn index_file(ctx: &IndexContext, options: &IndexRootOptions, job: Job) -> Result<FileStep> {
+    Ok(match prepare(ctx, options, &job) {
+        Extracted::Keep { state } => FileStep::Keep {
+            job: Box::new(job),
+            state,
+        },
+        Extracted::Retry { message, locked } => FileStep::Retry {
+            file_id: job.stored.id,
+            message,
+            locked,
+        },
         Extracted::Fresh(fresh) => {
-            let embedded = embed(ctx, job, *fresh, &|| {})?;
-            store_embedded(conn, job, embedded)
+            let embedded = embed(ctx, &job, *fresh, &|| {})?;
+            FileStep::Store {
+                job: Box::new(job),
+                embedded: Box::new(embedded),
+            }
         }
-    }
+    })
 }
 
 /// Embeds `chunks` (content chunks, filename chunk last) in batches. One bad
@@ -905,15 +882,15 @@ mod tests {
             scan_id: 1,
         };
 
-        let status = index_file(
-            &mut conn,
+        let step = index_file(
             &IndexContext::new(Arc::new(FakeEmbedder)),
             &default_options(),
-            &job,
+            job,
         )
         .unwrap();
+        let status = lifecycle::apply_alone(&mut conn, step).unwrap();
 
-        assert!(matches!(status, Status::Skipped));
+        assert!(matches!(status, Some(Status::Skipped)));
         let row = db::files::get_by_path(&conn, &path).unwrap().unwrap();
         assert_eq!(row.state, "skipped");
         assert_eq!(row.skip_reason.as_deref(), Some("cloud_only"));

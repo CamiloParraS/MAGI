@@ -263,7 +263,8 @@ impl Scheduler {
     }
 }
 
-fn gone_or_failed(id: i64, e: &std::io::Error) -> Action {
+/// A file that could not be stat'd: deleted if it is gone, retried otherwise.
+pub(crate) fn gone_or_failed(id: i64, e: &std::io::Error) -> Action {
     if e.kind() == std::io::ErrorKind::NotFound {
         Action::Delete(id)
     } else {
