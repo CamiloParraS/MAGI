@@ -39,30 +39,36 @@ const MIN_SCANNED_EDGE: u32 = 100;
 const TILE_MAX_PIXELS: u64 = 6_000_000;
 
 /// Every QR payload in the image, deduplicated, in detection order.
+///
+/// Converts to grayscale once and halves each rung from the previous one,
+/// instead of resizing the full-resolution RGB frame per rung: on a 12 MP
+/// photo with no code that repeated resize was most of this function's cost.
 pub fn decode_barcodes(image: &image::RgbImage) -> Vec<String> {
+    let gray: image::GrayImage = image.convert();
+    let mut rung = None;
     for &scale in SCALE_LADDER {
         let (width, height) = (image.width() / scale, image.height() / scale);
         if width.min(height) < MIN_SCANNED_EDGE {
             break;
         }
-        let payloads = if scale == 1 {
-            decode_at(image)
-        } else {
-            decode_at(&image::imageops::resize(
-                image,
+        if scale > 1 {
+            let previous = rung.as_ref().unwrap_or(&gray);
+            rung = Some(image::imageops::resize(
+                previous,
                 width,
                 height,
                 image::imageops::FilterType::Triangle,
-            ))
-        };
+            ));
+        }
         // The same code at a different scale yields the same payload, so the
         // first scale that reads anything is the answer.
+        let payloads = decode_at(rung.as_ref().unwrap_or(&gray));
         if !payloads.is_empty() {
             return payloads;
         }
     }
     if u64::from(image.width()) * u64::from(image.height()) <= TILE_MAX_PIXELS {
-        return decode_tiles(image);
+        return decode_tiles(&gray);
     }
     Vec::new()
 }
@@ -70,7 +76,7 @@ pub fn decode_barcodes(image: &image::RgbImage) -> Vec<String> {
 /// Native-resolution square tiles of half the short edge, overlapping by half
 /// so a code cut by one tile edge sits whole in a neighbour. Every tile is
 /// scanned (a photo can hold several small codes), payloads deduplicated.
-fn decode_tiles(image: &image::RgbImage) -> Vec<String> {
+fn decode_tiles(image: &image::GrayImage) -> Vec<String> {
     let (width, height) = image.dimensions();
     let tile = width.min(height) / 2;
     if tile < MIN_SCANNED_EDGE {
@@ -101,10 +107,8 @@ fn tile_starts(len: u32, tile: u32) -> Vec<u32> {
     starts
 }
 
-fn decode_at(image: &image::RgbImage) -> Vec<String> {
-    let luma: image::GrayImage = image.convert();
-    let Ok(source) = Luma8Source::new_with_slice(luma.as_raw(), image.width(), image.height())
-    else {
+fn decode_at(luma: &image::GrayImage) -> Vec<String> {
+    let Ok(source) = Luma8Source::new_with_slice(luma.as_raw(), luma.width(), luma.height()) else {
         return Vec::new();
     };
     let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(source));
