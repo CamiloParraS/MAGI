@@ -15,6 +15,7 @@ models/cache/
 *.db
 *.db-wal
 *.db-shm
+graphify-out/*
 
 # Editors
 .idea/
