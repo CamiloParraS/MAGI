@@ -50,7 +50,11 @@ impl SigLipEmbedder {
 fn load_vision() -> Result<Mutex<Session>> {
     crate::onnx::init()?;
     let path = model_dir("image").join("vision_model.onnx");
-    Ok(Mutex::new(crate::onnx::session(&path, 2)?))
+    Ok(Mutex::new(crate::onnx::session(
+        &path,
+        crate::onnx::indexing_threads(),
+        false,
+    )?))
 }
 
 fn load_text() -> Result<TextTower> {
@@ -64,7 +68,11 @@ fn load_text() -> Result<TextTower> {
         ))
     })?;
     Ok(TextTower {
-        session: Mutex::new(crate::onnx::session(&dir.join("text_model.onnx"), 1)?),
+        session: Mutex::new(crate::onnx::session(
+            &dir.join("text_model.onnx"),
+            1,
+            false,
+        )?),
         tokenizer,
     })
 }

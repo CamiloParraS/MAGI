@@ -20,8 +20,11 @@ const PASSAGE_PREFIX: &str = "passage: ";
 /// text file yields ~5,700 chunks), and ONNX Runtime materializes a
 /// `batch x seq_len x 384` f32 `last_hidden_state` for the whole batch —
 /// ~4.5 GB at that size. Capping the batch keeps that intermediate at a
-/// few MB regardless of file size (SPEC.md §5.3: "small batches").
-const BATCH_CHUNKS: usize = 16;
+/// few MB regardless of file size (SPEC.md §5.3: "small batches"). 8, not
+/// 16: the session's memory arena keeps a pool sized for the largest batch
+/// (~12 heads x 512^2 f32 attention scores per chunk), and 16 put all-models
+/// indexing 30 MB over NFR-11 (docs/perf-investigation.md).
+const BATCH_CHUNKS: usize = 8;
 
 /// Real `intfloat/multilingual-e5-small` embedder: `tokenizers` for
 /// encoding (with the `"query: "`/`"passage: "` prefixes SPEC.md §3
@@ -76,11 +79,14 @@ impl E5Embedder {
     }
 
     fn load_session(&self) -> Result<Mutex<Session>> {
-        // One embed thread (SPEC.md §5.3) drives this session; 2 intra-op
-        // threads split each batch's matmuls. Capped at 2 for NFR-8
-        // politeness (docs/m5-plan.md defaults); the same session serves
-        // search.
-        Ok(Mutex::new(crate::onnx::session(&self.model_path, 2)?))
+        // One embed thread (SPEC.md §5.3) drives this session; its intra-op
+        // threads split each batch's matmuls, 4 on AC and 2 on battery
+        // (NFR-8). The same session serves search.
+        Ok(Mutex::new(crate::onnx::session(
+            &self.model_path,
+            crate::onnx::indexing_threads(),
+            true,
+        )?))
     }
 
     /// Tokenizes, runs inference, and mean-pools + L2-normalizes each of

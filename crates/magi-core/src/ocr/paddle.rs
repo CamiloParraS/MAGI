@@ -76,8 +76,16 @@ impl PaddleOcr {
 
     fn load_sessions(&self) -> Result<Sessions> {
         Ok(Sessions {
-            det: Mutex::new(crate::onnx::session(&self.dir.join("det.onnx"), 2)?),
-            rec: Mutex::new(crate::onnx::session(&self.dir.join("rec.onnx"), 2)?),
+            det: Mutex::new(crate::onnx::session(
+                &self.dir.join("det.onnx"),
+                crate::onnx::indexing_threads(),
+                false,
+            )?),
+            rec: Mutex::new(crate::onnx::session(
+                &self.dir.join("rec.onnx"),
+                crate::onnx::indexing_threads(),
+                false,
+            )?),
         })
     }
 

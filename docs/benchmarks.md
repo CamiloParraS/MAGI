@@ -6,7 +6,7 @@ capability; only M2 (discovery + text extraction, no ML) is covered so far.
 
 ## Reference machine
 
-- AMD Ryzen 7 7445HS (8 cores / 16 threads), 16 GB RAM
+- AMD Ryzen 7 7445HS (6 cores / 12 threads: 2 Zen 4 + 4 Zen 4c), 16 GB RAM
 - Windows 11 Home Single Language 10.0.26200, x86_64
 - `magi-cli` built with `cargo build --release` (commit at time of
   measurement: `feat/text-extraction`, post-M2 slice 3)

@@ -726,7 +726,7 @@ The `platform/` module implements these traits for each OS:
 
 ### 6.4 Cross-platform background policy
 
-- Indexing threads run at low OS priority. ONNX `intra_op_num_threads` is capped at 2 during background indexing, and uses all cores for foreground searches.
+- Indexing threads run at low OS priority. ONNX `intra_op_num_threads` for the indexing models is capped at 4 on AC power and 2 on battery (or when power status is unknown), chosen when a model loads (docs/perf-investigation.md), and uses all cores for foreground searches.
 - **Pause on battery** (configurable). If battery status can't be determined on a platform, the feature is disabled there and documented.
 - **Model lifecycle:**
   - Load when the queue is non-empty or the search window opens. Pre-warm the query encoders on hotkey press.

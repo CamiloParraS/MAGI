@@ -6,7 +6,7 @@ for the query-file format and `eval/queries.jsonl` for the 60 queries.
 
 ## Reference machine
 
-- AMD Ryzen 7 7445HS (8 cores / 16 threads), 16 GB RAM
+- AMD Ryzen 7 7445HS (6 cores / 12 threads: 2 Zen 4 + 4 Zen 4c), 16 GB RAM
 - Windows 11 Home Single Language 10.0.26200, x86_64
 - `magi-cli eval` built with `cargo build --release -p magi-cli`
 
