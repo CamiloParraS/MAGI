@@ -202,6 +202,8 @@ pub struct StoredFile {
     pub kind: String,
     pub state: String,
     pub skip_reason: Option<String>,
+    /// The last result's or attempt's error, kept until a result replaces it.
+    pub error: Option<String>,
     pub size: u64,
     pub mtime_ns: i64,
     pub content_hash: Option<Vec<u8>>,
@@ -212,7 +214,7 @@ pub fn get_stored(conn: &Connection, path: &Path) -> Result<Option<StoredFile>> 
     use rusqlite::OptionalExtension;
     conn.query_row(
         "SELECT id, root_id, kind, state, skip_reason, size, mtime_ns, content_hash,
-                pipeline_version
+                pipeline_version, error
          FROM files WHERE path = ?1",
         params![path.to_string_lossy()],
         |row| {
@@ -226,6 +228,7 @@ pub fn get_stored(conn: &Connection, path: &Path) -> Result<Option<StoredFile>> 
                 mtime_ns: row.get(6)?,
                 content_hash: row.get(7)?,
                 pipeline_version: row.get(8)?,
+                error: row.get(9)?,
             })
         },
     )
@@ -647,11 +650,12 @@ pub fn remove_unreferenced_thumbnails(conn: &Connection, keys: &[String]) {
     }
 }
 
-/// Puts every `error` file back in the queue with a clean slate (SPEC.md §5.7
-/// `retry_errors`). Returns how many.
+/// Puts every `error` file back in the queue with attempts and backoff cleared
+/// (SPEC.md §5.7 `retry_errors`). The error stays until a result replaces it,
+/// so the file is read again rather than kept by its hash. Returns how many.
 pub fn retry_errors(conn: &Connection) -> Result<usize> {
     Ok(conn.execute(
-        "UPDATE files SET state = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+        "UPDATE files SET state = 'pending', attempts = 0, next_attempt_at = NULL
          WHERE state = 'error'",
         [],
     )?)
@@ -1169,7 +1173,9 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!(row, ("pending".into(), 0, None, None));
+        // The error stays until a result replaces it, so change detection
+        // re-reads the file instead of keeping it.
+        assert_eq!(row, ("pending".into(), 0, None, Some("unreadable".into())));
         assert_eq!(state_of(&conn, fine).unwrap().as_deref(), Some("indexed"));
         assert_eq!(retry_errors(&conn).unwrap(), 0);
     }

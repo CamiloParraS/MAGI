@@ -21,10 +21,11 @@ use crate::ocr::{NoOcr, OcrEngine};
 use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{reconcile_root, remove_unseen};
 
+use super::change::{self, Found};
 use super::gate::ImageGate;
 use super::lifecycle::{self, FileStep};
 use super::scheduler::{self, Action};
-use super::{ModelIds, PIPELINE_VERSION, requeue_on_model_change};
+use super::{ModelIds, requeue_on_model_change};
 
 /// Pixels above which an image counts as large for the decode gate (12 MP).
 const LARGE_IMAGE_PIXELS: u64 = 12_000_000;
@@ -276,34 +277,8 @@ pub(crate) struct Embedded {
     embeddings: Vec<Vec<f32>>,
 }
 
-/// What the file's stored row says about whether it can be kept as is.
-fn is_settled(stored: &StoredFile) -> bool {
-    stored.pipeline_version == PIPELINE_VERSION
-        && matches!(stored.state.as_str(), "indexed" | "skipped" | "error")
-}
-
-/// A file whose kind is not extracted (unsupported, disabled, too large) has no
-/// content hash; it is unchanged if it would be indexed the same way again.
-fn unchanged_without_content(stored: &StoredFile, outcome: &FileOutcome) -> bool {
-    stored.pipeline_version == PIPELINE_VERSION
-        && stored.state != "error"
-        && outcome.state != "error"
-        && stored.kind == outcome.kind.as_str()
-        && stored.content_hash.is_none()
-        && stored.skip_reason.as_deref() == outcome.skip_reason
-}
-
-/// Same bytes as when it was indexed, by the current pipeline, with real
-/// chunks (a row that was `skipped` or `error` is re-tried instead).
-fn content_is(stored: &StoredFile, hash: &[u8; 32]) -> bool {
-    stored.pipeline_version == PIPELINE_VERSION
-        && stored.skip_reason.is_none()
-        && matches!(stored.state.as_str(), "indexed" | "pending")
-        && stored.content_hash.as_deref() == Some(hash.as_slice())
-}
-
-/// Stage 1, extract: is it unchanged? (size and mtime, then content hash),
-/// otherwise read, extract and chunk it. CPU and I/O only, no database.
+/// Stage 1, extract: is it unchanged ([`change::keeps`])? Otherwise read,
+/// extract and chunk it. CPU and I/O only, no database.
 pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job) -> Extracted {
     let entry = &job.entry;
     let s = &job.stored;
@@ -312,22 +287,15 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
         locked: platform::is_locked(&e),
     };
 
-    // Same size and mtime as when it was indexed: nothing to read.
-    if is_settled(s)
-        && s.root_id == job.root_id
-        && s.size == entry.size
-        && s.mtime_ns == entry.mtime_ns
-    {
-        return Extracted::Keep {
-            state: s.state.clone(),
-        };
-    }
-
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
     let mut outcome = match plan_entry(entry, max_size_bytes, options) {
         Plan::Unreadable(e) => return unreadable(e),
         Plan::Done(outcome) => {
-            if unchanged_without_content(s, &outcome) {
+            let found = Found::NotRead {
+                kind: outcome.kind.as_str(),
+                skip_reason: outcome.skip_reason,
+            };
+            if change::keeps(s, found) {
                 return Extracted::Keep {
                     state: outcome.state.to_string(),
                 };
@@ -340,7 +308,7 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
             // never hashed goes straight to extraction, which hashes it anyway.
             if s.content_hash.is_some() {
                 match hash_file(&entry.path) {
-                    Ok(hash) if content_is(s, &hash) => {
+                    Ok(hash) if change::keeps(s, Found::Hashed(&hash)) => {
                         return Extracted::Keep {
                             state: "indexed".into(),
                         };
@@ -1554,7 +1522,7 @@ mod tests {
         assert_eq!((summary.indexed, summary.unchanged), (1, 0));
         assert_eq!(
             scalar(&conn, "SELECT pipeline_version FROM files"),
-            PIPELINE_VERSION
+            crate::index::PIPELINE_VERSION
         );
     }
 
@@ -1624,6 +1592,40 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// An `error` row is queued again (touched, or `retry_errors`) with the same
+    /// bytes: it must be extracted again, not kept and relabelled `indexed`.
+    #[test]
+    fn an_errored_file_queued_again_is_re_extracted_not_kept() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        let truncated = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/corpus/edge/truncated.pdf");
+        let path = root.join("broken.pdf");
+        fs::copy(truncated, &path).unwrap();
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
+        let state = |conn: &Connection| db::files::get_by_path(conn, &path).unwrap().unwrap().state;
+        assert_eq!(state(&conn), "error");
+
+        // Touched: new mtime, same bytes.
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        let touched = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 2);
+        assert_eq!((touched.errored, touched.unchanged), (1, 0));
+        assert_eq!(state(&conn), "error");
+
+        db::files::retry_errors(&conn).unwrap();
+        let retried = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 3);
+        assert_eq!(
+            retried.errored, 1,
+            "extracted again (the scan saw the same stat)"
+        );
+        assert_eq!(state(&conn), "error");
     }
 
     #[test]

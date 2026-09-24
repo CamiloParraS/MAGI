@@ -302,15 +302,18 @@ crash leaves rows `indexing`; startup puts them back), `next_pending(now, limit)
 which retries after 30 s, then 2 min, and gives up to `error` on the third
 failure (`backoff_secs`, `MAX_ATTEMPTS`).
 
-**Is this file unchanged?** `pipeline::prepare` asks in three steps and stops
-at the first yes, updating only `size`, `mtime_ns` and `seen_scan_id`:
-1. same size and mtime as the stored row, and the row is settled (`indexed`,
-   `skipped` or `error`) at the current `PIPELINE_VERSION`: nothing is read;
-2. otherwise, for a file that will be extracted and is already in the index, a
-   streamed blake3 hash equal to the stored `content_hash` (state `indexed` or
-   `pending`, no `skip_reason`): kept, so `touch` and re-saves cost no embedding;
-3. a file that is not extracted (unsupported, disabled kind, too large) has no
-   hash and is unchanged if it would be indexed the same way again.
+**Is this file unchanged?** Every rule lives in `index::change`. The scan
+queues a row whose root, size, mtime or `pipeline_version` differs from disk
+(`unchanged_on_disk`). For a queued file, `pipeline::prepare` then asks
+`change::keeps`, which updates only `size`, `mtime_ns` and `seen_scan_id` on a
+yes. A queued row's `state` is `pending`, so `keeps` reads the last result from
+the columns queuing leaves alone. It needs the current `PIPELINE_VERSION` and
+no `error` (kept until a result replaces it, even through `retry_errors`), and:
+1. for a file that will be extracted, a streamed blake3 hash equal to the stored
+   `content_hash` and no `skip_reason`, so `touch` and re-saves cost no
+   embedding;
+2. for a file that is not extracted (unsupported, disabled kind, too large), no
+   stored hash, and the same kind and `skip_reason` it would get again.
 
 Anything else is extracted, embedded and written by `upsert_file` in one
 transaction, which also stamps `pipeline_version`.

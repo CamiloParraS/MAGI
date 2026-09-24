@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use crate::db::{files, meta, roots};
 use crate::discovery;
 use crate::error::Result;
-use crate::index::PIPELINE_VERSION;
+use crate::index::change;
 use crate::index::pipeline::{IndexRootOptions, hash_file};
 use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 
@@ -63,12 +63,7 @@ fn reconcile_entry(
             )?;
             EntryOutcome::Inserted
         }
-        Some(s)
-            if s.root_id != root_id
-                || s.size != entry.size
-                || s.mtime_ns != entry.mtime_ns
-                || s.pipeline_version != PIPELINE_VERSION =>
-        {
+        Some(s) if !change::unchanged_on_disk(&s, root_id, entry) => {
             files::mark_changed(conn, s.id, root_id, entry.size, entry.mtime_ns, scan_id)?;
             EntryOutcome::Changed
         }
@@ -666,7 +661,7 @@ mod tests {
         assert_eq!(s.run().indexed, 1);
         assert_eq!(
             s.count("SELECT pipeline_version FROM files"),
-            PIPELINE_VERSION
+            crate::index::PIPELINE_VERSION
         );
         let embedded = s.embedder.chunks();
         assert_eq!(s.run().unchanged, 1);
