@@ -1990,6 +1990,14 @@ engine test now also checks `add_root` on a folder inside a root fails with
       with available RAM near 1 GiB it flipped `paused` / `idle` every 10 s
       check. It now resumes only above 1.25 GiB (`memory_low`, unit test; item
       17 test still green).
-- [ ] NFR-11 peak RSS with the engine running; search latency while indexing.
+- [x] **NFR-11 peak RSS with the engine running:** 1,215–1,337 MB on
+      `fixtures/corpus` (≤ 1.5 GB, pass). A search during the first index was
+      not measured and would go over. See docs/benchmarks.md, "M5 — peak memory".
+- [x] **NFR-12 peak memory, hybrid search only:** 842–848 MB (≤ 900 MB, pass),
+      down from 1,272 MB. `magi-cli search` frees e5 before the SigLIP text
+      tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
+      accepted), and SigLIP builds its session before parsing its tokenizer.
+      mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
+- [ ] Search latency while indexing (NFR-8).
 - [ ] ADR-0008 (runtime and threading), ADR-0009 (watcher, rename and
       reconciliation policy); M5 sign-off table.
