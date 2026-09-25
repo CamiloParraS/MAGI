@@ -640,13 +640,8 @@ fn dispatch(
             return;
         }
     };
-    let scan_id = meta::get(conn, "last_scan_id")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
     for action in actions {
-        let (step, job) = lifecycle::begin(conn, action, &roots, scan_id);
+        let (step, job) = lifecycle::begin(conn, action, &roots);
         // Ahead of the job on the writer's one channel, so its result finds
         // the row `indexing`.
         let _ = write_tx.send(step.into());

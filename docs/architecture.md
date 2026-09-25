@@ -305,7 +305,7 @@ failure (`backoff_secs`, `MAX_ATTEMPTS`).
 **Is this file unchanged?** Every rule lives in `index::change`. The scan
 queues a row whose root, size, mtime or `pipeline_version` differs from disk
 (`unchanged_on_disk`). For a queued file, `pipeline::prepare` then asks
-`change::keeps`, which updates only `size`, `mtime_ns` and `seen_scan_id` on a
+`change::keeps`, which updates only `size`, `mtime_ns` and `state` on a
 yes. A queued row's `state` is `pending`, so `keeps` reads the last result from
 the columns queuing leaves alone. It needs the current `PIPELINE_VERSION` and
 no `error` (kept until a result replaces it, even through `retry_errors`), and:
@@ -349,7 +349,10 @@ stat), and stamps everything else with the scan's `seen_scan_id`. Rows of the
 root with an older `seen_scan_id` come back as deletion candidates.
 `resolve_moves` renames a candidate in place (`files::rename_file`) when a
 brand-new `pending` row has the same size, kind and blake3 hash, and deletes the
-rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`) and must increase.
+rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`); every scan
+takes its own, `index_root` included, and only scans write `seen_scan_id`
+(storing a result does not). Unseen rows carry the id of the scan that missed
+them (`reconcile::Unseen`).
 
 **Root status.** `platform::FsProbe` maps a failed `read_dir`/`metadata` to
 `permission_denied` or `missing`; `roots::set_access` stores it. The rules live

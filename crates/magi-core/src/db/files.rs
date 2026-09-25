@@ -127,7 +127,6 @@ pub fn upsert_file(
             state = excluded.state,
             skip_reason = excluded.skip_reason,
             error = excluded.error,
-            seen_scan_id = excluded.seen_scan_id,
             content_hash = excluded.content_hash,
             thumb_key = excluded.thumb_key,
             pipeline_version = excluded.pipeline_version,
@@ -283,21 +282,20 @@ pub fn get_stored(conn: &Connection, path: &Path) -> Result<Option<StoredFile>> 
 }
 
 /// Records that a file was looked at and its indexed content is still right:
-/// only `size`, `mtime_ns`, the scan it was seen in and its `state` change, so
+/// only `size`, `mtime_ns` and its `state` change, so
 /// nothing is re-extracted or re-embedded (SPEC.md §5.4 step 4).
 pub fn touch_unchanged(
     conn: &Connection,
     file_id: i64,
     size: u64,
     mtime_ns: i64,
-    scan_id: i64,
     state: FileState,
 ) -> Result<()> {
     conn.execute(
-        "UPDATE files SET size = ?2, mtime_ns = ?3, seen_scan_id = ?4, state = ?5,
+        "UPDATE files SET size = ?2, mtime_ns = ?3, state = ?4,
                 attempts = 0, next_attempt_at = NULL
          WHERE id = ?1",
-        params![file_id, size as i64, mtime_ns, scan_id, state],
+        params![file_id, size as i64, mtime_ns, state],
     )?;
     Ok(())
 }

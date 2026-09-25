@@ -109,8 +109,27 @@ fn find_old_home(conn: &Connection, entry: &discovery::WalkEntry) -> Result<Opti
 pub struct PathScan {
     pub summary: ScanSummary,
     /// Rows at or under the paths that were not found there.
-    pub unseen: Vec<i64>,
+    pub unseen: Vec<Unseen>,
+}
+
+/// A row a scan did not find: a deletion candidate until a later scan sees
+/// it again (a move claimed it, or it was recreated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unseen {
+    pub id: i64,
+    /// The scan that missed it.
     pub scan_id: i64,
+}
+
+impl Unseen {
+    /// Kept undecided until `until`, then deleted if still unseen.
+    pub fn hold_until(self, until: std::time::Instant) -> Held {
+        Held {
+            id: self.id,
+            scan_id: self.scan_id,
+            until,
+        }
+    }
 }
 
 /// Reconciles only `paths` (what the watcher reported): each is looked at on
@@ -135,7 +154,6 @@ pub fn scan_paths(
             summary: reconcile_all(conn, options)?,
             // `reconcile_all` settled its own deletions: nothing to hold.
             unseen: Vec::new(),
-            scan_id: 0,
         });
     }
     let scan_id = next_scan_id(conn)?;
@@ -173,8 +191,10 @@ pub fn scan_paths(
     tx.commit()?;
     Ok(PathScan {
         summary,
-        unseen,
-        scan_id,
+        unseen: unseen
+            .into_iter()
+            .map(|id| Unseen { id, scan_id })
+            .collect(),
     })
 }
 
@@ -221,7 +241,7 @@ pub fn reconcile_root(
     root_path: &Path,
     options: &IndexRootOptions,
     scan_id: i64,
-) -> Result<(ScanSummary, Vec<i64>)> {
+) -> Result<(ScanSummary, Vec<Unseen>)> {
     let entries = discovery::walk(root_path, &options.walk_options())?;
     let tx = conn.transaction()?;
     let mut summary = ScanSummary::default();
@@ -232,7 +252,10 @@ pub fn reconcile_root(
         "UPDATE roots SET last_full_scan_at = unixepoch() WHERE id = ?1",
         [root_id],
     )?;
-    let unseen = files::unseen(&tx, root_id, scan_id)?;
+    let unseen = files::unseen(&tx, root_id, scan_id)?
+        .into_iter()
+        .map(|id| Unseen { id, scan_id })
+        .collect();
     tx.commit()?;
     Ok((summary, unseen))
 }
@@ -309,7 +332,7 @@ pub fn reconcile_roots(
         summary += found;
         unseen.extend(gone);
     }
-    summary.removed = remove_unseen(conn, unseen, scan_id)?;
+    summary.removed = remove_unseen(conn, unseen)?;
     Ok(summary)
 }
 
@@ -328,19 +351,12 @@ pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Opti
     reconcile_roots(conn, options, &back).map(Some)
 }
 
-/// Deletes the candidates still unseen by `scan_id` (a later root's walk may
-/// have claimed one as a move) with everything derived from them. Returns how
-/// many were deleted.
-pub fn remove_unseen(conn: &mut Connection, unseen: Vec<i64>, scan_id: i64) -> Result<u32> {
+/// Deletes the candidates still unseen (a later root's walk may have claimed
+/// one as a move) with everything derived from them. Returns how many were
+/// deleted.
+pub fn remove_unseen(conn: &mut Connection, unseen: Vec<Unseen>) -> Result<u32> {
     let now = std::time::Instant::now();
-    let mut held = unseen
-        .into_iter()
-        .map(|id| Held {
-            id,
-            scan_id,
-            until: now,
-        })
-        .collect();
+    let mut held = unseen.into_iter().map(|u| u.hold_until(now)).collect();
     settle_held(conn, &mut held, now)
 }
 
@@ -365,7 +381,7 @@ mod tests {
     ) -> Result<ScanSummary> {
         let scan = scan_paths(conn, options, paths)?;
         let mut summary = scan.summary;
-        summary.removed += remove_unseen(conn, scan.unseen, scan.scan_id)?;
+        summary.removed += remove_unseen(conn, scan.unseen)?;
         Ok(summary)
     }
 
@@ -399,13 +415,11 @@ mod tests {
         }
 
         fn run(&mut self) -> IndexSummary {
-            let scan_id = next_scan_id(&self.conn).unwrap();
             index_root(
                 &mut self.conn,
                 self.root.id,
                 &self.root.path,
                 &self.options,
-                scan_id,
                 &IndexContext::new(self.embedder.clone()),
             )
             .unwrap()
@@ -458,9 +472,8 @@ mod tests {
         fs::create_dir(&child_dir).unwrap();
         fs::write(child_dir.join("old.txt"), "already indexed").unwrap();
         let child = roots::add(&conn, &child_dir).unwrap();
-        let scan_id = next_scan_id(&conn).unwrap();
         let ctx = IndexContext::new(Arc::new(FakeEmbedder));
-        index_root(&mut conn, child.id, &child.path, &options, scan_id, &ctx).unwrap();
+        index_root(&mut conn, child.id, &child.path, &options, &ctx).unwrap();
         fs::write(parent.path().join("new.txt"), "brand new").unwrap();
 
         let (root, collapsed) = roots::add_collapsing(&conn, parent.path()).unwrap();
@@ -576,7 +589,7 @@ mod tests {
             unseen.extend(gone);
             moved += found.moved;
         }
-        let removed = remove_unseen(&mut s.conn, unseen, scan_id).unwrap();
+        let removed = remove_unseen(&mut s.conn, unseen).unwrap();
 
         assert_eq!((moved, removed), (1, 0));
         assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
@@ -871,11 +884,7 @@ mod tests {
     fn held_from(scan: PathScan, until: std::time::Instant) -> Vec<Held> {
         scan.unseen
             .into_iter()
-            .map(|id| Held {
-                id,
-                scan_id: scan.scan_id,
-                until,
-            })
+            .map(|u| u.hold_until(until))
             .collect()
     }
 

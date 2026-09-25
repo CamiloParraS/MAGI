@@ -211,13 +211,9 @@ pub(crate) fn run(
             WriteJob::Paths(paths) => {
                 match scan_paths(&mut conn, &current(&options), &paths) {
                     Ok(scan) => {
-                        for id in scan.unseen {
-                            if !held.iter().any(|h| h.id == id) {
-                                held.push(Held {
-                                    id,
-                                    scan_id: scan.scan_id,
-                                    until: Instant::now() + HOLD,
-                                });
+                        for unseen in scan.unseen {
+                            if !held.iter().any(|h| h.id == unseen.id) {
+                                held.push(unseen.hold_until(Instant::now() + HOLD));
                             }
                         }
                         settle(&mut conn, &mut held, &stats);

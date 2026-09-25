@@ -60,7 +60,6 @@ pub(crate) fn begin(
     conn: &Connection,
     action: Action,
     roots: &HashMap<i64, PathBuf>,
-    scan_id: i64,
 ) -> (FileStep, Option<Job>) {
     let (file, entry) = match action {
         Action::Delete(id) => return (FileStep::Delete(id), None),
@@ -78,7 +77,6 @@ pub(crate) fn begin(
         root_id: file.root_id,
         root_path: root_path.clone(),
         entry,
-        scan_id,
         stored,
     };
     (FileStep::Start(file.id), Some(job))
@@ -132,7 +130,6 @@ fn apply_as(conn: &mut Connection, step: FileStep, writer: Writer) -> Result<Opt
                 job.stored.id,
                 job.entry.size,
                 job.entry.mtime_ns,
-                job.scan_id,
                 state,
             )?;
             Ok(Some(Status::Unchanged))
@@ -249,9 +246,8 @@ mod tests {
     #[test]
     fn a_stable_file_starts_indexing() {
         let mut f = Fixture::new();
-        let (step, job) = begin(&f.conn, f.stable("a.txt"), &f.roots, 7);
+        let (step, job) = begin(&f.conn, f.stable("a.txt"), &f.roots);
         let job = job.expect("a job to extract");
-        assert_eq!(job.scan_id, 7);
         assert!(matches!(step, FileStep::Start(id) if id == job.stored.id));
         assert!(apply(&mut f.conn, step).unwrap().is_none(), "not counted");
         assert_eq!(f.state(job.stored.id), Some(FileState::Indexing));
@@ -268,7 +264,7 @@ mod tests {
         };
         let id = file.id;
         files::delete_file(&mut f.conn, id).unwrap();
-        let (step, job) = begin(&f.conn, action, &f.roots, 1);
+        let (step, job) = begin(&f.conn, action, &f.roots);
         assert!(job.is_none());
         assert!(matches!(step, FileStep::Delete(d) if d == id));
         assert!(matches!(
@@ -280,13 +276,13 @@ mod tests {
     #[test]
     fn gone_and_failed_stats_pass_straight_through() {
         let f = Fixture::new();
-        let (step, job) = begin(&f.conn, Action::Delete(3), &f.roots, 1);
+        let (step, job) = begin(&f.conn, Action::Delete(3), &f.roots);
         assert!(job.is_none() && matches!(step, FileStep::Delete(3)));
         let fail = Action::Fail {
             id: 4,
             message: "busy".into(),
         };
-        let (step, job) = begin(&f.conn, fail, &f.roots, 1);
+        let (step, job) = begin(&f.conn, fail, &f.roots);
         assert!(job.is_none());
         assert!(matches!(
             step,
@@ -301,7 +297,7 @@ mod tests {
     #[test]
     fn only_a_row_still_indexing_takes_a_result() {
         let mut f = Fixture::new();
-        let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots, 1);
+        let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots);
         let job = job.unwrap();
         let id = job.stored.id;
         apply(&mut f.conn, start).unwrap();
@@ -326,12 +322,33 @@ mod tests {
         assert_eq!(f.state(id), None);
     }
 
+    /// Only scans say when a row was last seen: storing a result must not move
+    /// it, or a result dispatched before a later scan would set it back.
+    #[test]
+    fn a_result_leaves_seen_scan_id_to_the_scans() {
+        let mut f = Fixture::new();
+        let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots);
+        let job = job.unwrap();
+        apply(&mut f.conn, start).unwrap();
+        files::mark_seen(&f.conn, job.stored.id, 5).unwrap();
+        apply(&mut f.conn, keep(&job)).unwrap();
+        let seen: i64 = f
+            .conn
+            .query_row(
+                "SELECT seen_scan_id FROM files WHERE id = ?1",
+                [job.stored.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(seen, 5);
+    }
+
     /// The one-shot run is the only writer: nothing can queue a file again
     /// mid-flight, so it writes no `indexing` mark and its results still land.
     #[test]
     fn a_lone_writer_skips_the_indexing_mark() {
         let mut f = Fixture::new();
-        let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots, 1);
+        let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots);
         let job = job.unwrap();
         assert!(apply_alone(&mut f.conn, start).unwrap().is_none());
         assert_eq!(f.state(job.stored.id), Some(FileState::Pending));

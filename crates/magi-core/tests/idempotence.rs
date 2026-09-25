@@ -34,7 +34,6 @@ fn indexing_fixture_corpus_twice_is_idempotent() {
         root.id,
         &root_path,
         &options,
-        1,
         &IndexContext::new(embedder.clone()),
     )
     .unwrap();
@@ -47,7 +46,6 @@ fn indexing_fixture_corpus_twice_is_idempotent() {
         root.id,
         &root_path,
         &options,
-        2,
         &IndexContext::new(embedder.clone()),
     )
     .unwrap();

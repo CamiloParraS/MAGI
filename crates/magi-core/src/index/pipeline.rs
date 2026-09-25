@@ -19,7 +19,7 @@ use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::ocr::{NoOcr, OcrEngine};
 use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
-use crate::watch::reconcile::{reconcile_root, remove_unseen};
+use crate::watch::reconcile::{next_scan_id, reconcile_root, remove_unseen};
 
 use super::change::{self, Found};
 use super::gate::ImageGate;
@@ -124,9 +124,8 @@ pub struct IndexSummary {
 /// model, engine or pipeline-version change are re-done even though their
 /// content is identical ([`requeue_on_model_change`]).
 ///
-/// `scan_id` must be larger than on the previous run
-/// ([`crate::watch::reconcile::next_scan_id`]): rows not seen by this scan are
-/// the deletions. A root that is missing or unreadable keeps its rows and its
+/// Each run is a new scan ([`next_scan_id`]): rows it does not see are the
+/// deletions. A root that is missing or unreadable keeps its rows and its
 /// status says why (SPEC.md §5.4).
 ///
 /// One-shot and synchronous: no watcher or worker threads (M5, later slices).
@@ -135,7 +134,6 @@ pub fn index_root(
     root_id: i64,
     root_path: &Path,
     options: &IndexRootOptions,
-    scan_id: i64,
     ctx: &IndexContext,
 ) -> Result<IndexSummary> {
     files::reset_indexing_to_pending(conn)?;
@@ -154,14 +152,15 @@ pub fn index_root(
         return Ok(IndexSummary::default());
     }
 
+    let scan_id = next_scan_id(conn)?;
     let (found, unseen) = reconcile_root(conn, root_id, root_path, options, scan_id)?;
     let mut summary = IndexSummary {
         unchanged: found.unchanged,
         moved: found.moved,
-        removed: remove_unseen(conn, unseen, scan_id)?,
+        removed: remove_unseen(conn, unseen)?,
         ..IndexSummary::default()
     };
-    drain_pending(conn, ctx, options, scan_id, &mut summary)?;
+    drain_pending(conn, ctx, options, &mut summary)?;
     Ok(summary)
 }
 
@@ -173,7 +172,6 @@ fn drain_pending(
     conn: &mut Connection,
     ctx: &IndexContext,
     options: &IndexRootOptions,
-    scan_id: i64,
     summary: &mut IndexSummary,
 ) -> Result<()> {
     let root_paths: HashMap<i64, PathBuf> = roots::list(conn)?
@@ -195,7 +193,7 @@ fn drain_pending(
                 },
                 Err(e) => scheduler::gone_or_failed(pending.id, &e),
             };
-            let (step, job) = lifecycle::begin(conn, action, &root_paths, scan_id);
+            let (step, job) = lifecycle::begin(conn, action, &root_paths);
             count(summary, lifecycle::apply_alone(conn, step)?);
             if let Some(job) = job {
                 let step = index_file(ctx, options, job)?;
@@ -231,7 +229,6 @@ pub(crate) struct Job {
     pub root_id: i64,
     pub root_path: PathBuf,
     pub entry: WalkEntry,
-    pub scan_id: i64,
     /// The file's row: every queued file has one.
     pub stored: StoredFile,
 }
@@ -463,7 +460,9 @@ pub(crate) fn store_embedded(
         state: outcome.state,
         skip_reason: outcome.skip_reason,
         error: outcome.error.as_deref(),
-        seen_scan_id: job.scan_id,
+        // Only inserts use it, and the row exists (a result for a vanished
+        // row is dropped): scans own `seen_scan_id`.
+        seen_scan_id: 0,
         content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
         thumb_key: thumb_key.as_deref(),
     };
@@ -743,7 +742,6 @@ mod tests {
             root_id,
             root_path,
             &default_options(),
-            1,
             &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap()
@@ -807,7 +805,6 @@ mod tests {
             root_id,
             &root_path,
             &options,
-            1,
             &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
@@ -847,7 +844,6 @@ mod tests {
             root_path: root_path.clone(),
             stored: files::get_stored(&conn, &path).unwrap().unwrap(),
             entry,
-            scan_id: 1,
         };
 
         let step = index_file(
@@ -891,7 +887,6 @@ mod tests {
             root_path: root_path.to_path_buf(),
             stored: files::get_stored(conn, &path).unwrap().unwrap(),
             entry,
-            scan_id: 1,
         };
         let ctx = IndexContext::new(Arc::new(FakeEmbedder));
         let Extracted::Fresh(fresh) = prepare(&ctx, &default_options(), &job) else {
@@ -1008,7 +1003,6 @@ mod tests {
             root_id,
             &root_path,
             &default_options(),
-            2,
             &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
@@ -1302,7 +1296,6 @@ mod tests {
             root_id,
             &root_path,
             &options,
-            1,
             &IndexContext::new(Arc::new(FakeEmbedder)),
         )
         .unwrap();
@@ -1325,7 +1318,6 @@ mod tests {
             root_id,
             &root_path,
             &default_options(),
-            1,
             &IndexContext::new(Arc::new(FlakyEmbedder)),
         )
         .unwrap();
@@ -1360,7 +1352,6 @@ mod tests {
             root_id,
             &root_path,
             &default_options(),
-            2,
             &IndexContext::new(Arc::new(OtherFakeEmbedder)),
         )
         .unwrap();
@@ -1377,14 +1368,12 @@ mod tests {
         root_id: i64,
         root_path: &Path,
         embedder: Arc<dyn TextEmbedder>,
-        scan_id: i64,
     ) -> IndexSummary {
         index_root(
             conn,
             root_id,
             root_path,
             &default_options(),
-            scan_id,
             &IndexContext::new(embedder),
         )
         .unwrap()
@@ -1394,6 +1383,19 @@ mod tests {
         conn.query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
+    /// Each run takes the next scan id, so a later scan of any kind gets a
+    /// larger one and reads rows it did not see as deletions.
+    #[test]
+    fn index_root_takes_a_new_scan_id_each_run() {
+        let (_db, root_dir, mut conn, root_id) = open_test_db();
+        let root = crate::paths::canonicalize(root_dir.path()).unwrap();
+        fs::write(root.join("notes.txt"), "words").unwrap();
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
+        assert_eq!(scalar(&conn, "SELECT seen_scan_id FROM files"), 2);
+        assert_eq!(crate::watch::reconcile::next_scan_id(&conn).unwrap(), 3);
+    }
+
     #[test]
     fn an_unchanged_file_is_not_embedded_again() {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
@@ -1401,9 +1403,9 @@ mod tests {
         fs::write(root.join("notes.txt"), "the same words").unwrap();
         let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
 
-        let first = run(&mut conn, root_id, &root, embedder.clone(), 1);
+        let first = run(&mut conn, root_id, &root, embedder.clone());
         let embedded = embedder.chunks();
-        let second = run(&mut conn, root_id, &root, embedder.clone(), 2);
+        let second = run(&mut conn, root_id, &root, embedder.clone());
 
         assert_eq!((first.indexed, first.unchanged), (1, 0));
         assert_eq!((second.indexed, second.unchanged), (0, 1));
@@ -1419,7 +1421,7 @@ mod tests {
         let file = root.join("notes.txt");
         fs::write(&file, "the same words").unwrap();
         let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
-        run(&mut conn, root_id, &root, embedder.clone(), 1);
+        run(&mut conn, root_id, &root, embedder.clone());
         let embedded = embedder.chunks();
         let old_mtime = scalar(&conn, "SELECT mtime_ns FROM files");
 
@@ -1431,7 +1433,7 @@ mod tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
-        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone());
 
         assert_eq!((summary.indexed, summary.unchanged), (0, 1));
         assert_eq!(embedder.chunks(), embedded);
@@ -1449,11 +1451,11 @@ mod tests {
         let file = root.join("notes.txt");
         fs::write(&file, "alpha apple").unwrap();
         let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
-        run(&mut conn, root_id, &root, embedder.clone(), 1);
+        run(&mut conn, root_id, &root, embedder.clone());
         let embedded = embedder.chunks();
 
         fs::write(&file, "beta banana and a longer second sentence").unwrap();
-        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone());
 
         assert_eq!(summary.indexed, 1);
         assert!(embedder.chunks() > embedded, "the new content is embedded");
@@ -1478,9 +1480,9 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
         let v1 = Arc::new(CountingEmbedder::new(FakeEmbedder));
-        run(&mut conn, root_id, &root, v1.clone(), 1);
+        run(&mut conn, root_id, &root, v1.clone());
 
-        let same = run(&mut conn, root_id, &root, v1.clone(), 2);
+        let same = run(&mut conn, root_id, &root, v1.clone());
         assert_eq!(
             (same.indexed, same.unchanged),
             (0, 1),
@@ -1488,7 +1490,7 @@ mod tests {
         );
 
         let v2 = Arc::new(CountingEmbedder::new(FakeEmbedder).with_model_id("fake-v2"));
-        let changed = run(&mut conn, root_id, &root, v2.clone(), 3);
+        let changed = run(&mut conn, root_id, &root, v2.clone());
         assert_eq!((changed.indexed, changed.unchanged), (1, 0));
         assert!(
             v2.chunks() > 0,
@@ -1499,7 +1501,7 @@ mod tests {
             Some("fake-v2")
         );
 
-        let after = run(&mut conn, root_id, &root, v2.clone(), 4);
+        let after = run(&mut conn, root_id, &root, v2.clone());
         assert_eq!(
             (after.indexed, after.unchanged),
             (0, 1),
@@ -1513,11 +1515,11 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
         let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
-        run(&mut conn, root_id, &root, embedder.clone(), 1);
+        run(&mut conn, root_id, &root, embedder.clone());
         conn.execute("UPDATE files SET pipeline_version = 0", [])
             .unwrap();
 
-        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone());
 
         assert_eq!((summary.indexed, summary.unchanged), (1, 0));
         assert_eq!(
@@ -1548,15 +1550,15 @@ mod tests {
             ocr: Arc::new(NamedOcr(ocr)),
             ..IndexContext::new(Arc::new(FakeEmbedder))
         };
-        let go = |conn: &mut Connection, ctx: &IndexContext, scan| {
-            index_root(conn, root_id, &root, &default_options(), scan, ctx).unwrap()
+        let go = |conn: &mut Connection, ctx: &IndexContext| {
+            index_root(conn, root_id, &root, &default_options(), ctx).unwrap()
         };
 
-        go(&mut conn, &with("ocr-a"), 1);
-        let same = go(&mut conn, &with("ocr-a"), 2);
+        go(&mut conn, &with("ocr-a"));
+        let same = go(&mut conn, &with("ocr-a"));
         assert_eq!((same.indexed, same.unchanged), (0, 2));
 
-        let changed = go(&mut conn, &with("ocr-b"), 3);
+        let changed = go(&mut conn, &with("ocr-b"));
         assert_eq!(
             (changed.indexed, changed.unchanged),
             (1, 1),
@@ -1579,7 +1581,7 @@ mod tests {
         fs::copy(truncated, root.join("a_broken.pdf")).unwrap();
         fs::write(root.join("z_fine.txt"), "still gets indexed").unwrap();
 
-        let summary = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
+        let summary = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
 
         assert_eq!((summary.indexed, summary.errored), (1, 1));
         let broken = db::files::get_by_path(&conn, &root.join("a_broken.pdf"))
@@ -1604,7 +1606,7 @@ mod tests {
             .join("../../fixtures/corpus/edge/truncated.pdf");
         let path = root.join("broken.pdf");
         fs::copy(truncated, &path).unwrap();
-        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
         let state = |conn: &Connection| db::files::get_by_path(conn, &path).unwrap().unwrap().state;
         assert_eq!(state(&conn), "error");
 
@@ -1615,12 +1617,12 @@ mod tests {
             .unwrap()
             .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
             .unwrap();
-        let touched = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 2);
+        let touched = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
         assert_eq!((touched.errored, touched.unchanged), (1, 0));
         assert_eq!(state(&conn), "error");
 
         db::files::retry_errors(&conn).unwrap();
-        let retried = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 3);
+        let retried = run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
         assert_eq!(
             retried.errored, 1,
             "extracted again (the scan saw the same stat)"
@@ -1634,14 +1636,14 @@ mod tests {
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
         let embedder = Arc::new(CountingEmbedder::new(FakeEmbedder));
-        run(&mut conn, root_id, &root, embedder.clone(), 1);
+        run(&mut conn, root_id, &root, embedder.clone());
         let embedded = embedder.chunks();
         let id = scalar(&conn, "SELECT id FROM files");
         // What a reconciliation scan does when it sees a different mtime.
         db::files::mark_pending(&conn, id).unwrap();
         conn.execute("UPDATE files SET mtime_ns = 1", []).unwrap();
 
-        let summary = run(&mut conn, root_id, &root, embedder.clone(), 2);
+        let summary = run(&mut conn, root_id, &root, embedder.clone());
 
         assert_eq!((summary.indexed, summary.unchanged), (0, 1));
         assert_eq!(embedder.chunks(), embedded);
@@ -1658,11 +1660,11 @@ mod tests {
         let (_db, root_dir, mut conn, root_id) = open_test_db();
         let root = crate::paths::canonicalize(root_dir.path()).unwrap();
         fs::write(root.join("notes.txt"), "the same words").unwrap();
-        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 1);
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
         conn.execute("UPDATE files SET state = 'indexing'", [])
             .unwrap();
 
-        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder), 2);
+        run(&mut conn, root_id, &root, Arc::new(FakeEmbedder));
 
         let state: String = conn
             .query_row("SELECT state FROM files", [], |r| r.get(0))

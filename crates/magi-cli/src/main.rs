@@ -15,7 +15,6 @@ use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
-use magi_core::watch::reconcile::next_scan_id;
 use magi_core::{Engine, config, db, paths};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
@@ -191,13 +190,11 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     };
 
     let options = IndexRootOptions::from_config(&config.indexing)?;
-    let scan_id = next_scan_id(&conn)?;
     let summary = index_root(
         &mut conn,
         root_row.id,
         &root_row.path,
         &options,
-        scan_id,
         &IndexContext {
             embedder: embedder.clone(),
             ocr: ocr_from_env(),
