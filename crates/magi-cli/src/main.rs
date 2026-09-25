@@ -327,6 +327,30 @@ impl Sampler {
     }
 }
 
+/// Frees the text model and its shared tokenizer as soon as the query is
+/// embedded, so they aren't still resident while the SigLIP text tower and
+/// its Gemma tokenizer load (NFR-12: ~490 MB off the peak). One-shot CLI
+/// only; a long-lived process keeps them cached.
+struct OneShotQuery<'a>(&'a dyn TextEmbedder);
+
+impl TextEmbedder for OneShotQuery<'_> {
+    fn model_id(&self) -> &str {
+        self.0.model_id()
+    }
+    fn dim(&self) -> usize {
+        self.0.dim()
+    }
+    fn embed_passages(&self, texts: &[&str]) -> magi_core::Result<Vec<Vec<f32>>> {
+        self.0.embed_passages(texts)
+    }
+    fn embed_query(&self, text: &str) -> magi_core::Result<Vec<f32>> {
+        let v = self.0.embed_query(text);
+        self.0.unload_if_idle(Duration::ZERO);
+        magi_core::embed::manager::unload_text_tokenizer_if_idle(Duration::ZERO);
+        v
+    }
+}
+
 fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
     let conn = db::open(&db_path())?;
     match mode {
@@ -343,7 +367,7 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
             let embedder = embedder_from_env()?;
             let hits = magi_core::search::hybrid_search(
                 &conn,
-                embedder.as_ref(),
+                &OneShotQuery(embedder.as_ref()),
                 Some(image_embedder_from_env().as_ref()),
                 query,
                 limit,
@@ -364,4 +388,41 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
         other => anyhow::bail!("unsupported search mode {other:?}; use \"fts\" or \"hybrid\""),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<&'static str>>);
+
+    impl TextEmbedder for Recorder {
+        fn model_id(&self) -> &str {
+            "recorder"
+        }
+        fn dim(&self) -> usize {
+            1
+        }
+        fn embed_passages(&self, texts: &[&str]) -> magi_core::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![0.0]).collect())
+        }
+        fn embed_query(&self, _text: &str) -> magi_core::Result<Vec<f32>> {
+            self.0.lock().unwrap().push("embed");
+            Ok(vec![1.0])
+        }
+        fn unload_if_idle(&self, idle: Duration) {
+            assert_eq!(idle, Duration::ZERO);
+            self.0.lock().unwrap().push("unload");
+        }
+    }
+
+    #[test]
+    fn one_shot_embedder_unloads_right_after_the_query() {
+        let inner = Recorder::default();
+        let v = OneShotQuery(&inner).embed_query("q").unwrap();
+        assert_eq!(v, vec![1.0]);
+        assert_eq!(*inner.0.lock().unwrap(), vec!["embed", "unload"]);
+    }
 }
