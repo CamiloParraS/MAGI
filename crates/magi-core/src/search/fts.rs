@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
 
+use crate::db::roots::searchable_sql;
 use crate::error::Result;
 use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
@@ -30,16 +31,19 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
         return Ok(Vec::new());
     }
 
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(concat!(
         "SELECT f.id, f.path, f.file_name, f.mtime_ns,
-                snippet(chunks_fts, 0, '[', ']', '...', 10)
-         FROM chunks_fts
-         JOIN chunks c ON c.id = chunks_fts.rowid
-         JOIN files f ON f.id = c.file_id
-         WHERE chunks_fts MATCH ?1
-         ORDER BY bm25(chunks_fts), c.id
-         LIMIT ?2",
-    )?;
+                    snippet(chunks_fts, 0, '[', ']', '...', 10)
+             FROM chunks_fts
+             JOIN chunks c ON c.id = chunks_fts.rowid
+             JOIN files f ON f.id = c.file_id
+             JOIN roots r ON r.id = f.root_id
+             WHERE chunks_fts MATCH ?1 AND ",
+        searchable_sql!(),
+        "
+             ORDER BY bm25(chunks_fts), c.id
+             LIMIT ?2"
+    ))?;
     let rows = stmt
         .query_map(params![sanitized, chunk_fetch_limit(limit)], |row| {
             Ok(FileHit {
@@ -90,7 +94,7 @@ mod tests {
             size: body.len() as u64,
             mtime_ns: 0,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
@@ -183,7 +187,7 @@ mod tests {
             size: 0,
             mtime_ns: 0,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,

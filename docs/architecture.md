@@ -23,12 +23,22 @@ DTOs live in `crates/magi-core/src/dto.rs` and are exported to
 `apps/desktop/src/bindings/` via `ts-rs`. See SPEC.md §5.7 for the full
 command table (populated as commands land, starting M1).
 
+So far (M5 Slice 7, serde only; the `ts-rs` derive comes with M6):
+`IndexStatus { state: idle|scanning|indexing|paused, queued, indexed, skipped,
+errors, current_file?, roots: RootStatus[] }` and `RootStatus { id, path,
+enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
+"Control surface" below for the `EngineHandle` methods behind them.
+
 ## Database schema
 
-See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/0001_init.sql`.
-`db::open()` registers `sqlite-vec`, sets `journal_mode=WAL`/`foreign_keys=ON`/
-`busy_timeout`, and runs any pending migrations (tracked in
-`schema_migrations`, applied at most once each). The database file lives at
+See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
+(`0001_init.sql`; `0002_files_indexes.sql` adds the partial indexes
+`idx_files_size`, for the move lookup, and `idx_files_pending`, which
+`next_pending` reads in order with `INDEXED BY`). `db::open()` registers `sqlite-vec`,
+sets `journal_mode=WAL`/`synchronous=NORMAL`/`foreign_keys=ON`/`busy_timeout`,
+and runs any pending migrations (tracked in `schema_migrations`, applied at
+most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
+(`embed::embedding_to_blob`), not JSON text. The database file lives at
 `<data_dir>/magi.db`.
 
 ## Config
@@ -38,12 +48,21 @@ defaults on first run; `config::save()` writes to a temp file and renames it
 into place so a crash mid-save can't corrupt the existing config.
 `Config::validate()` rejects malformed exclude globs and roots whose path
 doesn't exist on disk.
+The default `exclude_globs` also skip Unity's regenerated `Library` caches,
+`*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
+apply only when the config file is first written: an existing config keeps
+its own list.
 
 ## Roots
 
 `db::roots` manages the `roots` table. `roots::add()` canonicalizes the path
-and rejects it if it's missing, already registered, or nested with (an
-ancestor or descendant of) an existing root.
+and rejects it if it's missing, already registered, or inside an existing
+root. Existing roots _inside_ the new one are collapsed into it
+(`roots::add_collapsing`): in one transaction their files are re-pointed via
+`files::rename_file_to` (new `root_id`, `rel_path` relative to the parent, and
+filename chunk text), and the child root rows are deleted. Chunks and vectors
+are kept, so the parent's first scan finds those files unchanged and indexes
+only what's new. Roots never overlap, so every file belongs to exactly one root.
 
 ## Embeddings and hybrid search
 
@@ -115,7 +134,12 @@ so it's unit-tested without needing a model. Counts are memoized per
 distinct word unit: a document has orders of magnitude fewer distinct words
 than words, and each miss is a real tokenizer call. `extract::text::TextExtractor`
 and `extract::paginated_doc` (PDF/DOCX/PPTX/XLSX) call `chunk_text`
-unchanged; `extract::code`'s tree-sitter/line-window chunker is unaffected.
+unchanged. `TextExtractor` passes a `.csv`/`.json` file's first 64 KB only,
+cut after the last line break (data, not prose: a 200 MB export would
+otherwise be ~150k chunks). `extract::code` merges adjacent top-level
+symbols while their summed token count fits `TARGET_MAX_TOKENS`, so a run of
+`use`/`mod` lines is one chunk; any piece still too long goes through
+`chunk_text`.
 
 ## Model manifest and manager
 
@@ -134,13 +158,15 @@ local folder instead of the network. Both the download loop and the
 `ByteFetcher` HTTP fetch are separate (dependency-injected) so the
 resume/verify/atomic-rename logic is unit-tested without any network
 access. `embed::manager::shared_text_tokenizer()` lazily loads and fully
-configures `tokenizer.json` from the text slot's directory once (an
-`OnceLock`, mirroring `extract::pdf`'s `shared_pdfium`) — `TruncationParams`
+configures `tokenizer.json` from the text slot's directory into a static
+`ModelSlot<Arc<Tokenizer>>`, which the resource monitor frees after the same
+idle timeout as the models (`unload_text_tokenizer_if_idle`); callers hold
+an `Arc` clone, so unloading never pulls it out from under one — `TruncationParams`
 (`max_length = chunk::MAX_TOKENS`, i.e. 512) and `PaddingParams`
 (`BatchLongest`, `pad_id` looked up via `tokenizer.token_to_id("<pad>")`
 rather than trusting the ONNX model's own `config.json`, which disagrees
 for this model). Both `chunk::count_tokens` and `embed::e5::E5Embedder`
-borrow this single instance rather than each parsing their own copy —
+share this single instance rather than each parsing their own copy —
 ADR-0005's RSS investigation found the earlier two-copies design cost
 ~200-260 MB of pure duplication.
 
@@ -244,8 +270,8 @@ Gemma-tokenized with EOS, padded to 64.
 **Pipeline wiring.** `index::pipeline::IndexContext` carries `embedder`, `ocr`
 (`Arc<dyn OcrEngine>`) and an optional `image_embedder`
 (`Arc<dyn ImageEmbedder>`; `None` leaves `vec_image` empty). `IndexContext::new`
-uses `NoOcr` and no image embedder. After a run `meta.image_model_id` records
-the image model, like `meta.text_model_id`. `files.content_hash` (blake3, every
+uses `NoOcr` and no image embedder. `meta.text_model_id`, `meta.image_model_id`
+and `meta.ocr_engine_id` record what produced the index (see "Change detection"). `files.content_hash` (blake3, every
 file whose bytes are read) and `files.thumb_key` are filled by the pipeline.
 `indexing.file_types` deserializes straight into `discovery::Kind`, so an
 unknown name fails config loading with serde's list of valid ones. Extraction
@@ -262,3 +288,236 @@ under the magi data directory, which the Tauri identifier cannot name.
 `rec.yml`) and `image` (`vision_model.onnx`, `text_model.onnx`,
 `tokenizer.json`), both pinned by revision and SHA-256. `ModelEntry::dim` is
 optional (OCR has no embedding width).
+
+## Change detection (M5)
+
+Slice 1 of M5 (docs/m5-plan.md) made indexing incremental. These are the
+contracts the rest of M5 builds on.
+
+**File states** (`files.state`): `pending -> indexing -> indexed | skipped |
+error`, with `attempts` and `next_attempt_at` for retries. `db::files` holds the
+transitions: `mark_pending`, `mark_indexing`, `reset_indexing_to_pending` (a
+crash leaves rows `indexing`; startup puts them back), `next_pending(now, limit)`
+(newest `mtime_ns` first, honouring `next_attempt_at`), and `record_failure`,
+which retries after 30 s, then 2 min, and gives up to `error` on the third
+failure (`backoff_secs`, `MAX_ATTEMPTS`).
+
+**Is this file unchanged?** Every rule lives in `index::change`. The scan
+queues a row whose root, size, mtime or `pipeline_version` differs from disk
+(`unchanged_on_disk`). For a queued file, `pipeline::prepare` then asks
+`change::keeps`, which updates only `size`, `mtime_ns` and `state` on a
+yes. A queued row's `state` is `pending`, so `keeps` reads the last result from
+the columns queuing leaves alone. It needs the current `PIPELINE_VERSION` and
+no `error` (kept until a result replaces it, even through `retry_errors`), and:
+
+1. for a file that will be extracted, a streamed blake3 hash equal to the stored
+   `content_hash` and no `skip_reason`, so `touch` and re-saves cost no
+   embedding;
+2. for a file that is not extracted (unsupported, disabled kind, too large), no
+   stored hash, and the same kind and `skip_reason` it would get again.
+
+Anything else is extracted, embedded and written by `upsert_file` in one
+transaction, which also stamps `pipeline_version`.
+
+**Stale rows.** `index::PIPELINE_VERSION` is bumped when extraction or chunking
+changes what a file's rows would contain. `index::requeue_on_model_change`
+compares `meta.text_model_id`, `meta.image_model_id` and `meta.ocr_engine_id`
+with the running components and, on a mismatch, calls `files::invalidate`:
+`state = 'pending'` and `pipeline_version = 0`, which is what defeats the
+hash-skip above. A text-model change invalidates every file, an image-model or
+OCR change only `kind = 'image'`. The stored ids are updated in the same
+transaction. A missing stored id is not a mismatch, and no image model configured
+leaves `image_model_id` alone. Old rows stay searchable until replaced.
+
+**Deleting.** `files::delete_files` (call inside a transaction) removes
+`vec_text`, chunks (their FTS rows follow through the trigger), `vec_image` and
+the file row, and returns the thumbnail keys; `remove_unreferenced_thumbnails`
+deletes a thumbnail after the commit only when no other row shares its key.
+`delete_file` wraps one file; `purge_root` covers a root. `roots::remove` now
+purges the root's files first, in the same transaction: before, it failed with a
+foreign-key error on any root that had been indexed.
+
+**Test instrumentation.** `embed::CountingEmbedder` wraps a `TextEmbedder` and
+counts `embed_passages` calls and chunks (`CountingEmbedder::new(FakeEmbedder)`), with
+`with_model_id` to simulate a model change.
+
+**Reconciliation** (`watch::reconcile`, Slice 2). `index_root` is
+`reconcile_root` -> `resolve_moves` -> drain `pending`. `reconcile_root` walks a
+root and, in one transaction, inserts unknown files as `pending`, marks files
+whose size, mtime or `pipeline_version` differ as `pending` (storing the new
+stat), and stamps everything else with the scan's `seen_scan_id`. Rows of the
+root with an older `seen_scan_id` come back as deletion candidates.
+`resolve_moves` renames a candidate in place (`files::rename_file`) when a
+brand-new `pending` row has the same size, kind and blake3 hash, and deletes the
+rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`); every scan
+takes its own, `index_root` included, and only scans write `seen_scan_id`
+(storing a result does not). Unseen rows carry the id of the scan that missed
+them (`reconcile::Unseen`). A move that claims a row still in the pipeline puts
+it back to `pending`, so its stale result, read at the old path, is dropped.
+
+**Root status.** `platform::FsProbe` maps a failed `read_dir`/`metadata` to
+`permission_denied` or `missing`; `roots::set_access` stores it. The rules live
+on `roots::Health` and `Root`, with SQL twins the queries splice in
+(`indexable_sql!`, `searchable_sql!`, `readable_sql!`):
+
+- **Indexable:** enabled and readable (`ok` or `watch_failed`). Only these
+  roots are scanned and indexed; the others keep their rows.
+- **Searchable:** enabled and not `missing`. An unreadable root stays
+  searchable, because its index is still right.
+
+## Engine (M5 Slice 3)
+
+`Engine::start` runs SPEC §5.4 startup steps 1, 2, 4 and 6, then five kinds of
+thread:
+
+```
+scheduler ──► extract workers (N) ──► embed worker (1) ──► writer (1) ──► DB
+    ▲  │            │ unchanged / retry ─────────────────────▲              │
+    │  └ deletes, state changes ───────────────────────────►│              │
+    └──────────────────── done (file id) ◄───────────────────┴──────────────┘
+```
+
+- **Scheduler** (own read connection): `pending` rows are the queue. It holds
+  each file until it has been stable (mtime over 3 s old and unchanged size
+  across two stats 1 s apart), hands out newest first, and never has more than
+  `2 * workers + 2` files in the pipeline. A file proven stable while the
+  pipeline is full waits as `Ready`, handed out when room frees without being
+  stat'd again. A row is released when the writer reports it done.
+- **Extract workers**: `pipeline::prepare`; unchanged files go straight to the
+  writer, the rest to the embed worker over a bounded channel.
+- **Embed worker**: takes one file plus whatever else is already queued, up to
+  16 chunks, and embeds them together (`pipeline::embed_group`: shortest
+  chunks first, a batch ends where lengths jump so a filename chunk is not
+  padded to a full body chunk; a failed batch falls back to one file at a
+  time). Batches of
+  at most 16 chunks; before each batch it waits while any `SearchGuard` is
+  alive (the priority lock), at most 5 s.
+- **Writer**: the only thread that writes. Jobs: mark indexing, store, keep,
+  retry, delete, reconcile. One transaction per file.
+
+`EngineHandle` (clone) offers `stats()`, `rescan()`, `search_pending()` and
+`shutdown()`. Shutdown drops queued pipeline work (rows stay `indexing`; the
+next start resets them) and applies everything already handed to the writer.
+Thread and channel details: `engine.rs`.
+
+## Watching (M5 Slice 4)
+
+`Engine::start` starts one debounced (2 s) `notify` watcher per accessible root
+before the first scan. A batch of events becomes `WriteJob::Paths(paths)`; the
+event _kinds_ are ignored except that access events are dropped and an error or
+overflow becomes a full rescan. The writer runs `reconcile::scan_paths`, which
+looks at each path on disk (file: queue it if wanted; folder: walk it; missing or
+now excluded: its rows are deletion candidates). Moves are matched from the new
+side: an unknown path whose size, kind and blake3 hash equal those of a row whose
+own path is gone takes over that row in the scan's transaction
+(`find_old_home`), so a rename, a folder rename or a move between roots keeps the
+row, chunks and vectors whichever half the OS reports first. Deletion candidates
+are held 5 s before deleting (`settle_held`), which gives the other root's
+watcher time to report the new path.
+
+A ticker thread (`watch::poller`) asks for a full scan every
+`reconcile_interval_hours`, after a wall-clock jump over 5 minutes, and every 15
+minutes while a root has no watcher (status `watch_failed`, or not accessible).
+
+Every 30 s tick also sends `WriteJob::Reprobe`: a root that is
+`permission_denied` or `missing` and probes readable again is reconciled
+(`reconcile::recover`), which clears its status. Only the roots that came back
+are walked (`reconcile_roots`).
+
+`EngineHandle::apply_indexing_config` replaces the shared indexing options and
+rescans. The stale-result rule: a result is stored only if its row is still
+`indexing`. A file re-queued by a watcher event while the pipeline works on it
+is processed again; one deleted, or whose root was removed, in the meantime is
+not brought back. Both drivers make every per-file state change through
+`index::lifecycle` (`begin`, then `apply` in the engine or `apply_alone` in the
+one-shot `index_root`, which as the only writer skips the `indexing` mark and
+this check).
+
+## Platform behaviour (M5 Slice 5)
+
+`platform::Os` implements SPEC §6's `CloudPlaceholder`, `PowerStatus` and
+`ThreadPriority`; the OS code lives in `platform/{windows,macos,linux}.rs`, the
+pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
+`platform/mod.rs` so every OS tests them.
+
+- **Cloud placeholders.** `WalkEntry::cloud_only` comes from metadata the walk
+  already has: Windows attributes `RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN |
+OFFLINE`, macOS `st_flags & SF_DATALESS` (0x40000000), never on Linux. Such a
+  file is stored `skipped` with `skip_reason = 'cloud_only'` and only its
+  filename chunk; nothing opens it (`plan_entry` checks first, move matching
+  does not hash it).
+- **Locked files.** An I/O error that `platform::is_locked` recognises (Windows
+  32/33) is retried through `files::record_locked`: the usual backoff, but the
+  attempt count stops one short of `MAX_ATTEMPTS`, so it never becomes `error`.
+- **Priority.** Extract and embed threads lower themselves: Windows
+  `THREAD_PRIORITY_BELOW_NORMAL`, Linux `setpriority(PRIO_PROCESS, 0, 10)` (per
+  thread on Linux), macOS QoS utility.
+- **Power.** `Os.on_battery()`: Windows `GetSystemPowerStatus`, Linux
+  `/sys/class/power_supply`, macOS `pmset -g batt`. Read by the monitor for
+  pause on battery (below).
+- **Unwatched roots.** A network share or mapped network drive (Windows) is
+  never watched, and a root whose watcher fails (inotify `ENOSPC` logs the
+  `sysctl` fix) is marked `watch_failed`; both are polled every 15 minutes.
+
+## Resource policy (M5 Slice 6)
+
+`index::resources` holds the policy as pure functions and one monitor thread
+(`magi-monitor`) started by the engine.
+
+- **Workers.** `worker_threads = 0` means `min(physical_cores / 2, total_ram_gb / 4)`
+  clamped to 1-4, with RAM rounded to whole GB (an "8 GB" machine reports about
+  7.8 GiB and still counts as 8). `sysinfo` (feature `system` only) gives total
+  RAM and physical cores.
+- **Low-memory mode** (8 GB or less): `idle_unload_minutes` is capped at 2. The
+  worker formula already gives at most 2 there.
+- **Models load on first use and unload when idle.** `TextEmbedder`,
+  `ImageEmbedder` and `OcrEngine` have `unload_if_idle(idle)` (no-op by default).
+  `E5Embedder`, `SigLipEmbedder` and `PaddleOcr` keep their ONNX sessions in a
+  `ModelSlot`; their `load()` only checks the files are there (and reads the
+  tokenizer / OCR dictionary), so a missing model still fails at startup.
+  `ModelSlot::unload_if_idle` uses `try_lock`: a model in use is not idle and is
+  never waited on. `PaddleOcr` waits at most 30 s for another extract worker's
+  OCR (`get_or_load_within`), so a hung run cannot pile up stuck threads.
+- **Monitor.** Every 10 s (or when woken) it reads available memory; below 1 GiB
+  (NFR-13) it pauses indexing and unloads the image model at once, and resumes
+  only above 1.25 GiB so memory hovering near 1 GiB does not flip the pause. With
+  `pause_on_battery`, being on battery (read at most once a minute) also pauses.
+  Each check also unloads models idle longer than the idle timeout, including
+  after searches.
+- **Pause.** `EngineHandle::is_paused()`. While paused the scheduler starts no
+  new files; files already in the pipeline finish, and watcher events are still
+  recorded as `pending`. `EngineHandle::simulate_low_memory(bool)` is the test
+  hook for item 17 (hidden from docs).
+
+## Control surface (M5 Slice 7)
+
+`EngineHandle` methods, the core of SPEC.md §5.7's commands:
+
+| Method                                 | Does                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status()`                             | `IndexStatus`: counts by state from a read connection, `paused` (user or monitor) over `scanning` (a full reconcile running) over `indexing` (anything `pending`/`indexing`) over `idle`. `current_file` is the file an extract worker last started, shown only while a row is `indexing`.                                                     |
+| `subscribe()`                          | A channel of `IndexStatus`, sent when it changes. The status thread checks twice a second but reads the database only after the writer applied a job, or the pause or scan flag flipped. Root status (including `permission_denied`) travels in `roots`.                                                                                       |
+| `pause()` / `resume()` / `is_paused()` | User pause, persisted in `meta.paused` (`1`/`0`) and restored at start. Same effect as the monitor's pause (`resources::Pause`).                                                                                                                                                                                                               |
+| `add_root(path)`                       | `roots::add_collapsing` (missing, duplicate and already-covered paths rejected against every root including disabled and missing ones: FR-1; roots inside the new path are collapsed into it, their files kept, and unwatched), probe, watch, then scan that root only (`WriteJob::ReconcileRoot`). Returns the root's status after the probe. |
+| `remove_root(id)`                      | Stops its watcher, purges its rows (`roots::remove`).                                                                                                                                                                                                                                                                                          |
+| `set_root_enabled(id, on)`             | Off: rows kept, hidden from search, not watched, its `pending` rows not handed out. On: watched, and that root scanned.                                                                                                                                                                                                                        |
+| `retry_errors()`                       | Every `error` row back to `pending` with attempts and backoff cleared.                                                                                                                                                                                                                                                                         |
+| `rescan()`, `apply_indexing_config()`  | As before (`rescan_all`, exclusions).                                                                                                                                                                                                                                                                                                          |
+
+Every write goes through the writer: `WriteJob::Exec` carries a closure and the
+handle waits for its reply, so root management stays ordered with the rest.
+`files::next_pending` hands out only rows of enabled roots with status `ok` or
+`watch_failed`.
+
+Scanning one root (`reconcile::reconcile_roots`) is enough for a root added,
+enabled or back: moves into it are matched from the new side, and a file moved
+out of it while it was disabled or missing was already claimed by the other
+root's watcher (a polled root may re-embed it once instead).
+
+`magi-cli daemon [--stats]` runs the engine headless on the dev data dir,
+prints a line per status change (and the roots when they change), and shuts
+down cleanly on Ctrl-C. `--stats` prints the process's CPU (averaged over the
+minute, 100% = one core), RSS and private memory once a minute. Private
+memory (`PrivateUsage` on Windows) is the idle number to compare: RSS moves
+with however much the OS trims the working set. Elsewhere that column is the
+virtual size.

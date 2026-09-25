@@ -10,6 +10,7 @@ pub use siglip::SigLipEmbedder;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use crate::error::Result;
 
@@ -19,28 +20,13 @@ pub const TEXT_EMBEDDING_DIM: usize = 384;
 /// Dimensionality of SigLIP 2 base embeddings (SPEC.md section 3).
 pub const IMAGE_EMBEDDING_DIM: usize = 768;
 
-/// Serializes an embedding as the JSON array text `vec_f32()` parses
-/// (sqlite-vec's documented insertion format — see
-/// https://github.com/asg017/sqlite-vec/blob/v0.1.9/site/features/knn.md).
-/// Shared by `db::files::upsert_file` (writes) and
-/// `search::vector::search_vector_text` (reads the query embedding) so the
-/// two sides of that round trip can't drift apart.
-///
-/// ponytail: text (de)serialization of ~384 floats per chunk is simpler
-/// and safer than hand-packing the raw little-endian blob `vec0` expects,
-/// at the cost of some CPU on inserts/queries. Switch to binding the raw
-/// bytes directly if indexing/search throughput profiling ever points here.
-pub(crate) fn embedding_to_json(embedding: &[f32]) -> String {
-    let mut s = String::with_capacity(embedding.len() * 12 + 2);
-    s.push('[');
-    for (i, x) in embedding.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push_str(&x.to_string());
-    }
-    s.push(']');
-    s
+/// An embedding as the raw f32 BLOB `vec_f32()` / `vec0` take directly
+/// (sqlite-vec 0.1.9 `fvec_from_value` memcpys it, so native byte order),
+/// instead of JSON text formatted here and parsed back there. Shared by
+/// `db::files::upsert_file` (writes) and `search::vector` (query
+/// embeddings) so both sides of the round trip stay the same.
+pub(crate) fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+    embedding.iter().flat_map(|x| x.to_ne_bytes()).collect()
 }
 
 /// Encodes text into vectors for `vec_text` (SPEC.md §5.6). Implementations
@@ -59,6 +45,9 @@ pub trait TextEmbedder: Send + Sync {
     fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     /// Embeds a single search query.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
+    /// Frees the model if it has been idle at least `idle`; the next use
+    /// loads it again. Never waits for a model in use. No-op by default.
+    fn unload_if_idle(&self, _idle: Duration) {}
 }
 
 /// Encodes images for `vec_image` and search queries into the same space
@@ -74,6 +63,8 @@ pub trait ImageEmbedder: Send + Sync {
     fn embed_image(&self, image: &image::RgbImage) -> Result<Vec<f32>>;
     /// Embeds a search query with the text tower.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>>;
+    /// See [`TextEmbedder::unload_if_idle`].
+    fn unload_if_idle(&self, _idle: Duration) {}
 }
 
 fn l2_normalize(v: &mut [f32]) {
@@ -175,6 +166,69 @@ impl TextEmbedder for FakeEmbedder {
     }
 }
 
+/// Wraps a [`TextEmbedder`] and counts what goes through it, so a test can
+/// prove that nothing was re-embedded (SPEC.md §7 M5's test instrumentation).
+/// `with_model_id` overrides the reported id, to simulate a model change.
+pub struct CountingEmbedder<E> {
+    inner: E,
+    model_id: Option<String>,
+    calls: std::sync::atomic::AtomicUsize,
+    chunks: std::sync::atomic::AtomicUsize,
+}
+
+impl<E> CountingEmbedder<E> {
+    pub fn new(inner: E) -> Self {
+        Self {
+            inner,
+            model_id: None,
+            calls: Default::default(),
+            chunks: Default::default(),
+        }
+    }
+
+    pub fn with_model_id(mut self, id: impl Into<String>) -> Self {
+        self.model_id = Some(id.into());
+        self
+    }
+
+    /// `embed_passages` calls so far.
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Chunk texts embedded so far, across all calls.
+    pub fn chunks(&self) -> usize {
+        self.chunks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl<E: TextEmbedder> TextEmbedder for CountingEmbedder<E> {
+    fn model_id(&self) -> &str {
+        self.model_id
+            .as_deref()
+            .unwrap_or_else(|| self.inner.model_id())
+    }
+
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.calls.fetch_add(1, SeqCst);
+        self.chunks.fetch_add(texts.len(), SeqCst);
+        self.inner.embed_passages(texts)
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.inner.embed_query(text)
+    }
+
+    fn unload_if_idle(&self, idle: Duration) {
+        self.inner.unload_if_idle(idle);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +242,22 @@ mod tests {
         } else {
             dot / (na * nb)
         }
+    }
+
+    #[test]
+    fn counting_embedder_counts_calls_and_chunks_but_not_queries() {
+        let counting = CountingEmbedder::new(FakeEmbedder);
+        counting.embed_passages(&["a", "b"]).unwrap();
+        counting.embed_passages(&["c"]).unwrap();
+        counting.embed_query("q").unwrap();
+        assert_eq!((counting.calls(), counting.chunks()), (2, 3));
+        assert_eq!(counting.model_id(), "fake-v1");
+        assert_eq!(
+            CountingEmbedder::new(FakeEmbedder)
+                .with_model_id("x")
+                .model_id(),
+            "x"
+        );
     }
 
     #[test]

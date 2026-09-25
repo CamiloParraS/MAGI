@@ -36,6 +36,7 @@ Single-crate/test equivalents (justfile wraps these): `cargo test -p magi-core <
 - New dependencies must be justified in the commit message; prefer pure-Rust crates; new native C/C++ deps require an ADR in `docs/adr/`.
 - Update `docs/architecture.md` whenever a public contract changes (DB schema, IPC commands, config format). Record significant technical decisions as ADRs in `docs/adr/`. Record milestone verification evidence in `docs/progress.md`.
 - Conventional Commits (`feat(core): ...`, `fix(watch): ...`, `test(extract): ...`).
+- If any unit tests need to be written for a new feature, write them first (TDD).
 
 ## Architecture
 

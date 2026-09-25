@@ -8,6 +8,7 @@ use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 
 use crate::error::{Error, Result};
+use crate::platform::{Os, PowerStatus};
 
 /// Resolves the vendored ONNX Runtime shared library: `MAGI_ONNXRUNTIME_PATH`
 /// first (an explicit override), then the dev-time `vendor/onnxruntime/<target>/`
@@ -45,12 +46,29 @@ pub(crate) fn init() -> Result<()> {
     Ok(())
 }
 
+/// Intra-op threads for the indexing models (e5, SigLIP vision, OCR): 4 on
+/// AC power, 2 on battery or when the platform cannot tell (NFR-8).
+/// Measured in docs/perf-investigation.md: e5 7-8 -> ~12 chunks/s at 4.
+///
+/// ponytail: read once per session load, so plugging in or unplugging
+/// mid-index takes effect only after the next idle unload. Re-check per
+/// batch if that matters.
+pub(crate) fn indexing_threads() -> usize {
+    threads_for(Os.on_battery())
+}
+
+fn threads_for(on_battery: Option<bool>) -> usize {
+    if on_battery == Some(false) { 4 } else { 2 }
+}
+
 /// Builds a CPU session: light graph optimization, `threads` intra-op
-/// threads, and the CPU memory arena off. The arena grows a pool sized for
-/// the largest input ever seen and never shrinks it (ADR-0005 measured
-/// ~66 MB from it); disabling it trades a small per-inference allocation
-/// cost for not holding that pool for the life of the process.
-pub(crate) fn session(path: &Path, threads: usize) -> Result<Session> {
+/// threads, and the CPU memory arena on only if `arena`. The arena keeps a
+/// pool sized for the largest input seen until the session is dropped (idle
+/// unload). e5 wants it: without it every layer allocates and page-faults its
+/// tensors afresh, which held e5 at ~7 chunks/s whatever the thread count.
+/// SigLIP and OCR scale without it, so they skip the memory
+/// (docs/perf-investigation.md, ADR-0005).
+pub(crate) fn session(path: &Path, threads: usize, arena: bool) -> Result<Session> {
     let model = |what: &str, e: &dyn std::fmt::Display| Error::Model(format!("{what}: {e}"));
     Session::builder()
         .map_err(|e| model("creating session builder", &e))?
@@ -58,8 +76,8 @@ pub(crate) fn session(path: &Path, threads: usize) -> Result<Session> {
         .map_err(|e| model("setting optimization level", &e))?
         .with_intra_threads(threads)
         .map_err(|e| model("setting intra-op thread count", &e))?
-        .with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])
-        .map_err(|e| model("disabling the CPU memory arena", &e))?
+        .with_execution_providers([ep::CPU::default().with_arena_allocator(arena).build()])
+        .map_err(|e| model("setting the CPU execution provider", &e))?
         .commit_from_file(path)
         .map_err(|e| {
             Error::Model(format!(
@@ -67,4 +85,16 @@ pub(crate) fn session(path: &Path, threads: usize) -> Result<Session> {
                 path.display()
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn more_threads_only_when_known_to_be_on_ac() {
+        assert_eq!(threads_for(Some(false)), 4);
+        assert_eq!(threads_for(Some(true)), 2);
+        assert_eq!(threads_for(None), 2);
+    }
 }

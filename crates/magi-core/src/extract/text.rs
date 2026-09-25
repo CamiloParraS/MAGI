@@ -19,11 +19,33 @@ pub fn decode_text(bytes: &[u8]) -> String {
     decoded.nfc().collect()
 }
 
+/// Data files: rows of values, not prose. Only their first
+/// [`DATA_PREFIX_BYTES`] are indexed (about 45 chunks), so a 200 MB export
+/// costs seconds, not hours, and its name and first rows are still found.
+const DATA_EXTENSIONS: &[&str] = &["csv", "json"];
+const DATA_PREFIX_BYTES: usize = 64 * 1024;
+
+/// The first [`DATA_PREFIX_BYTES`] of a data file, cut after the last line
+/// break in that span; any other file whole.
+fn indexed_bytes<'a>(path: &Path, bytes: &'a [u8]) -> &'a [u8] {
+    let is_data = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| DATA_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+    if !is_data || bytes.len() <= DATA_PREFIX_BYTES {
+        return bytes;
+    }
+    let head = &bytes[..DATA_PREFIX_BYTES];
+    head.iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(head, |i| &head[..=i])
+}
+
 pub struct TextExtractor;
 
 impl Extractor for TextExtractor {
-    fn extract(&self, _path: &Path, bytes: &[u8]) -> Result<ExtractedDoc> {
-        let decoded = decode_text(bytes);
+    fn extract(&self, path: &Path, bytes: &[u8]) -> Result<ExtractedDoc> {
+        let decoded = decode_text(indexed_bytes(path, bytes));
         let body = decoded.trim();
         if body.is_empty() {
             return Ok(ExtractedDoc::default());
@@ -81,5 +103,26 @@ mod tests {
         assert_eq!(doc.chunks.len(), 1);
         assert_eq!(doc.chunks[0].text, text);
         assert_eq!(doc.lang.as_deref(), Some("en"));
+    }
+
+    /// A big CSV/JSON is data, not prose: only its first rows are indexed,
+    /// cut at a line break.
+    #[test]
+    fn large_data_files_index_only_their_start() {
+        let rows: String = (0..20_000).map(|i| format!("{i},row{i},value\n")).collect();
+        assert!(rows.len() > DATA_PREFIX_BYTES * 2);
+        for name in ["table.csv", "dump.JSON"] {
+            let doc = TextExtractor
+                .extract(&PathBuf::from(name), rows.as_bytes())
+                .unwrap();
+            let all: String = doc.chunks.iter().map(|c| c.text.as_str()).collect();
+            assert!(all.starts_with("0,row0,value"));
+            assert!(!all.contains("row19999"), "{name}: tail was indexed");
+            assert!(all.trim_end().ends_with(",value"), "{name}: cut mid-line");
+        }
+        let doc = TextExtractor
+            .extract(&PathBuf::from("notes.txt"), rows.as_bytes())
+            .unwrap();
+        assert!(doc.chunks.iter().any(|c| c.text.contains("row19999")));
     }
 }

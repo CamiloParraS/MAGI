@@ -1,2 +1,1002 @@
-//! Full/partial reconciliation scans. Implemented in M5+
-//! (see SPEC.md §5.4 startup sequence).
+//! Reconciliation scans: diff a walk of a root against its rows (SPEC.md §5.4
+//! startup sequence step 4) and detect moves. Plain functions over a
+//! connection; the runtime and the watcher call them.
+
+use std::path::{Path, PathBuf};
+
+use rusqlite::Connection;
+
+use crate::db::{files, meta, roots};
+use crate::discovery;
+use crate::error::Result;
+use crate::index::change;
+use crate::index::pipeline::{IndexRootOptions, hash_file};
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
+
+/// The id for the next scan, one more than the last (`meta.last_scan_id`).
+/// Rows carry the id of the scan that last saw them; an older one means gone.
+pub fn next_scan_id(conn: &Connection) -> Result<i64> {
+    let id = meta::get(conn, "last_scan_id")?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        + 1;
+    meta::set(conn, "last_scan_id", &id.to_string())?;
+    Ok(id)
+}
+
+enum EntryOutcome {
+    Inserted,
+    Changed,
+    Unchanged,
+    Moved,
+}
+
+/// Brings one file's row in line with what was found on disk.
+fn reconcile_entry(
+    conn: &Connection,
+    root_id: i64,
+    root_path: &Path,
+    entry: &discovery::WalkEntry,
+    scan_id: i64,
+) -> Result<EntryOutcome> {
+    Ok(match files::get_stored(conn, &entry.path)? {
+        None => {
+            let rel = entry.path.strip_prefix(root_path).unwrap_or(&entry.path);
+            if let Some(id) = find_old_home(conn, entry)? {
+                let to = files::MoveTarget {
+                    path: &entry.path,
+                    rel_path: rel,
+                    size: entry.size,
+                    mtime_ns: entry.mtime_ns,
+                };
+                files::rename_file_to(conn, id, root_id, to, scan_id)?;
+                return Ok(EntryOutcome::Moved);
+            }
+            files::insert_pending(
+                conn,
+                root_id,
+                &entry.path,
+                rel,
+                entry.size,
+                entry.mtime_ns,
+                scan_id,
+            )?;
+            EntryOutcome::Inserted
+        }
+        Some(s) if !change::unchanged_on_disk(&s, root_id, entry) => {
+            files::mark_changed(conn, s.id, root_id, entry.size, entry.mtime_ns, scan_id)?;
+            EntryOutcome::Changed
+        }
+        Some(s) => {
+            files::mark_seen(conn, s.id, scan_id)?;
+            EntryOutcome::Unchanged
+        }
+    })
+}
+
+/// An unknown path whose bytes match an indexed row whose own path is gone is
+/// that row, renamed or moved (SPEC.md §5.4 step 4): it takes the new location
+/// and keeps its chunks and vectors. Matching from the new side means the old
+/// path never has to be reported, which matters: `notify-debouncer-full` folds
+/// a rename of a just-created file into a plain create of the new path.
+///
+/// Only same-size rows whose path is gone are candidates, so the new file is
+/// read only when a move is plausible. A row never hashed (filename-only
+/// kinds) cannot be matched; its replacement costs one filename chunk.
+fn find_old_home(conn: &Connection, entry: &discovery::WalkEntry) -> Result<Option<i64>> {
+    // Hashing reads the bytes, which for a placeholder means downloading them.
+    if entry.cloud_only {
+        return Ok(None);
+    }
+    let kind = discovery::classify(&entry.path, &[]);
+    let candidates: Vec<_> = files::hashed_of_size(conn, entry.size, kind.as_str())?
+        .into_iter()
+        .filter(|(_, path, _)| !path.exists())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let Ok(hash) = hash_file(&entry.path) else {
+        return Ok(None);
+    };
+    Ok(candidates
+        .into_iter()
+        .find(|(_, _, h)| h.as_slice() == hash)
+        .map(|(id, ..)| id))
+}
+
+/// What [`scan_paths`] found and left undecided.
+pub struct PathScan {
+    pub summary: ScanSummary,
+    /// Rows at or under the paths that were not found there.
+    pub unseen: Vec<Unseen>,
+}
+
+/// A row a scan did not find: a deletion candidate until a later scan sees
+/// it again (a move claimed it, or it was recreated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unseen {
+    pub id: i64,
+    /// The scan that missed it.
+    pub scan_id: i64,
+}
+
+impl Unseen {
+    /// Kept undecided until `until`, then deleted if still unseen.
+    pub fn hold_until(self, until: std::time::Instant) -> Held {
+        Held {
+            id: self.id,
+            scan_id: self.scan_id,
+            until,
+        }
+    }
+}
+
+/// Reconciles only `paths` (what the watcher reported): each is looked at on
+/// disk and a folder is walked. What is new or changed is queued and moves are
+/// followed. Whatever was at or under a path but is no longer found there
+/// (deleted, moved away, now excluded) is returned undecided, so the caller can
+/// hold it for a moment: a move between roots is reported by two watchers that
+/// debounce independently, so the removal can arrive first. A path outside
+/// every usable root is ignored; one that is a root itself triggers a full
+/// [`reconcile_all`], which probes it.
+pub fn scan_paths(
+    conn: &mut Connection,
+    options: &IndexRootOptions,
+    paths: &[PathBuf],
+) -> Result<PathScan> {
+    let usable: Vec<_> = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.indexable())
+        .collect();
+    if paths.iter().any(|p| usable.iter().any(|r| r.path == *p)) {
+        return Ok(PathScan {
+            summary: reconcile_all(conn, options)?,
+            // `reconcile_all` settled its own deletions: nothing to hold.
+            unseen: Vec::new(),
+        });
+    }
+    let scan_id = next_scan_id(conn)?;
+    let walk_options = options.walk_options();
+    let mut summary = ScanSummary::default();
+    let tx = conn.transaction()?;
+
+    let mut scanned = Vec::new();
+    for path in paths {
+        let Some(root) = usable.iter().find(|r| path.starts_with(&r.path)) else {
+            continue;
+        };
+        let entries = if !discovery::is_wanted(&root.path, path, &walk_options) {
+            Vec::new()
+        } else {
+            match std::fs::metadata(path) {
+                Ok(m) if m.is_dir() => discovery::walk_under(&root.path, path, &walk_options)?,
+                Ok(m) if m.is_file() => discovery::stat(path).into_iter().collect(),
+                _ => Vec::new(),
+            }
+        };
+        for entry in &entries {
+            summary.count(reconcile_entry(&tx, root.id, &root.path, entry, scan_id)?);
+        }
+        scanned.push(path);
+    }
+    // After every path is marked, so a file that turned up under one path is
+    // not mistaken for a deletion under another.
+    let mut unseen = Vec::new();
+    for path in scanned {
+        unseen.extend(files::unseen_under(&tx, path, scan_id)?);
+    }
+    unseen.sort_unstable();
+    unseen.dedup();
+    tx.commit()?;
+    Ok(PathScan {
+        summary,
+        unseen: unseen
+            .into_iter()
+            .map(|id| Unseen { id, scan_id })
+            .collect(),
+    })
+}
+
+/// A deletion candidate waiting to see whether its bytes turn up elsewhere.
+pub struct Held {
+    pub id: i64,
+    pub scan_id: i64,
+    pub until: std::time::Instant,
+}
+
+/// Settles held candidates. One seen again since (claimed by a move, or
+/// recreated, as an editor's save does) is dropped from the list; one still
+/// unseen when its time is up is deleted. Returns how many were deleted.
+pub fn settle_held(
+    conn: &mut Connection,
+    held: &mut Vec<Held>,
+    now: std::time::Instant,
+) -> Result<u32> {
+    let mut removed = 0;
+    for item in std::mem::take(held) {
+        if !files::is_unseen_since(conn, item.id, item.scan_id)? {
+            continue;
+        }
+        if item.until <= now {
+            files::delete_file(conn, item.id)?;
+            removed += 1;
+        } else {
+            held.push(item);
+        }
+    }
+    Ok(removed)
+}
+
+/// Walks `root_path` and brings its rows in line, in one transaction: an
+/// unknown file is a move (see [`find_old_home`]) or is inserted `pending`;
+/// one whose size or mtime differ, or that was indexed by an older pipeline,
+/// is marked `pending` with its new stat; anything else is only marked seen.
+/// Nothing is extracted or deleted: the rows it did not see are returned as
+/// deletion candidates for [`remove_unseen`], so a move into a root scanned
+/// later can still claim them.
+pub fn reconcile_root(
+    conn: &mut Connection,
+    root_id: i64,
+    root_path: &Path,
+    options: &IndexRootOptions,
+    scan_id: i64,
+) -> Result<(ScanSummary, Vec<Unseen>)> {
+    let entries = discovery::walk(root_path, &options.walk_options())?;
+    let tx = conn.transaction()?;
+    let mut summary = ScanSummary::default();
+    for entry in &entries {
+        summary.count(reconcile_entry(&tx, root_id, root_path, entry, scan_id)?);
+    }
+    tx.execute(
+        "UPDATE roots SET last_full_scan_at = unixepoch() WHERE id = ?1",
+        [root_id],
+    )?;
+    let unseen = files::unseen(&tx, root_id, scan_id)?
+        .into_iter()
+        .map(|id| Unseen { id, scan_id })
+        .collect();
+    tx.commit()?;
+    Ok((summary, unseen))
+}
+
+/// Totals from [`reconcile_all`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScanSummary {
+    pub inserted: u32,
+    pub changed: u32,
+    pub unchanged: u32,
+    pub moved: u32,
+    pub removed: u32,
+}
+
+impl std::ops::AddAssign for ScanSummary {
+    fn add_assign(&mut self, other: Self) {
+        self.inserted += other.inserted;
+        self.changed += other.changed;
+        self.unchanged += other.unchanged;
+        self.moved += other.moved;
+        self.removed += other.removed;
+    }
+}
+
+impl ScanSummary {
+    fn count(&mut self, outcome: EntryOutcome) {
+        *match outcome {
+            EntryOutcome::Inserted => &mut self.inserted,
+            EntryOutcome::Changed => &mut self.changed,
+            EntryOutcome::Unchanged => &mut self.unchanged,
+            EntryOutcome::Moved => &mut self.moved,
+        } += 1;
+    }
+}
+
+/// One scan of every enabled root. See [`reconcile_roots`].
+pub fn reconcile_all(conn: &mut Connection, options: &IndexRootOptions) -> Result<ScanSummary> {
+    let enabled: Vec<i64> = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.id)
+        .collect();
+    reconcile_roots(conn, options, &enabled)
+}
+
+/// One scan of the enabled roots among `ids`: probe each, reconcile it, then
+/// remove what none of them has claimed, so a move between them is followed
+/// whichever is walked first. A root that is missing or unreadable is skipped
+/// with its rows intact and its status set.
+///
+/// Scanning only some roots (one just added, enabled or readable again) is
+/// safe: a file moved *into* them is matched from the new side
+/// ([`find_old_home`]) wherever it came from, and a file moved out of them
+/// into a root not scanned here was already claimed by that root's watcher (a
+/// polled root may instead re-embed it once, at its next scan).
+pub fn reconcile_roots(
+    conn: &mut Connection,
+    options: &IndexRootOptions,
+    ids: &[i64],
+) -> Result<ScanSummary> {
+    let scan_id = next_scan_id(conn)?;
+    let mut summary = ScanSummary::default();
+    let mut unseen = Vec::new();
+    let scanned = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.enabled && ids.contains(&r.id));
+    for root in scanned {
+        let access = FsProbe.probe(&root.path);
+        roots::set_access(conn, root.id, &access)?;
+        if access != RootAccess::Ok {
+            continue;
+        }
+        let (found, gone) = reconcile_root(conn, root.id, &root.path, options, scan_id)?;
+        summary += found;
+        unseen.extend(gone);
+    }
+    summary.removed = remove_unseen(conn, unseen)?;
+    Ok(summary)
+}
+
+/// Re-probes roots that were unreadable or missing (SPEC.md §6.1 recovery,
+/// every 30 s from the ticker). Those that are back are reconciled, which also
+/// clears their status. `None` when nothing came back.
+pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Option<ScanSummary>> {
+    let back: Vec<i64> = roots::list(conn)?
+        .into_iter()
+        .filter(|r| r.enabled && !r.status.readable() && FsProbe.probe(&r.path) == RootAccess::Ok)
+        .map(|r| r.id)
+        .collect();
+    if back.is_empty() {
+        return Ok(None);
+    }
+    reconcile_roots(conn, options, &back).map(Some)
+}
+
+/// Deletes the candidates still unseen (a later root's walk may have claimed
+/// one as a move) with everything derived from them. Returns how many were
+/// deleted.
+pub fn remove_unseen(conn: &mut Connection, unseen: Vec<Unseen>) -> Result<u32> {
+    let now = std::time::Instant::now();
+    let mut held = unseen.into_iter().map(|u| u.hold_until(now)).collect();
+    settle_held(conn, &mut held, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::IndexingConfig;
+    use crate::db::{self, roots};
+    use crate::embed::{CountingEmbedder, FakeEmbedder};
+    use crate::index::pipeline::{IndexContext, IndexSummary, index_root};
+    use crate::search::fts::search_fts;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// [`scan_paths`] with the removals settled at once, as the writer does
+    /// once their hold is up.
+    fn reconcile_paths(
+        conn: &mut Connection,
+        options: &IndexRootOptions,
+        paths: &[PathBuf],
+    ) -> Result<ScanSummary> {
+        let scan = scan_paths(conn, options, paths)?;
+        let mut summary = scan.summary;
+        summary.removed += remove_unseen(conn, scan.unseen)?;
+        Ok(summary)
+    }
+
+    struct Setup {
+        _db_dir: tempfile::TempDir,
+        root_dir: tempfile::TempDir,
+        conn: Connection,
+        root: roots::Root,
+        embedder: Arc<CountingEmbedder<FakeEmbedder>>,
+        options: IndexRootOptions,
+    }
+
+    impl Setup {
+        fn new() -> Self {
+            let db_dir = tempfile::tempdir().unwrap();
+            let conn = db::open(&db_dir.path().join("magi.db")).unwrap();
+            let root_dir = tempfile::tempdir().unwrap();
+            let root = roots::add(&conn, root_dir.path()).unwrap();
+            Self {
+                _db_dir: db_dir,
+                root_dir,
+                conn,
+                root,
+                embedder: Arc::new(CountingEmbedder::new(FakeEmbedder)),
+                options: IndexRootOptions::from_config(&IndexingConfig::default()).unwrap(),
+            }
+        }
+
+        fn write(&self, name: &str, text: &str) {
+            fs::write(self.root_dir.path().join(name), text).unwrap();
+        }
+
+        fn run(&mut self) -> IndexSummary {
+            index_root(
+                &mut self.conn,
+                self.root.id,
+                &self.root.path,
+                &self.options,
+                &IndexContext::new(self.embedder.clone()),
+            )
+            .unwrap()
+        }
+
+        fn count(&self, sql: &str) -> i64 {
+            self.conn.query_row(sql, [], |r| r.get(0)).unwrap()
+        }
+
+        fn status(&self) -> String {
+            self.conn
+                .query_row("SELECT status FROM roots", [], |r| r.get(0))
+                .unwrap()
+        }
+
+        fn hits(&self, query: &str) -> usize {
+            search_fts(&self.conn, query, 10).unwrap().len()
+        }
+    }
+
+    /// Adding or re-enabling a root walks that root only; a change in another
+    /// root waits for its watcher or the next full scan.
+    #[test]
+    fn reconciling_one_root_leaves_the_others_unwalked() {
+        let mut s = Setup::new();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = roots::add(&s.conn, other_dir.path()).unwrap();
+        s.write("mine.txt", "mine");
+        fs::write(other_dir.path().join("theirs.txt"), "theirs").unwrap();
+
+        let mine = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
+        assert_eq!(mine.inserted, 1);
+        let theirs = "SELECT COUNT(*) FROM files WHERE file_name = 'theirs.txt'";
+        assert_eq!(s.count(theirs), 0);
+
+        let others = reconcile_roots(&mut s.conn, &s.options, &[other.id]).unwrap();
+        assert_eq!((others.inserted, others.removed), (1, 0));
+        assert_eq!(s.count(theirs), 1);
+    }
+
+    /// Adding a parent of an indexed root reuses the child's rows: its first
+    /// scan finds them unchanged and embeds only what is new.
+    #[test]
+    fn a_collapsed_child_is_not_re_indexed_by_the_parent_scan() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let mut conn = db::open(&db_dir.path().join("magi.db")).unwrap();
+        let options = IndexRootOptions::from_config(&IndexingConfig::default()).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let child_dir = parent.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+        fs::write(child_dir.join("old.txt"), "already indexed").unwrap();
+        let child = roots::add(&conn, &child_dir).unwrap();
+        let ctx = IndexContext::new(Arc::new(FakeEmbedder));
+        index_root(&mut conn, child.id, &child.path, &options, &ctx).unwrap();
+        fs::write(parent.path().join("new.txt"), "brand new").unwrap();
+
+        let (root, collapsed) = roots::add_collapsing(&conn, parent.path()).unwrap();
+        let summary = reconcile_roots(&mut conn, &options, &[root.id]).unwrap();
+
+        assert_eq!(collapsed, vec![child.id]);
+        assert_eq!(
+            (summary.inserted, summary.changed, summary.unchanged),
+            (1, 0, 1),
+            "only new.txt is queued; old.txt keeps its index"
+        );
+    }
+
+    /// SPEC.md §6.1 recovery: a root that was unreadable or missing and is
+    /// back is reconciled at the next re-probe; a still-broken one is not.
+    #[test]
+    fn a_root_that_comes_back_is_reconciled_by_recover() {
+        let mut s = Setup::new();
+        s.write("a.txt", "alpha");
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
+
+        roots::set_status(&s.conn, s.root.id, roots::Health::PermissionDenied).unwrap();
+        let summary = recover(&mut s.conn, &s.options).unwrap().unwrap();
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(s.status(), "ok");
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
+
+        let other = tempfile::tempdir().unwrap();
+        let unplugged = roots::add(&s.conn, other.path()).unwrap();
+        drop(other);
+        roots::set_status(&s.conn, unplugged.id, roots::Health::Missing).unwrap();
+        assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
+    }
+
+    /// SPEC.md §7 M5 item 7: a deleted file leaves nothing behind.
+    #[test]
+    fn a_file_deleted_between_runs_is_removed_everywhere() {
+        let mut s = Setup::new();
+        s.write("keep.txt", "the keeper");
+        s.write("gone.txt", "zebra stripes");
+        s.run();
+        assert_eq!(s.hits("zebra"), 1);
+
+        fs::remove_file(s.root_dir.path().join("gone.txt")).unwrap();
+        let summary = s.run();
+
+        assert_eq!(summary.removed, 1);
+        assert_eq!(s.hits("zebra"), 0);
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM chunks WHERE file_id NOT IN (SELECT id FROM files)"),
+            0
+        );
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM vec_text WHERE chunk_id NOT IN (SELECT id FROM chunks)"),
+            0
+        );
+    }
+
+    /// Items 5 and 8: a rename keeps the row, chunks and vectors, and embeds
+    /// nothing; the new name is searchable and the old one is not.
+    #[test]
+    fn a_rename_is_followed_in_place_without_re_embedding() {
+        let mut s = Setup::new();
+        s.write("apple.txt", "orchard notes");
+        s.run();
+        let id = s.count("SELECT id FROM files");
+        let embedded = s.embedder.chunks();
+
+        fs::rename(
+            s.root_dir.path().join("apple.txt"),
+            s.root_dir.path().join("banana.txt"),
+        )
+        .unwrap();
+        let summary = s.run();
+
+        assert_eq!((summary.moved, summary.removed, summary.indexed), (1, 0, 0));
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(s.count("SELECT id FROM files"), id, "same row");
+        let name: String = s
+            .conn
+            .query_row("SELECT file_name FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "banana.txt");
+        assert_eq!(s.hits("banana"), 1, "found by its new name");
+        assert_eq!(s.hits("apple"), 0, "and not by the old one");
+        assert_eq!(s.hits("orchard"), 1, "content still searchable");
+    }
+
+    /// Item 15: the same bytes turning up under another root are a move too;
+    /// the caller scans both roots before settling the candidates.
+    #[test]
+    fn a_move_between_roots_reassigns_the_row() {
+        let mut s = Setup::new();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = roots::add(&s.conn, other_dir.path()).unwrap();
+        s.write("report.txt", "quarterly figures");
+        s.run();
+        let id = s.count("SELECT id FROM files");
+        let embedded = s.embedder.chunks();
+
+        fs::rename(
+            s.root_dir.path().join("report.txt"),
+            other_dir.path().join("report.txt"),
+        )
+        .unwrap();
+        let scan_id = next_scan_id(&s.conn).unwrap();
+        let (mut unseen, mut moved) = (Vec::new(), 0);
+        for r in [&s.root, &other] {
+            let (found, gone) =
+                reconcile_root(&mut s.conn, r.id, &r.path, &s.options, scan_id).unwrap();
+            unseen.extend(gone);
+            moved += found.moved;
+        }
+        let removed = remove_unseen(&mut s.conn, unseen).unwrap();
+
+        assert_eq!((moved, removed), (1, 0));
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(s.count("SELECT id FROM files"), id);
+        assert_eq!(
+            s.count(&format!(
+                "SELECT COUNT(*) FROM files WHERE root_id = {}",
+                other.id
+            )),
+            1
+        );
+        assert_eq!(s.embedder.chunks(), embedded);
+    }
+
+    /// A file that was edited while it moved is not the same bytes: it is a
+    /// deletion plus a new file.
+    #[test]
+    fn a_moved_and_edited_file_is_reindexed() {
+        let mut s = Setup::new();
+        s.write("a.txt", "first version");
+        s.run();
+        fs::remove_file(s.root_dir.path().join("a.txt")).unwrap();
+        s.write("b.txt", "other text");
+        let summary = s.run();
+
+        assert_eq!((summary.moved, summary.removed, summary.indexed), (0, 1, 1));
+        assert_eq!(s.hits("first"), 0);
+        assert_eq!(s.hits("other"), 1);
+    }
+
+    /// Item 4: content changed while stopped is re-embedded, and the old text
+    /// is no longer searchable.
+    #[test]
+    fn a_file_edited_between_runs_is_reindexed() {
+        let mut s = Setup::new();
+        s.write("n.txt", "alpha beta");
+        s.run();
+        s.write("n.txt", "gamma delta extra");
+        let summary = s.run();
+
+        assert_eq!(summary.indexed, 1);
+        assert_eq!(s.hits("alpha"), 0);
+        assert_eq!(s.hits("gamma"), 1);
+    }
+
+    /// Item 13: a file that becomes excluded is deleted by the next scan.
+    #[test]
+    fn a_newly_excluded_file_is_removed() {
+        let mut s = Setup::new();
+        s.write("keep.txt", "kept words");
+        s.write("draft.txt", "temporary words");
+        s.options.exclude_globs.clear();
+        s.run();
+        assert_eq!(s.hits("temporary"), 1);
+
+        s.options
+            .exclude_globs
+            .push(glob::Pattern::new("**/draft.txt").unwrap());
+        let summary = s.run();
+
+        assert_eq!(summary.removed, 1);
+        assert_eq!(s.hits("temporary"), 0);
+        assert_eq!(s.hits("kept"), 1);
+    }
+
+    /// A row written by an older pipeline is re-queued by the scan even when
+    /// size and mtime match, and re-extracted: that is what bumping
+    /// `PIPELINE_VERSION` is for. Once current it is left alone again.
+    #[test]
+    fn a_stale_pipeline_version_is_reindexed_once() {
+        let mut s = Setup::new();
+        s.write("n.txt", "steady text");
+        s.run();
+        s.conn
+            .execute("UPDATE files SET pipeline_version = 0", [])
+            .unwrap();
+
+        assert_eq!(s.run().indexed, 1);
+        assert_eq!(
+            s.count("SELECT pipeline_version FROM files"),
+            crate::index::PIPELINE_VERSION
+        );
+        let embedded = s.embedder.chunks();
+        assert_eq!(s.run().unchanged, 1);
+        assert_eq!(s.embedder.chunks(), embedded);
+    }
+
+    /// Item 12 and SPEC.md §5.4 "Missing roots": an unplugged root keeps its
+    /// index but its results are hidden; when it returns they come back.
+    #[test]
+    fn a_missing_root_keeps_its_rows_and_hides_its_results() {
+        let mut s = Setup::new();
+        s.write("n.txt", "findable words");
+        s.run();
+        let away = tempfile::tempdir().unwrap();
+        let parked = away.path().join("parked");
+        fs::rename(s.root_dir.path(), &parked).unwrap();
+
+        let summary = s.run();
+
+        assert_eq!(summary, IndexSummary::default());
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1, "index kept");
+        assert_eq!(s.status(), "missing");
+        assert_eq!(s.hits("findable"), 0);
+
+        fs::rename(&parked, s.root_dir.path()).unwrap();
+        s.run();
+        assert_eq!(s.status(), "ok");
+        assert_eq!(s.hits("findable"), 1);
+    }
+
+    #[test]
+    fn a_disabled_root_is_hidden_from_search() {
+        let mut s = Setup::new();
+        s.write("n.txt", "findable words");
+        s.run();
+        s.conn.execute("UPDATE roots SET enabled = 0", []).unwrap();
+        assert_eq!(s.hits("findable"), 0);
+    }
+
+    fn reconcile_these(s: &mut Setup, names: &[&str]) -> ScanSummary {
+        let paths: Vec<PathBuf> = names.iter().map(|n| s.root.path.join(n)).collect();
+        let summary = reconcile_paths(&mut s.conn, &s.options, &paths).unwrap();
+        // What the scheduler and workers would do next.
+        s.run();
+        summary
+    }
+
+    /// The watcher's view of a rename: the old path and the new one, together.
+    #[test]
+    fn a_reported_rename_is_a_move_not_a_re_embed() {
+        let mut s = Setup::new();
+        s.write("old_name.txt", "orchard notes");
+        s.run();
+        let embedded = s.embedder.chunks();
+        fs::rename(
+            s.root_dir.path().join("old_name.txt"),
+            s.root_dir.path().join("new_name.txt"),
+        )
+        .unwrap();
+
+        let summary = reconcile_these(&mut s, &["old_name.txt", "new_name.txt"]);
+
+        assert_eq!((summary.moved, summary.removed), (1, 0));
+        assert_eq!(s.embedder.chunks(), embedded);
+        assert_eq!(s.hits("new_name"), 1);
+        assert_eq!(s.hits("old_name"), 0);
+    }
+
+    /// The actual shape of the CI failure: `notify`'s debouncer commonly
+    /// reports both halves of a same-root rename in one batch (one
+    /// `scan_paths` call, `held` empty). The match must be found and applied
+    /// within that single call's own transaction — not left to a later,
+    /// separate step — so a plain `pending` row for the new name is never
+    /// committed for a scheduler thread to pick up and re-embed.
+    #[test]
+    fn scan_paths_resolves_both_halves_of_one_batch_before_committing() {
+        let mut s = Setup::new();
+        s.write("before.txt", "portable words");
+        s.run();
+        let id = s.count("SELECT id FROM files");
+        let embedded = s.embedder.chunks();
+
+        fs::rename(
+            s.root_dir.path().join("before.txt"),
+            s.root_dir.path().join("after.txt"),
+        )
+        .unwrap();
+        let scan = scan_paths(
+            &mut s.conn,
+            &s.options,
+            &[
+                s.root.path.join("before.txt"),
+                s.root.path.join("after.txt"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(scan.summary.moved, 1);
+        assert!(scan.unseen.is_empty(), "resolved, not left for later");
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE state = 'pending'"),
+            0,
+            "never committed as an unclaimed pending row"
+        );
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(s.count("SELECT id FROM files"), id, "same row");
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(s.hits("after"), 1);
+        assert_eq!(s.hits("before"), 0);
+    }
+
+    #[test]
+    fn a_renamed_folder_moves_every_file_in_it() {
+        let mut s = Setup::new();
+        fs::create_dir(s.root_dir.path().join("before")).unwrap();
+        s.write("before/a.txt", "alpha words");
+        s.write("before/b.txt", "bravo words");
+        s.run();
+        let embedded = s.embedder.chunks();
+        fs::rename(
+            s.root_dir.path().join("before"),
+            s.root_dir.path().join("after"),
+        )
+        .unwrap();
+
+        let summary = reconcile_these(&mut s, &["before", "after"]);
+
+        assert_eq!((summary.moved, summary.removed), (2, 0));
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE path LIKE '%after%'"),
+            2
+        );
+        assert_eq!(s.hits("alpha"), 1);
+    }
+
+    #[test]
+    fn a_reported_delete_removes_the_file_and_a_folder_delete_removes_its_contents() {
+        let mut s = Setup::new();
+        fs::create_dir(s.root_dir.path().join("dir")).unwrap();
+        s.write("dir/a.txt", "alpha words");
+        s.write("dir/b.txt", "bravo words");
+        s.write("solo.txt", "charlie words");
+        s.run();
+        fs::remove_dir_all(s.root_dir.path().join("dir")).unwrap();
+        fs::remove_file(s.root_dir.path().join("solo.txt")).unwrap();
+
+        let summary = reconcile_these(&mut s, &["dir", "solo.txt"]);
+
+        assert_eq!(summary.removed, 3);
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 0);
+    }
+
+    #[test]
+    fn a_reported_create_and_modify_queue_only_that_file() {
+        let mut s = Setup::new();
+        s.write("keep.txt", "unchanged words");
+        s.write("edit.txt", "first version");
+        s.run();
+        s.write("edit.txt", "second version, longer");
+        s.write("fresh.txt", "brand new words");
+
+        let summary = reconcile_paths(
+            &mut s.conn,
+            &s.options,
+            &[s.root.path.join("edit.txt"), s.root.path.join("fresh.txt")],
+        )
+        .unwrap();
+
+        assert_eq!((summary.inserted, summary.changed), (1, 1));
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE state = 'pending'"),
+            2
+        );
+    }
+
+    /// Moving a file into an excluded folder removes it; a path outside every
+    /// root is not looked at.
+    #[test]
+    fn a_path_that_is_excluded_or_outside_every_root_is_handled() {
+        let mut s = Setup::new();
+        s.options
+            .exclude_globs
+            .push(glob::Pattern::new("**/skipme/**").unwrap());
+        fs::create_dir(s.root_dir.path().join("skipme")).unwrap();
+        s.write("a.txt", "alpha words");
+        s.run();
+        fs::rename(
+            s.root_dir.path().join("a.txt"),
+            s.root_dir.path().join("skipme/a.txt"),
+        )
+        .unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("stray.txt"), "x").unwrap();
+
+        let summary = reconcile_paths(
+            &mut s.conn,
+            &s.options,
+            &[
+                s.root.path.join("a.txt"),
+                s.root.path.join("skipme/a.txt"),
+                elsewhere.path().join("stray.txt"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!((summary.removed, summary.inserted), (1, 0));
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 0);
+    }
+
+    fn held_from(scan: PathScan, until: std::time::Instant) -> Vec<Held> {
+        scan.unseen
+            .into_iter()
+            .map(|u| u.hold_until(until))
+            .collect()
+    }
+
+    /// A removal reported in one batch is claimed by the creation reported in
+    /// a later one (two roots' watchers debounce separately), and is deleted
+    /// only if nothing claims it before the hold is over.
+    #[test]
+    fn a_held_removal_is_claimed_by_a_later_creation_or_expires() {
+        use std::time::{Duration, Instant};
+        let mut s = Setup::new();
+        s.write("a.txt", "alpha words");
+        s.write("b.txt", "bravo words");
+        s.run();
+        let embedded = s.embedder.chunks();
+        let now = Instant::now();
+        let hold = now + Duration::from_secs(5);
+
+        // Batch 1: a.txt is gone. Nothing to match it with yet.
+        fs::rename(
+            s.root_dir.path().join("a.txt"),
+            s.root_dir.path().join("moved.txt"),
+        )
+        .unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("a.txt")]).unwrap();
+        let mut held = held_from(scan, hold);
+        let r = settle_held(&mut s.conn, &mut held, now).unwrap();
+        assert_eq!((r, held.len()), (0, 1));
+
+        // Batch 2: the creation arrives and claims it; the hold just lets go.
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("moved.txt")]).unwrap();
+        assert_eq!(scan.summary.moved, 1);
+        let r = settle_held(&mut s.conn, &mut held, now).unwrap();
+        assert_eq!((r, held.len()), (0, 0));
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE file_name = 'moved.txt'"),
+            1
+        );
+
+        // b.txt is removed and nothing ever claims it: deleted once time is up.
+        fs::remove_file(s.root_dir.path().join("b.txt")).unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("b.txt")]).unwrap();
+        let mut held = held_from(scan, hold);
+        assert_eq!(settle_held(&mut s.conn, &mut held, now).unwrap(), 0);
+        let later = now + Duration::from_secs(6);
+        assert_eq!(settle_held(&mut s.conn, &mut held, later).unwrap(), 1);
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+    }
+
+    /// What macOS CI actually saw: `notify-debouncer-full` folds a rename of a
+    /// file whose queue starts with a `Create` (FSEvents coalesces flags on a
+    /// fresh file) into a plain `Create` of the new path. The old path is never
+    /// reported, so the new path must find its vanished twin by itself.
+    #[test]
+    fn a_rename_reported_only_by_its_new_path_is_a_move() {
+        let mut s = Setup::new();
+        s.write("before.txt", "portable words");
+        s.run();
+        let id = s.count("SELECT id FROM files");
+        let embedded = s.embedder.chunks();
+
+        fs::rename(
+            s.root_dir.path().join("before.txt"),
+            s.root_dir.path().join("after.txt"),
+        )
+        .unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("after.txt")]).unwrap();
+
+        assert_eq!(scan.summary.moved, 1);
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE state = 'pending'"),
+            0,
+            "never exposed as an unclaimed pending row"
+        );
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+        assert_eq!(s.count("SELECT id FROM files"), id, "same row");
+        assert_eq!(s.embedder.chunks(), embedded, "nothing re-embedded");
+        assert_eq!(s.hits("after"), 1);
+        assert_eq!(s.hits("before"), 0);
+    }
+
+    /// An editor's atomic save removes and recreates the path: the recreated
+    /// file is the same row, and the hold must not delete it.
+    #[test]
+    fn a_held_file_that_reappears_at_its_path_is_not_deleted() {
+        use std::time::{Duration, Instant};
+        let mut s = Setup::new();
+        s.write("doc.txt", "original words");
+        s.run();
+        let now = Instant::now();
+        fs::remove_file(s.root_dir.path().join("doc.txt")).unwrap();
+        let scan = scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")]).unwrap();
+        let mut held = held_from(scan, now + Duration::from_secs(5));
+
+        s.write("doc.txt", "rewritten words, longer");
+        scan_paths(&mut s.conn, &s.options, &[s.root.path.join("doc.txt")]).unwrap();
+        let r = settle_held(&mut s.conn, &mut held, now + Duration::from_secs(6)).unwrap();
+
+        assert_eq!((r, held.len()), (0, 0));
+        assert_eq!(s.count("SELECT COUNT(*) FROM files"), 1);
+    }
+
+    #[test]
+    fn scan_ids_increase_and_the_scan_time_is_recorded() {
+        let mut s = Setup::new();
+        assert_eq!(next_scan_id(&s.conn).unwrap(), 1);
+        assert_eq!(next_scan_id(&s.conn).unwrap(), 2);
+        s.run();
+        let scanned: Option<i64> = s
+            .conn
+            .query_row("SELECT last_full_scan_at FROM roots", [], |r| r.get(0))
+            .unwrap();
+        assert!(scanned.is_some());
+    }
+}

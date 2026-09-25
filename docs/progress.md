@@ -18,7 +18,7 @@ is recorded here only once every verification item passes on all three OSes.
       win-x64, mac-arm64, mac-x64, and linux-x64.
 - [x] `just check` passes locally on the developer machine (Windows 11,
       x86_64): `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
+--all-features -- -D warnings`, `cargo test --workspace`, `pnpm lint`,
       `pnpm typecheck`, `pnpm test` all green.
 - [x] CI green on all three OSes — (workflow added at
       `.github/workflows/ci.yml`).
@@ -148,7 +148,7 @@ clean.
       index → extract → search pipeline.
 - [x] 83 unit tests + 9 golden tests + 1 idempotence test
       (`cargo test -p magi-core`), `cargo fmt --check` and `cargo clippy
-    --all-targets --all-features -- -D warnings` clean.
+--all-targets --all-features -- -D warnings` clean.
 
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
@@ -327,7 +327,7 @@ verification checklist below, none of which is checked off yet.
 - [x] 130 unit tests (`cargo test -p magi-core`, plus 1 `#[ignore]`d real-
       tokenizer test run manually as above) + 9 golden + 1 idempotence
       test; `cargo fmt --check` and `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings` clean; `cargo test --workspace` green.
+--all-features -- -D warnings` clean; `cargo test --workspace` green.
 
 ### Slice: real e5 ONNX embedder
 
@@ -338,7 +338,7 @@ verification checklist below, none of which is checked off yet.
       wrong `pad_token_id` for this model — verified by inspecting both
       files directly, not assumed), `add_special_tokens = true` (the
       tokenizer's own `TemplateProcessing` post-processor wraps `<s> ...
-    </s>`, confirmed from `tokenizer.json`), mean pooling over the
+</s>`, confirmed from `tokenizer.json`), mean pooling over the
       attention mask (the exported ONNX graph has no pooling baked in —
       confirmed by inspecting its actual input/output tensor names and
       shapes with the `onnx` Python package, not assumed), L2
@@ -371,11 +371,11 @@ verification checklist below, none of which is checked off yet.
       manually with `MAGI_DATA_DIR` pointed at a directory containing the
       downloaded model/tokenizer, after `cargo xtask fetch-onnxruntime`).
 - [x] `magi-cli`'s `embedder_from_env()` now returns `Box<dyn
-    TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
+TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
       under `MAGI_FAKE_EMBEDDER=1` (previously the CLI only ever bailed
       out asking for the fake one, since no real embedder existed).
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` all
+--all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green with the new `ort`/`ndarray` dependencies.
 
 ### Slice: reference-vector parity, eval harness, quantization decision
@@ -488,7 +488,7 @@ verification checklist below, none of which is checked off yet.
       only 67 MB over (was 325 MB). Full writeup in ADR-0005's "Update:
       RSS root-cause investigation".
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` (130
+--all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green after the `embed::e5`/`embed::manager`
       changes; the real-model `#[ignore]`d tests (parity, cross-lingual
       smoke test) re-verified manually.
@@ -538,7 +538,7 @@ and ADR-0005 rather than actioned here — each is its own scoped follow-up.
       (matches the 767.1 MB comparison measurement within noise) — 66 MB
       over the ≤700 MB target, the closest this project has measured.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` (130
+--all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green.
 
 **Still open, unchanged**: the NFR-2/NFR-3 100k-chunk latency targets
@@ -569,16 +569,16 @@ Every number below was produced by a run on the reference machine on the
 current branch, not carried over from a summary. Machine: AMD Ryzen 7 7445HS
 (8c/16t), 16 GB, Windows 11 26200, int8 `multilingual-e5-small`.
 
-| # | SPEC.md §7 M3 verification item | Measured | Result |
-| -| ------------------------------- | -------- | ------ |
-| 1 | e5 parity vs. Python reference, cosine ≥ 0.97 (quantized) | worst-case **0.9953** (`cargo test --test e5_parity -- --ignored`) | PASS |
-| 2 | int8 recall@5 within 2 points of fp32 | 0.967 vs. 0.983 = **1.6 pts** | PASS |
-| 3 | Cross-lingual smoke test, both queries top-3 | both at **rank 2** (MRR 0.500 over the 2 queries ⇒ 1/2 + 1/2) | PASS |
-| 4 | Eval baseline; hybrid clauses (a) and (b) | (a) 0.971 = max(0.486, 0.971); (b) `kw` MRR 1.000 > 0.950, `cross` 0.413 > 0.000 | PASS |
-| 5 | 100k-chunk latency NFR-2 / NFR-3 | cold **1,443.7 ms** (≤ 3,000), warm **p95 230.0 ms** (≤ 300), p50 220.0, max 300.9 | PASS |
-| 6 | Peak RSS indexing the fixture corpus ≤ 700 MB | **581.9 MB** (`PeakWorkingSet64`, 50 ms polling, isolated `MAGI_DATA_DIR`) | PASS |
-| 7 | Download interrupted/resumed; corrupted rejected and re-downloaded | 4 tests in `embed/manager.rs`: `fresh_download_writes_verified_file_and_removes_partial`, `resumes_from_existing_partial_file_via_range`, `corrupted_download_is_rejected_and_can_be_retried`, `cancel_flag_stops_download_leaving_a_resumable_partial` | PASS |
-| 8 | `just test` needs no network | green with `MAGI_FAKE_EMBEDDER=1`, no network calls | PASS |
+| #   | SPEC.md §7 M3 verification item                                    | Measured                                                                                                                                                                                                                                                | Result |
+| --- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| 1   | e5 parity vs. Python reference, cosine ≥ 0.97 (quantized)          | worst-case **0.9953** (`cargo test --test e5_parity -- --ignored`)                                                                                                                                                                                      | PASS   |
+| 2   | int8 recall@5 within 2 points of fp32                              | 0.967 vs. 0.983 = **1.6 pts**                                                                                                                                                                                                                           | PASS   |
+| 3   | Cross-lingual smoke test, both queries top-3                       | both at **rank 2** (MRR 0.500 over the 2 queries ⇒ 1/2 + 1/2)                                                                                                                                                                                           | PASS   |
+| 4   | Eval baseline; hybrid clauses (a) and (b)                          | (a) 0.971 = max(0.486, 0.971); (b) `kw` MRR 1.000 > 0.950, `cross` 0.413 > 0.000                                                                                                                                                                        | PASS   |
+| 5   | 100k-chunk latency NFR-2 / NFR-3                                   | cold **1,443.7 ms** (≤ 3,000), warm **p95 230.0 ms** (≤ 300), p50 220.0, max 300.9                                                                                                                                                                      | PASS   |
+| 6   | Peak RSS indexing the fixture corpus ≤ 700 MB                      | **581.9 MB** (`PeakWorkingSet64`, 50 ms polling, isolated `MAGI_DATA_DIR`)                                                                                                                                                                              | PASS   |
+| 7   | Download interrupted/resumed; corrupted rejected and re-downloaded | 4 tests in `embed/manager.rs`: `fresh_download_writes_verified_file_and_removes_partial`, `resumes_from_existing_partial_file_via_range`, `corrupted_download_is_rejected_and_can_be_retried`, `cancel_flag_stops_download_leaving_a_resumable_partial` | PASS   |
+| 8   | `just test` needs no network                                       | green with `MAGI_FAKE_EMBEDDER=1`, no network calls                                                                                                                                                                                                     | PASS   |
 
 **All 8 verification items pass.** Full suite on the same commit: `cargo fmt
 --check` clean, `cargo clippy --workspace --all-targets --all-features -- -D
@@ -638,7 +638,7 @@ Caveats stated rather than smoothed over:
       time is asserted via a `0s`/`3600s` timeout comparison against a real
       `Instant`, not a mocked clock.
 - [x] **Scoped honestly, not wired into anything yet — and said so.**
-      `ModelSlot` is deliberately *not* plugged into `magi-cli`'s
+      `ModelSlot` is deliberately _not_ plugged into `magi-cli`'s
       `embedder_from_env()`: every `magi-cli` invocation is a one-shot
       process that exits when the command finishes, so there is nothing for
       an idle timer to usefully unload from (process exit already frees
@@ -646,7 +646,7 @@ Caveats stated rather than smoothed over:
       embed worker thread `engine.rs` will spawn (SPEC.md §5.3), whose
       `recv_timeout` loop is the natural place to call `unload_if_idle` on
       each tick — doesn't have to invent this from scratch. SPEC.md itself
-      splits it this way: M3 lists the lazy-load/idle-unload *mechanism* as
+      splits it this way: M3 lists the lazy-load/idle-unload _mechanism_ as
       a deliverable, while M7 ("Permissions and background-behavior
       hardening") separately lists "model idle unload" as its own
       deliverable with its own real-RSS verification item ("10 minutes idle
@@ -656,7 +656,7 @@ Caveats stated rather than smoothed over:
       a real fix — recorded as a conscious scope boundary rather than
       silently left out.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, and `cargo test --workspace` all
+--all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green after the change.
 - [x] **Re-embed-on-model-change: reconfirmed as correctly deferred, not a
       gap to close here.** `TextEmbedder::model_id()`'s doc comment has said
@@ -702,7 +702,7 @@ marked complete — the idle-unload mechanism gap above is now closed.
       downloaded and SHA-256-verified the real `model.onnx` (118,346,824
       bytes) and `tokenizer.json` (17,082,730 bytes) into
       `<data_dir>/models/text/`; `cargo test -p magi-core --release --
-      --ignored` then passed all 3 real-model tests (parity, cross-lingual
+  --ignored` then passed all 3 real-model tests (parity, cross-lingual
       smoke test, repeated-load-is-safe) against those freshly-downloaded
       files.
 - [x] **RSS target closed for real, using the now-working fetch path to
@@ -716,18 +716,18 @@ marked complete — the idle-unload mechanism gap above is now closed.
       (`.with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])`)
       and re-measuring peak RSS the same way as ADR-0005 (Windows
       `PeakWorkingSet64`, polled every 50 ms, `magi-cli index
-      fixtures/corpus`, average of two runs, same reference machine): **from
+  fixtures/corpus`, average of two runs, same reference machine): **from
       766.55 MB (767.8/765.3, confirms ADR-0005's 766.4 MB was reproducible)
       down to 682.8 MB (683.8/681.8)** — SPEC.md §7 M3's ≤ 700 MB target is
       now **met**, not just closer. Re-verified this wasn't a silent
       correctness regression: `e5_parity` (cosine 0.9953, unchanged),
       `real_model_embeds_plausible_vectors` (cross-lingual smoke test,
       unchanged), and `magi-cli eval eval/queries.jsonl --corpus
-      fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
+  fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
       same numbers ADR-0005 recorded) all still pass — disabling the arena
       only changes allocation strategy, never model output. `cargo fmt`,
       `cargo clippy --workspace --all-targets --all-features -- -D
-      warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
+  warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
       idempotence) all clean/green.
 
 **Still open**: the NFR-2/NFR-3 100k-chunk latency targets (root cause is
@@ -746,7 +746,7 @@ lint`/`typecheck`/`test`) are green, and the real-model `#[ignore]`d tests
 were re-run manually against the actual downloaded int8 model.
 
 - [x] **The ≤700 MB RSS evidence didn't cover the case that decides it.**
-      `index_root` passed *every* chunk of a file to `embed_passages` in one
+      `index_root` passed _every_ chunk of a file to `embed_passages` in one
       call, and ONNX Runtime materializes a `batch × seq_len × 384` f32
       `last_hidden_state` for the whole batch. Measured, not assumed: the
       largest file in `fixtures/corpus` yields **39 chunks**, but a 15 MB
@@ -804,7 +804,7 @@ were re-run manually against the actual downloaded int8 model.
       upsert's follow-up `SELECT id` went the same way. Both statements are
       also prepared once instead of re-prepared per chunk.
 - [x] **Token counts memoized per distinct word.** `chunk_by_token_counter`
-      called the real tokenizer once per *word*; a document has orders of
+      called the real tokenizer once per _word_; a document has orders of
       magnitude fewer distinct words than words. The counting closure and its
       9 pure-function tests are unchanged — just a `HashMap` in front.
 - [x] **`just setup` now vendors the ONNX Runtime.** A fresh clone following
@@ -820,8 +820,8 @@ were re-run manually against the actual downloaded int8 model.
 - [x] **NFR-2/NFR-3 both pass now — and the old FAIL was partly a harness
       bug.** The recorded cold 3,176 ms / warm p95 585 ms failures were
       re-measured after the `hybrid_search` fix above. Cold dropped to
-      1,234-1,303 ms (**PASS**), but warm p95 came back *bimodal for
-      identical code*: 231, 239, 423, 436, 478 ms across five runs. Root
+      1,234-1,303 ms (**PASS**), but warm p95 came back _bimodal for
+      identical code_: 231, 239, 423, 436, 478 ms across five runs. Root
       cause, found by reading the harness rather than averaging the noise
       away: `xtask bench-corpus` bulk-loads 100k rows through 5,000
       transactions and then measures reads against the resulting large WAL,
@@ -846,7 +846,7 @@ were re-run manually against the actual downloaded int8 model.
       reference), the cross-lingual smoke test (`electrician invoice` →
       `factura_electricista.pdf`, `receta de arepas` → `arepas_recipe.txt`,
       both top-3), and `magi-cli eval eval/queries.jsonl --corpus
-      fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
+  fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
       preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
       green; the 5 `#[ignore]`d real-model tests were run manually against
       the actual downloaded int8 model.
@@ -886,7 +886,7 @@ tests, `cargo fmt --check` and `cargo clippy --workspace --all-targets
       contract; CLAUDE.md and AGENTS.md updated to match.
 - [x] **Two `.unwrap()`s on a mutex removed** (`discovery/walk.rs`), per
       CLAUDE.md's no-`unwrap` rule: `unwrap_or_else(|poisoned|
-      poisoned.into_inner())` — nothing in that closure breaks an invariant
+  poisoned.into_inner())` — nothing in that closure breaks an invariant
       when a walk panics.
 - [x] **Crate-wide `#![allow(dead_code)]` deleted** (`lib.rs`). An M0 stub
       leftover: removing it produces zero warnings with or without
@@ -917,7 +917,7 @@ recorded in the new `fixtures/README.md`:
       **CI loses nothing measurable:** `phone_text_es.heic` (3000 × 4000) and
       `shelf_christmas.heic` (4000 × 3000) are 12 MP iPhone HEICs in both
       orientations, and SPEC.md §7 M4 only requires OCR CER on the English and
-      Spanish *screenshot* fixtures, which are committed. Redaction, not Git
+      Spanish _screenshot_ fixtures, which are committed. Redaction, not Git
       LFS, is the answer if one of these ever has to ship.
 - [x] **`phone_48mp_landscape.heic` was not a HEIC.** 121 MB, and a Netpbm P6
       export (5492 × 3672, 16-bit) behind the name — both decoders reject it at
@@ -933,7 +933,7 @@ recorded in the new `fixtures/README.md`:
       `fixtures/scrub_metadata.py` removes all of it without re-encoding a
       pixel — JPEG metadata segments dropped from the marker stream (and the
       file truncated at the primary image's EOI, because a phone JPEG appends
-      a *second* complete JPEG after it, MPF-style, carrying its own EXIF and
+      a _second_ complete JPEG after it, MPF-style, carrying its own EXIF and
       XMP), HEIF metadata item payloads overwritten in place with a valid
       empty replacement of the same length so no `iloc` offset moves, and the
       `sefd` box truncated. **Nothing that a test needs was lost:** HEIC
@@ -946,7 +946,7 @@ recorded in the new `fixtures/README.md`:
       before committing a new image fixture.
 - [x] **The "iPhone" fixtures are not iPhone photos.** EXIF named a Samsung
       Galaxy S24 FE, and a Galaxy A32 for `shelf_christmas.heic`. SPEC.md §7
-      M4 asks for self-shot *iPhone* HEICs. The filenames were kept so a real
+      M4 asks for self-shot _iPhone_ HEICs. The filenames were kept so a real
       iPhone shot can replace a file in place; structurally these are close
       (tile grid, HEVC, aux HDR gain map) but Apple's Live Photo `.MOV`
       sibling and 10-bit variants stay untested. Either supply iPhone shots
@@ -985,7 +985,7 @@ recorded in the new `fixtures/README.md`:
       `Heic`. Local-only fixtures are skipped, never failed.
 - [x] `just check` green: 145 unit + 9 golden + 1 idempotence tests,
       `cargo fmt --check` and `cargo clippy --workspace --all-targets
-      --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+  --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
 
 - [x] **CI green on all three runners** (ubuntu-22.04, macos-14,
       windows-latest), which is SPEC.md §7 M4's "a spike branch must produce a
@@ -1001,7 +1001,7 @@ Open, carried into Slice 2:
      even with "High efficiency pictures" enabled.
   2. **Converting those JPEGs to HEIC produced corrupt files** (tool and error
      text not captured — record them next time). This repo has no HEIF
-     *encoder* to do it properly either: `heic-rs` is decode-only, and the
+     _encoder_ to do it properly either: `heic-rs` is decode-only, and the
      vcpkg libheif install ships no `heif-enc`.
 
   So SPEC.md §7 M4's "decoding a 48 MP HEIC keeps the RSS delta < 400 MB and
@@ -1011,21 +1011,22 @@ Open, carried into Slice 2:
   that number more than pixel count does, so the extrapolation is not
   evidence. Three ways out, in order of cost — **needs a human decision**:
   a. Shoot 50 MP with HEIF forced on the Galaxy (Camera → Advanced picture
-     options → High efficiency pictures), or borrow an iPhone 14 Pro or later
-     with Resolution Control on. This also closes the separate "these are not
-     iPhone photos" gap.
+  options → High efficiency pictures), or borrow an iPhone 14 Pro or later
+  with Resolution Control on. This also closes the separate "these are not
+  iPhone photos" gap.
   b. ~~Generate one~~ — **rejected 2026-09-20.** It would mean building
-     libheif (and so cmake, libde265 and x265) from source purely to make one
-     test fixture, and the result would not be tile-gridded the way a phone's
-     is unless the encoder were told to tile it. High cost, and it would test
-     the budget against a decode path we do not actually ship against.
+  libheif (and so cmake, libde265 and x265) from source purely to make one
+  test fixture, and the result would not be tile-gridded the way a phone's
+  is unless the encoder were told to tile it. High cost, and it would test
+  the budget against a decode path we do not actually ship against.
   c. Amend SPEC.md §7 M4 to state the budget against the largest available
-     fixture, scaled by pixel count, and record why. Cheapest, and honest,
-     but it drops a real verification item.
+  fixture, scaled by pixel count, and record why. Cheapest, and honest,
+  but it drops a real verification item.
 
   **Parked as a known gap** (option a, deferred): the item stays open and
   unmeasured, and the number gets filled in when a real 48 MP HEIC exists.
   Nothing else in M4 is blocked on it.
+
 - **`embedded_thumbnail` was not written.** `heic-rs` decodes the primary item
   only and exposes no way to select the `thmb` item, so the function could
   only ever return `Ok(None)`. Slice 2 downscales the thumbnail from the
@@ -1147,7 +1148,7 @@ deletion on re-index, and reclaiming timed-out extraction threads.
       people learn to ignore, so the exemption is explicit and nothing else
       is exempt. The gate is now clean over every tracked fixture.
 - [x] **SPEC.md §7 M4 no longer names a vendor** (2026-09-20). It asked for
-      self-shot *iPhone* HEICs; what the decoder actually has to cope with is
+      self-shot _iPhone_ HEICs; what the decoder actually has to cope with is
       the container — a tile grid, an aux HDR gain map, a rotation transform
       — not who made the phone. The fixtures were renamed `iphone_*` →
       `phone_*` to stop the filenames claiming something untrue, and SPEC.md
@@ -1406,17 +1407,17 @@ too); this section is the record.
 
 ### Verification items
 
-| # | SPEC.md item | Result | Evidence |
-| - | --- | --- | --- |
-| 1 | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32 | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries). | ADR-0007, slice 4 |
-| 2 | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7 |
-| 3 | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly. | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
-| 4 | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11) | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries. | docs/eval.md |
-| 5 | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why. | ADR-0006, slice 3 |
-| 6 | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3 | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3. | slices 2, 4 |
-| 7 | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3 | **Pass.** | slice 4 |
-| 8 | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error. | slice 5, slice 7 |
-| 9 | Eval extended with >= 20 image queries, results in `docs/eval.md` | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900. | docs/eval.md |
+| #   | SPEC.md item                                                                                                                                                                      | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Evidence                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1   | SigLIP parity: cosine >= 0.99 fp32, >= 0.97 quantized, both towers; quantized recall@5 within 3 points of fp32                                                                    | **Pass, with an accepted exception.** Text 0.994-0.998. Image 0.968 mean / 0.954 min against 0.97: accepted by the owner 2026-09-20 (under 1% for 290 MB of RSS), SPEC.md amended. Retrieval identical to fp32 (recall@5 1.00 vs 1.00, 25 queries).                                                                                                                                                                                                                                                                                                                                                                                       | ADR-0007, slice 4                                               |
+| 2   | HEIC fixtures (12 and 48 MP, portrait and landscape, one with text, one with a QR) decode on Windows, macOS, Linux CI; orientation correct; OCR and QR as on the JPEG equivalents | **Pass.** Fixtures: 12 MP portrait with text (`phone_text_es`), 12 MP landscape (`shelf_christmas`), QR (`phone_qr`), an iPhone `.heif`, and two more Samsung shots; 48 MP is synthetic (item 3). **CI green on all three OSes** (reported by the owner, 2026-09-21; commit not recorded). Orientation: six goldens within 3-12/255 of an independent PIL reference and 4-10x closer to it than to any wrong orientation, plus a test that patches `irot` to check all four angles (covers 180 degrees). OCR CER 0.013 on the HEIC vs 0.022 on its JPEG; the QR decodes to the same payload from both. Not covered: an `imir` mirror box. | ADR-0003, slices 2, 3, 6, 7                                     |
+| 3   | 48 MP HEIC decode: RSS delta < 400 MB, < 3 s                                                                                                                                      | **Pass, on a synthetic file** (no real 48 MP HEIC exists; SPEC.md amended). 0.28-0.30 s, 291 MB delta; a 12 MP file is 0.09 s / 75 MB, so it scales linearly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `tools/synthetic_heic_48mp.py`, `tests/heic_budget.rs`, slice 6 |
+| 4   | Peak RSS indexing the full corpus with all models loaded <= 1.5 GB (NFR-11)                                                                                                       | **Pass.** 1271-1348 MB across runs, over 113 files including a 50 MP JPEG, indexing plus 164 queries.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | docs/eval.md                                                    |
+| 5   | OCR: CER <= 10% on the Spanish and English screenshots; accents (á é í ó ú ñ ¿ ¡) appear                                                                                          | **Pass, with an exception for `¡`.** CER: English 0.031, Spanish 0.000. Every listed accent is recognized except `¡`, which is not in the recognizer's dictionary. The owner accepted this on 2026-09-21 and SPEC.md now says why.                                                                                                                                                                                                                                                                                                                                                                                                        | ADR-0006, slice 3                                               |
+| 6   | The QR fixture decodes to its exact payload; `qr code` and `código QR` return it in the top 3                                                                                     | **Pass.** Both generated codes and the photographed one decode to their recorded payloads (the photo identically from HEIC and JPEG); both queries land in the top 3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | slices 2, 4                                                     |
+| 7   | `dog on the beach` / `perro en la playa` return the photo fixture in the top 3                                                                                                    | **Pass.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | slice 4                                                         |
+| 8   | A decompression-bomb fixture is rejected quickly, RSS delta < 200 MB                                                                                                              | **Pass.** 0 MB delta, 51 microseconds, refused from the header. An image over the megapixel cap is `skipped` (`image_too_large`), not an error.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | slice 5, slice 7                                                |
+| 9   | Eval extended with >= 20 image queries, results in `docs/eval.md`                                                                                                                 | **Pass.** 94 image queries of 164 (`img` 29, `img2` 54, `ocr` 7, `qr` 3, `skip` 1). Hybrid recall@5 **0.982** overall, `img` 1.000, `img2` 0.981, `ocr` 1.000, `qr` 1.000, `cross` 0.900.                                                                                                                                                                                                                                                                                                                                                                                                                                                 | docs/eval.md                                                    |
 
 Also true at sign-off: `cargo fmt` and `cargo clippy --workspace --all-targets
 --all-features -D warnings` clean; 175 unit tests plus the golden, idempotence,
@@ -1457,7 +1458,7 @@ files). Behaviour is unchanged apart from the panic-message bug below. Net
   contents. Fixed with `&*payload`, and a new `isolate` test covers it.
 - **`discovery/classify.rs` held raw NUL bytes** in a test's TIFF literal, so git
   treated it as a binary file and showed no diffs for it. The bytes are now written
-  as ` ` escapes.
+  as `\0` escapes.
 - **`OcrEngine::engine_id`'s doc claimed a `meta.ocr_engine_id` key.** Nothing
   writes that key, and SPEC.md §5.5 doesn't list it. The doc is corrected; see
   "For M5".
@@ -1527,3 +1528,514 @@ re-queue images: that needs an `ocr_engine_id` `meta` key. The owner approved
 adding it on 2026-09-21; SPEC.md §5.5 and M5's re-embed trigger now list it. Also,
 `PaddleOcr::load` is eager. Unlike SigLIP, it is not a lazy `ModelSlot`, so it
 does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.
+
+### M5 Slice 1 - file state machine, hash-skip, re-embed trigger
+
+Plan: docs/m5-plan.md. Synchronous only: no threads or watcher yet. A real-model
+eval afterwards is identical to the last recorded run (hybrid recall@5 0.982, same
+three misses), so the refactor of the per-file path changed no retrieval result.
+
+- [x] **DB operations** (`db/files.rs`): state transitions, `reset_indexing_to_pending`,
+      `next_pending`, `record_failure` with the 30 s / 2 min / give-up-on-third
+      backoff, `invalidate`, `delete_files` / `delete_file` / `purge_root`, and
+      thumbnail removal only when no other file shares the key.
+- [x] **Hash-skip** (`pipeline::index_file`): unchanged size+mtime reads nothing;
+      a changed mtime with the same streamed hash keeps the chunks and vectors.
+      `index_root` is now incremental for files that are still there.
+- [x] **`PIPELINE_VERSION` = 1**, written by `upsert_file`. The upsert's
+      `ON CONFLICT` branch did not refresh `pipeline_version`, which a
+      version-based skip would have tripped over; it does now, and clears
+      `attempts` and `next_attempt_at`.
+- [x] **Re-embed trigger** (`index::requeue_on_model_change`) for the text model,
+      the image model and, new in M5, `meta.ocr_engine_id`. Invalidation sets
+      `pipeline_version = 0`, because marking rows `pending` alone would not stop a
+      hash-skip.
+- [x] **`roots::remove` purges the root's rows.** Verified beforehand that the old
+      code failed with `FOREIGN KEY constraint failed` on an indexed root.
+- [x] **`CountingEmbedder`** (`FakeEmbedder::counting()`) for the "nothing was
+      re-embedded" assertions.
+- [x] **Verification, at function level** (the end-to-end versions with a real
+      watcher come in later slices): item 2 (modified file: old chunks, FTS rows
+      and vectors gone), 3 (touch: embed counter unchanged), 3b (model id
+      changed: re-embedded; same id: skipped), 7 (delete removes every table),
+      12 (root removal purges), 11 in part (rows left `indexing` are finished),
+      14 in part (a corrupt file becomes `error`, the others carry on; the
+      permission-denied half waits for Slice 5). 16 new unit tests plus a
+      thumbnail-sharing integration test. A mutation check (disabling the
+      hash comparison) turns exactly the two hash-skip tests red.
+- [x] The idempotence test changed on purpose: it used to assert that two runs
+      give **identical summaries**, which is the re-index-everything behaviour M5
+      removes. It now asserts the second run is a no-op (every file
+      `unchanged`, zero chunks embedded). It also runs in ~100 s instead of
+      200-400 s.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets --all-features -D
+  warnings` clean; workspace tests pass (192 unit).
+
+**Deviations from the plan.** `insert_pending`, `rename_file`, `find_by_hash` and
+`purge_excluded` were listed for Slice 1 but are only used by reconciliation and
+move detection, so they land in Slice 2 with their tests instead of as untested
+code here. `purge_excluded` also depends on how the walker matches exclusion
+globs, which Slice 2 reads anyway.
+
+**Known limits.**
+
+- Turning a kind on or off in `indexing.file_types` does not invalidate existing
+  rows: a file with unchanged size and mtime keeps whatever it was indexed as.
+  Slice 7's `apply_config` handles it.
+- A file is judged unchanged by size and mtime alone before any hash is looked
+  at (the usual trade-off; the periodic reconciliation and hash check in later
+  slices are the safety net for a same-size, same-mtime edit).
+- `index_root` still does not notice deleted files; that is Slice 2.
+
+### M5 Slice 2 - reconciliation, move detection, root lifecycle
+
+Plan: docs/m5-plan.md. Still synchronous. `index_root` is now
+reconcile -> resolve moves -> drain the `pending` queue, so it notices deletions,
+renames and moves, and `magi-cli index` is incremental against a changing folder.
+
+- [x] **`watch/reconcile.rs`**: `reconcile_root` (one transaction: unknown ->
+      `pending`; size, mtime or `pipeline_version` differ -> `pending` with the new
+      stat; else only `seen_scan_id`), `next_scan_id` (`meta.last_scan_id`),
+      `roots.last_full_scan_at`, and `resolve_moves`.
+- [x] **Move detection.** Rows the scan did not see are held as candidates;
+      one whose blake3 hash matches a brand-new `pending` row of the same size and
+      kind is renamed in place (`files::rename_file`: row, chunks and vectors kept,
+      nothing embedded), the rest are deleted. Only same-size new rows are hashed,
+      so a scan with no deletions reads nothing. Because the caller scans every
+      root before resolving, a move **between roots** is matched too.
+- [x] **Root lifecycle.** `platform::FsProbe` (`read_dir` + one `metadata`;
+      permission-denied and not-found map to the two statuses) and
+      `roots::set_access`. A missing or unreadable root keeps its rows and returns
+      an empty summary; `ok` is set again when it returns. Search
+      (`search_fts`, text and image vector) hides roots that are `missing` or
+      `enabled = 0`.
+- [x] **Verification, at function level:** item 4 (edited while stopped:
+      re-embedded, old text gone), 5 (rename: same row, zero embeds, found by the
+      new name only), 6/7 (deleted: files, chunks, vectors, FTS all gone), 8 (move + edit is a delete plus a new file), 12 (missing root keeps rows, hidden, and
+      visible again on return; disabled root hidden), 13 (a newly excluded file is
+      deleted by the next scan), 15 (move between roots). 10 new unit tests plus a
+      probe test; 203 unit tests and the integration suite pass, clippy clean.
+- [x] `magi-cli index` prints `moved` and `removed` and takes its scan id from
+      `next_scan_id` instead of a fixed 1.
+
+**Deviations from the plan.**
+
+- `purge_excluded` is not needed: an excluded file is simply not walked, so it is
+  an unseen row and the deletion pass removes it (test above). It would only add
+  a second code path.
+- `index_root` keeps its `scan_id` parameter (callers pass `next_scan_id`) rather
+  than allocating one itself, which kept the existing pipeline tests as they were.
+- A `pending` row whose file is gone by the time it is drained is deleted, not
+  errored.
+
+**Known limits.**
+
+- A walk that could not read a subfolder (permissions) yields no entries for it,
+  so its files look deleted and their rows are removed until the next scan finds
+  them again. Slice 5 (platform behaviour) reports unreadable subtrees.
+- A renamed file's filename _chunk text_ is updated (so it is searchable by the
+  new name) but its filename _vector_ still describes the old name; SPEC's "no
+  re-embedding" is kept.
+- A root that is mounted but empty (an unmounted volume's mount point) is
+  indistinguishable from an emptied folder and is reconciled as such.
+- Files that are never hashed (filename-only kinds) cannot be matched as moves;
+  they are deleted and re-inserted, costing one filename chunk.
+- Vector search filters by root after the k-nearest step, so a hidden root can
+  leave fewer than k results.
+
+### M5 Slice 3 - runtime, scheduler, writer, workers, `Engine` skeleton
+
+Plan: docs/m5-plan.md. Threads, no watcher yet. Done in three checked steps:
+`IndexContext` owns `Arc<dyn TextEmbedder>`; `index_file` split into
+extract -> embed -> store functions (tests unchanged and green); then the
+threads.
+
+- [x] **Stages.** `pipeline::prepare` (extract: unchanged? hash-skip, read,
+      extract, chunk; no database), `embed` (batches of 16 chunks, a hook runs
+      before each), `store_embedded` / `store_keep` / `store_retry` (writer).
+      `index_file` is these three in a row, so `index_root`, the CLI and `eval`
+      are unchanged in behaviour. An I/O failure on a file that has a row is now
+      `Retry` (backoff, `error` on the third failure) instead of an immediate
+      `error`; a parse failure of a readable file is still an immediate `error`.
+- [x] **`index/scheduler.rs`**: pure logic over a connection with the clock
+      passed in. Newest `mtime` first, dedupe by row, a bounded number in
+      flight, backoff rows untouched, a file that vanished is deleted. Stability
+      check: mtime under 3 s old, or size changed between two stats 1 s apart,
+      defers 5 s.
+- [x] **`index/writer.rs`**: the only writing thread. `WriteJob` = mark
+      indexing, store, keep, retry, delete, reconcile, stop; one transaction per
+      file; a failed store leaves the row retryable, not stuck `indexing`.
+- [x] **`engine.rs`**: `Engine::start(config, db_path, text, image, ocr)` ->
+      `EngineHandle` (startup steps 1, 2, 4, 6), `stats()`, `rescan()`,
+      `search_pending()` (`SearchPending` / `SearchGuard`, the priority lock the
+      embed worker waits on between batches, capped at 5 s), and a `shutdown()`
+      that stops the stages front to back, then the writer.
+- [x] **Extract pool** (`worker_threads`, or `available_parallelism()/2`) and
+      the **image decode gate** (`index/gate.rs`: at most 2 decodes, 1 over 12 MP).
+- [x] **`watch::reconcile::reconcile_all`**: probe, reconcile every enabled root,
+      settle moves across roots together (used by startup and `rescan`).
+- [x] **New dependency:** `crossbeam-channel` 0.5.17 (SPEC §3). `std::mpsc` has
+      no bounded multi-producer channel or `select`.
+- [x] **Verification** (`tests/incremental.rs`, real engine, fake embedder,
+      polling with deadlines, three consecutive runs all green):
+      9 (1,000 files: 1,000 distinct rows, every chunk embedded exactly once, a
+      restart embeds nothing), 10 (file written for 5 s: not indexed while it grows,
+      indexed once with its final content; with the stability check disabled the
+      test fails), 11 in process (rows left `indexing` are reset and completed,
+      `integrity_check` ok; and a shutdown mid-queue then restart completes with no
+      file embedded twice), 14 in part (a truncated PDF becomes `error`, the rest
+      carry on), plus a file deleted while queued. 209 unit tests (6 new:
+      scheduler 5, gate 1), clippy clean.
+
+**Deviations from the plan.**
+
+- Item 11's _real process kill_ moves to Slice 7: it needs `magi-cli daemon`.
+  The in-process version above covers the recovery logic.
+- Image embedding still happens inside extraction (`extract_image` calls the
+  image embedder), so image vectors are computed on the extract workers, not the
+  embed worker. Only text embedding is on the embed thread. Moving it would mean
+  splitting `extract_image`; SigLIP serializes internally, so it is safe.
+- `Engine::start` blocks while the first reconciliation walk runs.
+- Threads run at normal priority (`ThreadPriority` is Slice 5).
+
+**Known limits.**
+
+- The scheduler polls every 250 ms even when idle; idle CPU is measured in
+  Slice 8.
+- A worker that panics is contained per file (`catch_unwind`), but the
+  extraction timeout thread cap from M2 still applies.
+- No watcher: new and changed files are found by `rescan()` only.
+
+### M5 Slice 4 - watchers, polling fallback, periodic safety nets
+
+Plan: docs/m5-plan.md. The engine now notices changes itself; `rescan()` is no
+longer the only way.
+
+- [x] **`watch/watcher.rs`**: one `notify` watcher per root, debounced 2 s, started
+      **before** the first scan (events queue behind it on the writer's channel
+      and are applied afterwards). It reports only _which paths changed_
+      (`WriteJob::Paths`); an error or an overflow flag falls back to a full
+      rescan. Instead of mirroring SPEC's event table case by case, each path is
+      looked at on disk by `reconcile::scan_paths`: a file is queued, a folder is
+      walked (`discovery::walk_under`), and whatever was at or under a path but
+      is gone, moved away or now excluded (`discovery::is_wanted`) becomes a
+      deletion candidate. This handles create, modify, remove, rename in place,
+      rename out of the roots, rename into an excluded folder and rename from an
+      unknown place with the same code, and behaves the same whichever event kinds
+      the OS reports.
+- [x] **Held deletions** (`reconcile::Held`, `settle_held`, in the writer): a
+      candidate is kept for 5 s and matched by content hash against new `pending`
+      rows, so a move whose removal and creation arrive in different batches is
+      still a rename. Two roots' watchers debounce independently, and without this
+      a move between roots re-embedded the file about half the time (caught by the
+      integration test, see below). A candidate seen again (an editor's atomic
+      save) is dropped from the list instead of deleted.
+- [x] **Changed while queued.** If the watcher re-queues a file the pipeline is
+      working on, the stale result is dropped and the file is picked up again
+      (`writer::requeued`), so a store never overwrites a newer change.
+- [x] **`watch/poller.rs`**: `Timers` (pure, wall-clock seconds passed in) and a
+      ticker thread: a scan every `reconcile_interval_hours`, after a wall-clock
+      jump over 5 minutes between 1-minute ticks, and every 15 minutes while any
+      root has no working watcher. A root whose watcher fails to start gets
+      status `watch_failed` (cleared when it starts again).
+- [x] **`EngineHandle::apply_indexing_config`**: swaps the indexing options
+      (exclusions, hidden files, size limits) while running and rescans. The
+      options are shared behind an `RwLock`; workers, the writer and the watcher
+      path read the current ones. Slice 7's `apply_config` builds on it.
+- [x] **Scheduler.** A file modified under 3 s ago is looked at again when it
+      will have settled (at least 1 s), not after a flat 5 s; that keeps a new
+      file within item 1's 10 s window (about 5 s measured). A file dated in the
+      future (clock skew) was held until that time; it is now judged by the size
+      check instead (unit test).
+- [x] **New dependencies:** `notify` 8.2.0 and `notify-debouncer-full` 0.6.0
+      (SPEC section 3). The stable pair: notify 9 and debouncer 0.8 are still
+      release candidates, and 0.6 is the debouncer line built for notify 8.
+- [x] **Verification** (`tests/incremental.rs`, real watcher, no `rescan()`
+      calls, 16 tests, three consecutive full runs green): 1 (new file searchable
+      within 10 s), 2 (modified: old text gone from chunks, FTS and vectors, and
+      exactly the new chunks remain), 3 (touch: embed counter unchanged), 4
+      (rename: same row, new name searchable, counter unchanged), 5 (move
+      between roots: same row, `root_id` changed, counter unchanged), 6 (moved out
+      of every root: removed), 7 (deleted: gone from `files`, `chunks`,
+      `vec_text`, `vec_image`, FTS), 9 (1,000 files created while running: each
+      exactly once), 10 (5 s slow write: never indexed while growing, once with
+      the final content), 13 (exclusion added: purged; removed: indexed again).
+      With the watchers disabled the watcher tests fail on their waits.
+      224 unit tests (11 new: scan/hold/rename/folder cases, `is_wanted` against
+      a real walk, `walk_under`, `Timers`), clippy clean.
+- [x] **CI on all three OSes** green after the three follow-up fixes below
+      (confirmed by the owner, 2026-09-22).
+
+**Follow-up fixes (CI on macOS and Linux).** macOS's FSEvents does not pair a
+rename's halves, and `notify-debouncer-full` folds a rename of a just-created
+file into a bare create of the new path, so the rename test saw two rows. Two
+attempts that claimed held candidates inside the scan transaction (b756f62,
+83ca6df) were replaced by matching from the new side (2632650):
+`reconcile_entry` hashes an unknown path only when a same-size, same-kind
+hashed row exists whose own path is gone (`find_old_home`), and moves that row
+in place. The old path never has to be reported, the match happens in the
+scan's transaction (the scheduler never sees an unclaimed `pending` row), and
+startup scans get the same behaviour. `Held` is now only a delay before
+deleting.
+
+**A flake, and its cause.** The move-between-roots test failed about half the
+runs with the file embedded twice. Not a test problem: the removal and the
+creation arrive from two debouncers in separate batches, and deleting on the
+first batch left nothing to match. Fixed by holding candidates (above); 10
+consecutive isolated runs and three full runs pass.
+
+**Known limits.**
+
+- A moved file whose kind has no content hash (filename-only kinds) cannot
+  be matched; it is re-created, which costs one filename chunk.
+- A held file stays searchable for up to 5 s after it was deleted.
+- `is_wanted` does not know the Windows hidden _attribute_ or symlinked
+  ancestor folders, and a path inside an opaque bundle is ignored (the periodic
+  scan covers it).
+- A root that was missing at start, or whose watcher failed, is polled every
+  15 minutes; a root that comes back is not watched until the next start.
+- The 2 s debounce and 5 s hold are constants, not settings.
+
+### M5 Slice 5 - platform behaviour
+
+Plan: docs/m5-plan.md. `platform::Os` implements the SPEC §6 traits; OS code
+stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
+`platform/mod.rs` so every OS tests them.
+
+- [x] **Cloud placeholders** (SPEC §5.4 step 3, §6.1, §6.2). `WalkEntry::cloud_only`
+      comes from metadata the walk already reads: Windows
+      `0x00400000 | 0x00040000 | 0x00001000`, macOS `SF_DATALESS = 0x40000000`
+      (checked against xnu `bsd/sys/stat.h`), Linux never. The file is
+      `skipped` / `cloud_only` with only its filename chunk; `plan_entry` decides
+      before anything opens it, and move matching does not hash it. Tests: the
+      bit decoders (all OSes), a pipeline test (content not searchable, name
+      is), and on Windows a real `FILE_ATTRIBUTE_OFFLINE` set with
+      `SetFileAttributesW` and read back through `discovery::stat`.
+- [x] **Locked files** (item 16). Windows errors 32/33 (`platform::is_locked`)
+      go through `files::record_locked`: same backoff, attempts capped one below
+      `MAX_ATTEMPTS`, so never `error`. `std` already opens files with shared
+      read/write/delete access.
+- [x] **Thread priority**: extract and embed threads call
+      `Os.lower_current_thread()` (Windows `THREAD_PRIORITY_BELOW_NORMAL`, Linux
+      `setpriority(PRIO_PROCESS, 0, 10)`, macOS `QOS_CLASS_UTILITY`).
+- [x] **Power status**: Windows `GetSystemPowerStatus`, Linux
+      `/sys/class/power_supply` (`type` and `online`), macOS `pmset -g batt`.
+      Parsers unit-tested; nothing reads it until Slice 6's pause on battery.
+- [x] **Recovery**: the ticker now ticks every 30 s and sends
+      `WriteJob::Reprobe`; `reconcile::recover` reconciles when a
+      `permission_denied` or `missing` root is readable again (SPEC §6.1). The
+      jump detector is unchanged (still a gap over 5 minutes).
+- [x] **Unwatched roots**: a UNC path or a drive letter of type `DRIVE_REMOTE`
+      is not watched (`watch_failed`, 15-minute polling); inotify `ENOSPC`
+      (`MaxFilesWatch`) logs the `sysctl fs.inotify.max_user_watches` fix.
+- [x] **New dependencies**: `libc` 0.2.189 (Unix) and `windows-sys` 0.61.2
+      (Windows; features FileSystem, Power, Threading, WindowsProgramming,
+      Foundation). Both were already in the lockfile transitively; thin
+      bindings, no native library, so no ADR.
+- [x] **Verification** (Windows, `tests/incremental.rs`, real engine): 14 (a
+      file with read permission denied, `chmod 000` on Unix and an `icacls`
+      deny ACE on Windows, is retried then `error`, the other file indexed),
+      15 (root renamed away: `missing`, rows kept, hidden from search; renamed
+      back while running: picked up by the 30 s re-probe, embed counter
+      unchanged), 16 (file held with `share_mode(0)`: six retries, still
+      `pending`, indexed once released), plus a path over 260 characters.
+      Retry tests skip the backoff by setting `next_attempt_at = 0` rather than
+      waiting minutes. Three consecutive full runs of the suite (20 tests)
+      green. Unit tests: 237 (13 new). Clippy clean.
+- [x] **CI on all three OSes**: green on 8a95a56 (Windows, Ubuntu 22.04,
+      macOS 14), checked 2026-09-22.
+
+**Known limits.**
+
+- A placeholder that is hydrated in place with the same size and mtime stays
+  `skipped` / `cloud_only` until it next changes.
+- The scheduler's stability `stat` on Windows opens a handle without data
+  access; no real OneDrive or iCloud placeholder has been tested, only the
+  attribute bits.
+- `record_locked` shares the `attempts` counter, so a real failure right after
+  a long lock gives up sooner than three tries.
+- A recovered root is reconciled but not watched until the next start (polled
+  every 15 minutes meanwhile), as in Slice 4.
+
+### M5 Slice 6 - resource policy
+
+Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
+`magi-monitor` thread); see docs/architecture.md, "Resource policy".
+
+- [x] **Memory pressure** (item 17, NFR-13): every 10 s the monitor reads
+      available memory (`sysinfo`); below 1 GiB the scheduler starts no new
+      files and the image model is unloaded at once. Clearing it resumes.
+      Deviation from the plan: no `MemoryProbe` trait. The test hook is
+      `EngineHandle::simulate_low_memory(bool)` (hidden from docs), which also
+      wakes the monitor, so the test does not wait out the 10 s check.
+- [x] **Auto `worker_threads`**: `min(physical_cores / 2, total_ram_gb / 4)`,
+      clamped to 1-4, RAM rounded to whole GB. **Low-memory mode** (8 GB or
+      less): idle unload capped at 2 minutes.
+- [x] **Idle unload**: `unload_if_idle` on `TextEmbedder`, `ImageEmbedder` and
+      `OcrEngine`. `E5Embedder` and `PaddleOcr` now load their sessions on first
+      use, as SigLIP already did; `load()` still fails at once if the files are
+      missing. The monitor unloads anything idle past the timeout.
+- [x] **Pause on battery** (`pause_on_battery`), read at most once a minute.
+      Engine tests turn it off so a laptop on battery can still run them.
+- [x] **New dependency**: `sysinfo` 0.39.6, `default-features = false`,
+      feature `system` (SPEC §5.3 names it). Pure Rust over OS APIs, no native
+      library, so no ADR.
+- [x] **Verification**: item 17 in `tests/incremental.rs`: an image is indexed
+      (image model loaded), the hook pauses indexing and unloads the model, a
+      new file (mtime backdated so the stability check cannot be what holds it)
+      stays `pending` for 3 s, and clearing the hook indexes it. Checked that the
+      test fails when the scheduler ignores the pause. Unit tests: worker
+      formula, low-memory mode, the 1 GiB threshold, and a busy `ModelSlot` is
+      neither unloaded nor lent twice. Unit tests: 242 (5 new); three full
+      runs of `tests/incremental.rs` (21 tests) green. Clippy clean.
+- [x] **Fix found in review (since Slice 3):** two extract workers can decode
+      images at once (the gate allows 2), but `PaddleOcr` failed at once when
+      the other worker held it, and `extract_image` treats a failed OCR as "no
+      text", so one of two concurrent images was indexed without its OCR text,
+      for good. OCR now waits up to 30 s for the other worker
+      (`ModelSlot::get_or_load_within`), well under the 60 s file timeout, so a
+      hung run still cannot pile up stuck threads. Unit test: a bounded wait
+      gets the model once the other user is done.
+
+**Known limits.**
+
+- A file already in the pipeline when the pause starts may load the image
+  model again; the next check (10 s) unloads it again.
+- The pause is not in `IndexStatus` or persisted yet; user pause/resume and
+  status are Slice 7.
+- Under memory pressure the SigLIP text tower is unloaded too; a search loads
+  it again.
+
+### M5 Slice 7 - control surface and daemon
+
+Plan: docs/m5-plan.md. See docs/architecture.md, "Control surface".
+
+- [x] **`EngineHandle`**: `status()` (`IndexStatus`), `subscribe()` (status
+      events), `pause()` / `resume()` persisted in `meta.paused`, `add_root`
+      (rejects missing, duplicate and nested paths; probes, watches, scans;
+      returns the probed status), `remove_root` (stops the watcher, purges),
+      `set_root_enabled`, `retry_errors`. `rescan()` and
+      `apply_indexing_config()` already covered `rescan_all` and exclusions.
+      Every write runs on the writer (`WriteJob::Exec`, a closure with a reply).
+- [x] **DTOs** in `dto.rs` (serde only): `IndexStatus`, `IndexState`,
+      `RootStatus`.
+- [x] **Events.** One `IndexStatus` stream covers SPEC's status, progress, root
+      status and permission issues (a `permission_denied` root is in `roots`).
+      The status thread wakes twice a second and reads the database only when
+      the writer applied a job or the pause/scan flags flipped.
+- [x] **`magi-cli daemon [--stats]`**: headless engine, one line per status
+      change, roots printed when they change, Ctrl-C shuts down cleanly,
+      `--stats` prints CPU and RSS each minute. Tried by hand: 30 files indexed,
+      a file created while running picked up within the debounce.
+- [x] **Fix found while building it:** a store for a file deleted (or whose
+      root was removed) while it was in the pipeline re-created its row, since
+      only a re-queued row was treated as stale. Now only a row still
+      `indexing` takes a result (`writer::superseded`, unit test).
+- [x] **`next_pending`** skips rows of disabled roots and of roots `missing`
+      or `permission_denied` (before, a `pending` row of a missing root was
+      stat'd, not found, and deleted).
+- [x] **New dependency**: `ctrlc` 3.5.2 (magi-cli only), as the plan chose over
+      a stop-file. Pure Rust; pulls `nix` on Unix, `windows-sys` (already
+      used) on Windows. `sysinfo` (already a dependency) for `--stats`.
+- [x] **Verification.** `tests/incremental.rs`: item 12 through the engine
+      (a root added while running is indexed and watched, disabled is hidden,
+      re-enabled picks up what changed, removed leaves only the other root's
+      rows, with `vec_text` matching `chunks`), item 13 (Slice 4), persisted
+      pause (paused, restart, a backdated file stays `pending` 3 s, resume
+      indexes it, restart not paused), status counts and a subscriber hearing
+      about a new file, and `retry_errors` bringing back a file made readable
+      again. `magi-cli/tests/daemon.rs`: item 11 with a real kill: 40 files of
+      about 1 MB, the daemon killed once a row is `indexing`, that row still
+      `indexing` in the database, `integrity_check` ok, a restart indexes all
+      40 with `chunks`, `chunks_fts` and `vec_text` in step (4 runs green).
+      Unit tests: 246 (4 new). Three full runs of `tests/incremental.rs`
+      (24 tests) green. Clippy clean.
+
+**Follow-up (owner review).** `add_root`, `set_root_enabled(true)` and the
+recovery of a missing or unreadable root walked every root; now they walk only
+that root (`reconcile::reconcile_roots`, `WriteJob::ReconcileRoot`; unit test:
+scanning one root leaves another's new file untouched until that root is
+scanned). Nested roots were already rejected both ways (FR-1, M1 tests); the
+engine test now also checks `add_root` on a folder inside a root fails with
+`NestedRoot`. Unit tests: 247.
+
+**Known limits.**
+
+- Removing a root and then adding a folder inside it (or its parent) indexes
+  that folder from scratch: the purge already dropped the vectors.
+- `pause()` and root changes wait for the writer, so they can take as long as
+  a running scan.
+- Ctrl-C shutdown has no automated test (the kill test uses a hard kill); it
+  was checked by hand by the owner on Windows (prints `stopping...` then
+  `stopped`, 2026-09-22).
+- A file already waiting out the stability check when its root is disabled
+  may still be indexed once.
+
+### M5 Slice 8 - verification gaps, manual run
+
+- [x] **Item 3b through the engine** (`a_changed_text_model_id_re_embeds_unchanged_files`):
+      a restart with the same model embeds nothing; with `meta.text_model_id`
+      set to another model, every chunk is re-embedded once and the running id
+      is stored.
+- [x] **Item 8 through the engine** (`changes_made_while_stopped_converge_on_restart`):
+      edit, delete, rename and create while stopped; after restart the file
+      names in the DB equal the folder's, old text is gone, `vec_text` matches
+      `chunks`, `integrity_check` ok, and only the edited and created files
+      were embedded (the rename was not). `tests/incremental.rs`: 26 tests green.
+- [x] **Manual item: idle CPU** 0.05-0.37% (one sample 0.63%) of one core over
+      ~80 minutes of normal use, private memory flat at 93 MB after idle unload.
+      See docs/benchmarks.md, "M5 — idle cost".
+      **Exception the owner accepted:** 232 files instead of 20k+.
+- [x] **Fix found by the manual run:** the low-memory pause had no hysteresis;
+      with available RAM near 1 GiB it flipped `paused` / `idle` every 10 s
+      check. It now resumes only above 1.25 GiB (`memory_low`, unit test; item
+      17 test still green).
+- [x] **NFR-11 peak RSS with the engine running:** 1,215–1,337 MB on
+      `fixtures/corpus` (≤ 1.5 GB, pass). A search during the first index was
+      not measured and would go over. See docs/benchmarks.md, "M5 — peak memory".
+- [x] **NFR-12 peak memory, hybrid search only:** 842–848 MB (≤ 900 MB, pass),
+      down from 1,272 MB. `magi-cli search` frees e5 before the SigLIP text
+      tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
+      accepted), and SigLIP builds its session before parsing its tokenizer.
+      mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
+- [ ] **Pending: search latency while indexing (NFR-8).** Not measured: it
+      needs indexing and search in one process, which arrives with the desktop
+      app (M6). The same goes for peak memory with a search during the first
+      index. Deferred by the owner, 2026-09-25.
+- [x] ADR-0008 (runtime and threading) and ADR-0009 (watchers and
+      reconciliation) written.
+- [x] CI green on all three OSes (confirmed by the owner, 2026-09-25).
+
+### M5 sign-off
+
+Integration tests are in `crates/magi-core/tests/incremental.rs` unless noted.
+They use a real watcher, temp dirs and `FakeEmbedder`, and run in CI on
+Windows, Ubuntu 22.04 and macOS 14.
+
+| Item   | Check                                                  | Evidence                                                                                                                                                               |
+| ------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1      | New file searchable within 10 s                        | `a_new_file_is_searchable_within_ten_seconds`                                                                                                                          |
+| 2      | Modified: old chunks, FTS, vectors gone                | `a_modified_file_replaces_its_old_content_everywhere`                                                                                                                  |
+| 3      | `touch` does not re-embed                              | `touching_a_file_does_not_re_embed_it`                                                                                                                                 |
+| 3b     | Model id changed re-embeds; same id skips              | `a_changed_text_model_id_re_embeds_unchanged_files`                                                                                                                    |
+| 4      | Rename in a root, no re-embed                          | `a_rename_inside_a_root_updates_the_path_without_re_embedding`                                                                                                         |
+| 5      | Move between roots, no re-embed                        | `a_move_between_roots_updates_the_root_without_re_embedding`                                                                                                           |
+| 6      | Moved out of every root: removed                       | `a_file_moved_out_of_every_root_is_removed`                                                                                                                            |
+| 7      | Delete removes every table                             | `a_deleted_file_is_removed_from_every_table`                                                                                                                           |
+| 8      | Changes while stopped converge                         | `changes_made_while_stopped_converge_on_restart`                                                                                                                       |
+| 9      | 1,000-file burst, each once                            | `a_burst_of_1000_files_created_while_running_is_indexed_exactly_once`, `a_burst_of_1000_files_is_indexed_exactly_once`                                                 |
+| 10     | Slow 5 s write indexed once, final content             | `a_file_written_slowly_under_a_watcher_is_indexed_once`, `a_file_written_slowly_is_indexed_once_with_its_final_content`                                                |
+| 11     | Killed mid-index: reset and completed, integrity ok    | `magi-cli/tests/daemon.rs` `a_daemon_killed_mid_index_finishes_on_restart_with_an_intact_database`; in process `rows_left_indexing_are_reset_and_completed_on_restart` |
+| 12     | Root removed: rows purged                              | `roots_are_added_disabled_and_removed_while_running`                                                                                                                   |
+| 13     | Exclusion added purges, removed restores               | `changing_an_exclusion_purges_and_restores_files`                                                                                                                      |
+| 14     | Unreadable file: `error`, others continue              | `a_file_without_read_permission_becomes_error_and_the_others_continue`                                                                                                 |
+| 15     | Root missing: index kept, resumes without re-embedding | `a_missing_root_keeps_its_index_and_resumes_without_re_embedding`                                                                                                      |
+| 16     | Windows locked file retried, indexed after release     | `a_locked_file_is_retried_and_indexed_after_release` (Windows only)                                                                                                    |
+| 17     | Memory pressure pauses and unloads the image model     | `memory_pressure_pauses_indexing_and_unloads_the_image_model`                                                                                                          |
+| Manual | Idle CPU under 1% after the first index                | 0.05–0.37% over ~80 min; **exception accepted:** 232 files, not 20k+ (docs/benchmarks.md, "M5 — idle cost")                                                            |
+| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB (docs/benchmarks.md, "M5 — peak memory")                                                                                                                |
+| NFR-12 | Peak memory, hybrid search only ≤ 900 MB               | 842–848 MB (same section)                                                                                                                                              |
+| NFR-8  | Search latency while indexing                          | **Pending**, deferred to M6 (above)                                                                                                                                    |
+| ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
+
+M5 is done, with the NFR-8 latency check carried over to M6.

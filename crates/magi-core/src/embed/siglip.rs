@@ -45,23 +45,29 @@ impl SigLipEmbedder {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Drops whichever towers have been idle at least `idle_timeout`.
-    pub fn unload_if_idle(&self, idle_timeout: Duration) {
-        self.vision.unload_if_idle(idle_timeout);
-        self.text.unload_if_idle(idle_timeout);
-    }
 }
 
 fn load_vision() -> Result<Mutex<Session>> {
     crate::onnx::init()?;
     let path = model_dir("image").join("vision_model.onnx");
-    Ok(Mutex::new(crate::onnx::session(&path, 2)?))
+    Ok(Mutex::new(crate::onnx::session(
+        &path,
+        crate::onnx::indexing_threads(),
+        false,
+    )?))
 }
 
 fn load_text() -> Result<TextTower> {
     crate::onnx::init()?;
     let dir = model_dir("image");
+    // Session first: building it briefly takes ~2x the model file (~800 MB),
+    // and the Gemma tokenizer (~64 MB resident) shouldn't sit on top of that
+    // peak (NFR-12, docs/benchmarks.md).
+    let session = Mutex::new(crate::onnx::session(
+        &dir.join("text_model.onnx"),
+        1,
+        false,
+    )?);
     let tokenizer_path = dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
         Error::Model(format!(
@@ -69,10 +75,7 @@ fn load_text() -> Result<TextTower> {
             tokenizer_path.display()
         ))
     })?;
-    Ok(TextTower {
-        session: Mutex::new(crate::onnx::session(&dir.join("text_model.onnx"), 1)?),
-        tokenizer,
-    })
+    Ok(TextTower { session, tokenizer })
 }
 
 /// Resizes to the model's square input and lays the pixels out as an NCHW
@@ -137,6 +140,12 @@ impl ImageEmbedder for SigLipEmbedder {
 
     fn dim(&self) -> usize {
         IMAGE_EMBEDDING_DIM
+    }
+
+    /// Drops whichever towers have been idle at least `idle`.
+    fn unload_if_idle(&self, idle: Duration) {
+        self.vision.unload_if_idle(idle);
+        self.text.unload_if_idle(idle);
     }
 
     fn embed_image(&self, image: &RgbImage) -> Result<Vec<f32>> {

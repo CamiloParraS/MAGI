@@ -2,7 +2,9 @@
 //! (ADR-0006). Detection is DB post-processing on the probability map;
 //! recognition is a CTC decode over the character dictionary in `rec.yml`.
 
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use image::RgbImage;
 use image::imageops;
@@ -11,6 +13,7 @@ use ort::session::Session;
 use ort::value::TensorRef;
 
 use super::OcrEngine;
+use crate::embed::manager::ModelSlot;
 use crate::error::{Error, Result};
 
 const ENGINE_ID: &str = "paddle-ppocrv5-latin";
@@ -23,22 +26,39 @@ const DET_UNCLIP_RATIO: f32 = 1.5;
 const REC_HEIGHT: u32 = 48;
 /// Widest recognizer input; a longer line is squeezed rather than refused.
 const REC_MAX_WIDTH: u32 = 3200;
+/// How long an image waits for another extract worker's OCR to finish. Well
+/// under the 60 s extraction timeout: a hung `run` holds the engine forever,
+/// and the images queued behind it then lose their OCR text, not a thread.
+const BUSY_WAIT: Duration = Duration::from_secs(30);
 
-/// Real OCR engine. Both sessions sit behind mutexes because extraction
-/// workers share one engine (`OcrEngine: Sync`).
+/// Real OCR engine. The sessions load on first use and are dropped when idle
+/// (SPEC.md §6.4); extraction workers share one engine (`OcrEngine: Sync`).
 pub struct PaddleOcr {
-    det: Mutex<Session>,
-    rec: Mutex<Session>,
+    sessions: ModelSlot<Sessions>,
+    dir: PathBuf,
     /// CTC classes: index 0 is the blank, then the dictionary, then a space.
     classes: Vec<String>,
 }
 
+struct Sessions {
+    det: Mutex<Session>,
+    rec: Mutex<Session>,
+}
+
 impl PaddleOcr {
-    /// Loads `det.onnx`, `rec.onnx` and `rec.yml` from
-    /// `embed::manager::model_dir("ocr")`.
+    /// Reads `rec.yml` from `embed::manager::model_dir("ocr")` and checks
+    /// `det.onnx` and `rec.onnx` are there; they load on first use.
     pub fn load() -> Result<Self> {
         crate::onnx::init()?;
         let dir = crate::embed::manager::model_dir("ocr");
+        for name in ["det.onnx", "rec.onnx"] {
+            if !dir.join(name).is_file() {
+                return Err(Error::Model(format!(
+                    "no {name} under {} (run `just models` first)",
+                    dir.display()
+                )));
+            }
+        }
         let yml_path = dir.join("rec.yml");
         let yml = std::fs::read_to_string(&yml_path).map_err(|source| Error::Io {
             path: yml_path,
@@ -48,14 +68,29 @@ impl PaddleOcr {
         classes.extend(parse_dict(&yml));
         classes.push(" ".to_string());
         Ok(Self {
-            det: Mutex::new(crate::onnx::session(&dir.join("det.onnx"), 2)?),
-            rec: Mutex::new(crate::onnx::session(&dir.join("rec.onnx"), 2)?),
+            sessions: ModelSlot::new(),
+            dir,
             classes,
         })
     }
 
+    fn load_sessions(&self) -> Result<Sessions> {
+        Ok(Sessions {
+            det: Mutex::new(crate::onnx::session(
+                &self.dir.join("det.onnx"),
+                crate::onnx::indexing_threads(),
+                false,
+            )?),
+            rec: Mutex::new(crate::onnx::session(
+                &self.dir.join("rec.onnx"),
+                crate::onnx::indexing_threads(),
+                false,
+            )?),
+        })
+    }
+
     /// Text lines as rotated rectangles in the coordinates of `img`.
-    fn detect(&self, img: &RgbImage) -> Result<Vec<TextLine>> {
+    fn detect(&self, s: &Sessions, img: &RgbImage) -> Result<Vec<TextLine>> {
         let (w, h) = img.dimensions();
         let scale = (DET_LONG_SIDE / w.max(h) as f32).min(1.0);
         let round32 = |v: u32| (((v as f32 * scale / 32.0).round() as u32).max(1)) * 32;
@@ -76,7 +111,7 @@ impl PaddleOcr {
 
         let input = TensorRef::from_array_view(([1usize, 3, nh as usize, nw as usize], &*data))
             .map_err(|e| Error::Model(format!("building detector input: {e}")))?;
-        let mut session = lock(&self.det, "detector")?;
+        let mut session = lock(&s.det, "detector")?;
         let outputs = session
             .run(ort::inputs! { "x" => input })
             .map_err(|e| Error::Model(format!("running detector: {e}")))?;
@@ -95,7 +130,7 @@ impl PaddleOcr {
     }
 
     /// Recognizes one cropped text line.
-    fn recognize_line(&self, line: &RgbImage) -> Result<String> {
+    fn recognize_line(&self, s: &Sessions, line: &RgbImage) -> Result<String> {
         let (w, h) = line.dimensions();
         // Tall crops are vertical text; the recognizer only reads horizontal
         // lines. Same 1.5 ratio the reference uses.
@@ -118,7 +153,7 @@ impl PaddleOcr {
         let input =
             TensorRef::from_array_view(([1usize, 3, REC_HEIGHT as usize, nw as usize], &*data))
                 .map_err(|e| Error::Model(format!("building recognizer input: {e}")))?;
-        let mut session = lock(&self.rec, "recognizer")?;
+        let mut session = lock(&s.rec, "recognizer")?;
         let outputs = session
             .run(ort::inputs! { "x" => input })
             .map_err(|e| Error::Model(format!("running recognizer: {e}")))?;
@@ -148,13 +183,16 @@ impl OcrEngine for PaddleOcr {
     }
 
     fn recognize(&self, image: &RgbImage) -> Result<String> {
-        let mut lines = self.detect(image)?;
+        let sessions = self
+            .sessions
+            .get_or_load_within(BUSY_WAIT, || self.load_sessions())?;
+        let mut lines = self.detect(&sessions, image)?;
         lines.sort_by(|a, b| a.cy.total_cmp(&b.cy));
         let mut out = Vec::new();
         for row in group_lines(lines) {
             let mut words = Vec::new();
             for line in row {
-                let text = self.recognize_line(&crop(image, &line))?;
+                let text = self.recognize_line(&sessions, &crop(image, &line))?;
                 if !text.trim().is_empty() {
                     words.push(text);
                 }
@@ -165,14 +203,13 @@ impl OcrEngine for PaddleOcr {
         }
         Ok(out.join("\n"))
     }
+
+    fn unload_if_idle(&self, idle: Duration) {
+        self.sessions.unload_if_idle(idle);
+    }
 }
 
-/// Fails instead of waiting: a hung `run` holds its lock forever, and every
-/// image queued behind it would otherwise block, time out and leave one more
-/// stuck thread until extraction is refused outright.
-///
-/// ponytail: a concurrent second caller also loses OCR rather than waiting.
-/// Indexing is sequential today; add a timed wait if parallel extraction lands.
+/// Never contends: callers already hold the session slot ([`BUSY_WAIT`]).
 fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> Result<MutexGuard<'a, T>> {
     m.try_lock()
         .map_err(|_| Error::Model(format!("OCR {what} busy or poisoned")))

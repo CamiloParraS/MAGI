@@ -192,3 +192,13 @@ outside tests. Fixed as part of closing this out.
   **582.9 MB** and made a 5,716-chunk (15 MB) file peak at **593.6 MB**
   instead of allocating a ~4.5 GB intermediate tensor. See
   `docs/eval.md`'s "Peak RSS is now independent of file size".
+
+## Update (2026-09-24): arena back on for e5
+
+With the arena off, e5 did not scale with intra-op threads (~7 chunks/s at
+2, 4 or 6) because every layer allocated and page-faulted its tensors afresh.
+Now that batches are bounded, the arena is on again for the e5 session only,
+with the batch lowered 16 -> 8 to keep the pool small, and 4 intra-op threads
+on AC. Fixture-corpus eval run (indexing + 164 queries, all models): 285 s ->
+~190-230 s, peak working set 1,359 -> 1,448 MB (NFR-11 limit 1.5 GB). Details
+and the one borderline eval query this moves in docs/perf-investigation.md.

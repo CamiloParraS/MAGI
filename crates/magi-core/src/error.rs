@@ -70,6 +70,9 @@ pub enum Error {
 
     #[error("model error: {0}")]
     Model(String),
+
+    #[error("engine error: {0}")]
+    Engine(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

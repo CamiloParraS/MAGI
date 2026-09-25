@@ -1,12 +1,15 @@
 //! `multilingual-e5-small` text embedder (`ort` + `tokenizers`). Implemented
 //! in M3 (see SPEC.md §7 M3).
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ort::session::Session;
 use ort::value::TensorRef;
 use tokenizers::Tokenizer;
 
+use super::manager::ModelSlot;
 use super::{TEXT_EMBEDDING_DIM, TextEmbedder, l2_normalize};
 use crate::error::{Error, Result};
 
@@ -17,8 +20,11 @@ const PASSAGE_PREFIX: &str = "passage: ";
 /// text file yields ~5,700 chunks), and ONNX Runtime materializes a
 /// `batch x seq_len x 384` f32 `last_hidden_state` for the whole batch —
 /// ~4.5 GB at that size. Capping the batch keeps that intermediate at a
-/// few MB regardless of file size (SPEC.md §5.3: "small batches").
-const BATCH_CHUNKS: usize = 16;
+/// few MB regardless of file size (SPEC.md §5.3: "small batches"). 8, not
+/// 16: the session's memory arena keeps a pool sized for the largest batch
+/// (~12 heads x 512^2 f32 attention scores per chunk), and 16 put all-models
+/// indexing 30 MB over NFR-11 (docs/perf-investigation.md).
+const BATCH_CHUNKS: usize = 8;
 
 /// Real `intfloat/multilingual-e5-small` embedder: `tokenizers` for
 /// encoding (with the `"query: "`/`"passage: "` prefixes SPEC.md §3
@@ -26,16 +32,28 @@ const BATCH_CHUNKS: usize = 16;
 /// ONNX Runtime library — see `xtask fetch-onnxruntime`), then mean
 /// pooling over the attention mask and L2 normalization.
 pub struct E5Embedder {
-    session: Mutex<Session>,
-    /// Shared with `chunk::count_tokens` (`embed::manager::shared_text_tokenizer`)
-    /// rather than a private copy — ADR-0005 measured a second parse of the
-    /// ~17 MB `tokenizer.json` at ~275 MB of peak RSS, pure duplication.
-    tokenizer: &'static Tokenizer,
+    /// Loaded on first use, dropped when idle (SPEC.md §6.4).
+    session: ModelSlot<Mutex<Session>>,
+    model_path: PathBuf,
+}
+
+/// Shared with `chunk::count_tokens` (`embed::manager::shared_text_tokenizer`)
+/// rather than a private copy — ADR-0005 measured a second parse of the
+/// ~17 MB `tokenizer.json` at ~275 MB of peak RSS, pure duplication. Fetched
+/// per use so it can be freed when idle, like the session.
+fn tokenizer() -> Result<Arc<Tokenizer>> {
+    crate::embed::manager::shared_text_tokenizer().ok_or_else(|| {
+        Error::Model(format!(
+            "no downloaded tokenizer under {} (run `just models` first)",
+            crate::embed::manager::model_dir("text").display()
+        ))
+    })
 }
 
 impl E5Embedder {
-    /// Loads the model + tokenizer from `embed::manager::model_dir("text")`
-    /// (populated by `ensure_model_file`/`import_offline_model_file`).
+    /// Loads the tokenizer from `embed::manager::model_dir("text")`
+    /// (populated by `ensure_model_file`/`import_offline_model_file`) and
+    /// checks the model is there; the model itself loads on first use.
     /// Dynamically loading the ONNX Runtime library is process-wide and
     /// idempotent (`ort::init_from` no-ops after the first successful
     /// call), so constructing more than one `E5Embedder` is safe.
@@ -45,25 +63,30 @@ impl E5Embedder {
         let dir = crate::embed::manager::model_dir("text");
         let model_path = dir.join("model.onnx");
 
-        // Shared with `chunk::count_tokens` rather than a private
-        // `Tokenizer::from_file` copy — see the `tokenizer` field's doc
-        // comment and ADR-0005.
-        let tokenizer = crate::embed::manager::shared_text_tokenizer().ok_or_else(|| {
-            Error::Model(format!(
-                "no downloaded tokenizer under {} (run `just models` first)",
-                dir.display()
-            ))
-        })?;
+        tokenizer()?;
 
-        // The embed worker is architecturally single-threaded (SPEC.md §5.3:
-        // one dedicated embed thread), so there's no batch-level parallelism
-        // for more intra-op threads to exploit.
-        let session = crate::onnx::session(&model_path, 1)?;
+        if !model_path.is_file() {
+            return Err(Error::Model(format!(
+                "no downloaded model at {} (run `just models` first)",
+                model_path.display()
+            )));
+        }
 
         Ok(Self {
-            session: Mutex::new(session),
-            tokenizer,
+            session: ModelSlot::new(),
+            model_path,
         })
+    }
+
+    fn load_session(&self) -> Result<Mutex<Session>> {
+        // One embed thread (SPEC.md §5.3) drives this session; its intra-op
+        // threads split each batch's matmuls, 4 on AC and 2 on battery
+        // (NFR-8). The same session serves search.
+        Ok(Mutex::new(crate::onnx::session(
+            &self.model_path,
+            crate::onnx::indexing_threads(),
+            true,
+        )?))
     }
 
     /// Tokenizes, runs inference, and mean-pools + L2-normalizes each of
@@ -73,8 +96,7 @@ impl E5Embedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-        let encodings = self
-            .tokenizer
+        let encodings = tokenizer()?
             .encode_batch(texts.iter().map(String::as_str).collect(), true)
             .map_err(|e| Error::Model(format!("tokenizing: {e}")))?;
 
@@ -96,8 +118,8 @@ impl E5Embedder {
         let token_type_ids = TensorRef::from_array_view(([batch, seq_len], &*type_ids))
             .map_err(|e| Error::Model(format!("building token_type_ids tensor: {e}")))?;
 
-        let mut session = self
-            .session
+        let session = self.session.get_or_load(|| self.load_session())?;
+        let mut session = session
             .lock()
             .map_err(|_| Error::Model("ONNX session lock poisoned".to_string()))?;
         let outputs = session
@@ -172,6 +194,10 @@ impl TextEmbedder for E5Embedder {
             .into_iter()
             .next()
             .ok_or_else(|| Error::Model("embedding a query produced no vector".to_string()))
+    }
+
+    fn unload_if_idle(&self, idle: Duration) {
+        self.session.unload_if_idle(idle);
     }
 }
 

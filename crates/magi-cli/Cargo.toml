@@ -11,3 +11,5 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+ctrlc = { workspace = true }
+sysinfo = { workspace = true }

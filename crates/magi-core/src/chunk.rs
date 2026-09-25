@@ -106,8 +106,8 @@ pub(crate) fn approx_token_count(text: &str) -> usize {
     text.split_whitespace().count().max(1)
 }
 
-fn count_tokens(text: &str) -> usize {
-    match crate::embed::manager::shared_text_tokenizer() {
+fn count_tokens_with(tokenizer: Option<&tokenizers::Tokenizer>, text: &str) -> usize {
+    match tokenizer {
         Some(tokenizer) => tokenizer
             .encode(text, false)
             .map(|encoding| encoding.len())
@@ -116,10 +116,19 @@ fn count_tokens(text: &str) -> usize {
     }
 }
 
+pub(crate) fn count_tokens(text: &str) -> usize {
+    count_tokens_with(
+        crate::embed::manager::shared_text_tokenizer().as_deref(),
+        text,
+    )
+}
+
 /// Splits `text` into overlapping, token-bounded chunks. Returns no chunks
 /// for empty or whitespace-only input.
 pub fn chunk_text(text: &str) -> Vec<String> {
-    chunk_by_token_counter(text, count_tokens)
+    // Fetched once, not per word: it's behind the idle-unload slot's lock.
+    let tokenizer = crate::embed::manager::shared_text_tokenizer();
+    chunk_by_token_counter(text, |unit| count_tokens_with(tokenizer.as_deref(), unit))
 }
 
 #[cfg(test)]

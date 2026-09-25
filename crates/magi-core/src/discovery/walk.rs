@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use crate::error::Result;
+use crate::platform::{CloudPlaceholder, Os};
 
 /// Package-bundle directory suffixes treated as a single opaque entry
 /// (indexed by name only, never descended) per SPEC.md §5.2.
@@ -24,6 +25,9 @@ pub struct WalkEntry {
     pub size: u64,
     pub mtime_ns: i64,
     pub is_dir: bool,
+    /// A cloud placeholder (OneDrive, iCloud, Dropbox) whose content is not on
+    /// disk: never read, or reading it would download it (SPEC.md §6).
+    pub cloud_only: bool,
 }
 
 fn is_opaque_bundle(path: &Path) -> bool {
@@ -50,10 +54,55 @@ fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// The entry a walk would yield for `path`, stat'd now.
+pub fn stat(path: &Path) -> std::io::Result<WalkEntry> {
+    let meta = std::fs::metadata(path)?;
+    Ok(WalkEntry {
+        path: path.to_path_buf(),
+        size: meta.len(),
+        mtime_ns: mtime_ns(&meta),
+        is_dir: meta.is_dir(),
+        cloud_only: Os.is_cloud_only(&meta),
+    })
+}
+
 /// Walks `root`, returning one entry per indexable file plus one entry per
 /// opaque bundle directory (never descended into). Excluded and hidden
 /// paths are omitted entirely.
 pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
+    walk_under(root, root, options)
+}
+
+/// Whether a walk of `root` would reach `path` (a file, or a directory it
+/// would descend into): not hidden, not matched by an exclusion glob on it or
+/// any folder above it, not inside an opaque bundle, and not a symlink that
+/// is not followed. The watcher uses this to judge one path without a walk.
+///
+/// ponytail: does not know Windows' hidden *attribute* or symlinked ancestor
+/// folders; the periodic reconciliation corrects any disagreement.
+pub fn is_wanted(root: &Path, path: &Path, options: &WalkOptions) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    let names: Vec<_> = rel.components().collect();
+    let mut prefix = PathBuf::new();
+    for (i, part) in names.iter().enumerate() {
+        prefix.push(part);
+        let hidden = part.as_os_str().to_string_lossy().starts_with('.');
+        if (hidden && !options.include_hidden)
+            || matches_exclude(&root.join(&prefix), root, &options.exclude_globs)
+            || (i + 1 < names.len() && is_opaque_bundle(&root.join(&prefix)))
+        {
+            return false;
+        }
+    }
+    options.follow_symlinks
+        || std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_symlink())
+}
+
+/// [`walk`] restricted to the folder `start` inside `root`. Exclusion globs are
+/// still matched relative to `root`.
+pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
     // Paths under an already-yielded opaque bundle are suppressed as the
     // walk continues past them (ignore::WalkBuilder has no "yield but
     // don't descend" primitive, so we yield the bundle root once and then
@@ -62,7 +111,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
     let exclude_globs = options.exclude_globs.clone();
     let root_owned = root.to_path_buf();
 
-    let walker = ignore::WalkBuilder::new(root)
+    let walker = ignore::WalkBuilder::new(start)
         .hidden(!options.include_hidden)
         .follow_links(options.follow_symlinks)
         .git_ignore(false)
@@ -100,7 +149,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
             Err(_) => continue,
         };
         let path = entry.path();
-        if path == root {
+        if path == start {
             continue;
         }
         let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
@@ -116,6 +165,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
             size: meta.len(),
             mtime_ns: mtime_ns(&meta),
             is_dir,
+            cloud_only: Os.is_cloud_only(&meta),
         });
     }
     Ok(entries)
@@ -230,6 +280,57 @@ mod tests {
         let entries = walk(root, &default_options()).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].path.ends_with("bottom.txt"));
+    }
+
+    #[test]
+    fn is_wanted_agrees_with_what_a_walk_yields() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("keep.txt"), "hi").unwrap();
+        fs::create_dir(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules/pkg.js"), "x").unwrap();
+        fs::write(root.join("temp.tmp"), "x").unwrap();
+        fs::write(root.join(".hidden"), "x").unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".git/config"), "x").unwrap();
+        fs::create_dir(root.join("Photos.photoslibrary")).unwrap();
+        fs::write(root.join("Photos.photoslibrary/a.jpg"), "x").unwrap();
+        let options = default_options();
+
+        let walked = rel_paths(root, &walk(root, &options).unwrap());
+        for rel in [
+            "keep.txt",
+            "node_modules/pkg.js",
+            "temp.tmp",
+            ".hidden",
+            ".git/config",
+            "Photos.photoslibrary/a.jpg",
+        ] {
+            assert_eq!(
+                is_wanted(root, &root.join(rel), &options),
+                walked.contains(&rel.to_string()),
+                "{rel}"
+            );
+        }
+        assert!(!is_wanted(
+            root,
+            &root.parent().unwrap().join("outside.txt"),
+            &options
+        ));
+    }
+
+    #[test]
+    fn walk_under_walks_one_folder_but_matches_exclusions_from_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("a/node_modules")).unwrap();
+        fs::write(root.join("a/keep.txt"), "hi").unwrap();
+        fs::write(root.join("a/node_modules/pkg.js"), "x").unwrap();
+        fs::write(root.join("other.txt"), "hi").unwrap();
+
+        let entries = walk_under(root, &root.join("a"), &default_options()).unwrap();
+
+        assert_eq!(rel_paths(root, &entries), vec!["a/keep.txt".to_string()]);
     }
 
     #[test]

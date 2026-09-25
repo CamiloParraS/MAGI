@@ -63,8 +63,11 @@ impl Extractor for CodeExtractor {
     }
 }
 
-/// One chunk per top-level named node in the parse tree (function, struct,
-/// class, impl block, etc. — whatever the grammar groups at file scope).
+/// Top-level named nodes in the parse tree (function, struct, class, impl
+/// block, etc. — whatever the grammar groups at file scope), with adjacent
+/// ones merged while they fit in [`crate::chunk::TARGET_MAX_TOKENS`]: a run
+/// of `use`/`mod` lines is one chunk, not one embedding each. A node never
+/// splits across chunks here; an oversized one is re-split by the caller.
 fn symbol_chunks(source: &str, language: tree_sitter::Language) -> Result<Vec<RawChunk>> {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -74,21 +77,35 @@ fn symbol_chunks(source: &str, language: tree_sitter::Language) -> Result<Vec<Ra
         .parse(source, None)
         .ok_or_else(|| Error::Code("parser produced no tree".to_string()))?;
 
-    let mut chunks = Vec::new();
+    // (start byte, end byte, first row, last row, tokens) per merged group.
+    let mut groups: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
     let mut cursor = tree.root_node().walk();
     for child in tree.root_node().named_children(&mut cursor) {
         let text = &source[child.byte_range()];
         if text.trim().is_empty() {
             continue;
         }
-        chunks.push(RawChunk {
-            source: ChunkSource::CodeSymbol,
-            text: text.to_string(),
-            page: None,
-            line_start: Some(child.start_position().row as i64 + 1),
-            line_end: Some(child.end_position().row as i64 + 1),
-        });
+        let tokens = crate::chunk::count_tokens(text);
+        let (start, end) = (child.start_position().row, child.end_position().row);
+        match groups.last_mut() {
+            Some(g) if g.4 + tokens <= crate::chunk::TARGET_MAX_TOKENS => {
+                g.1 = child.end_byte();
+                g.3 = end;
+                g.4 += tokens;
+            }
+            _ => groups.push((child.start_byte(), child.end_byte(), start, end, tokens)),
+        }
     }
+    let chunks: Vec<RawChunk> = groups
+        .into_iter()
+        .map(|(from, to, start, end, _)| RawChunk {
+            source: ChunkSource::CodeSymbol,
+            text: source[from..to].to_string(),
+            page: None,
+            line_start: Some(start as i64 + 1),
+            line_end: Some(end as i64 + 1),
+        })
+        .collect();
     // No meaningful top-level grouping (e.g. a file that's one big
     // expression) still needs to be searchable.
     if chunks.is_empty() {
@@ -155,8 +172,6 @@ struct Point {
                 .any(|c| c.text.contains("fn add") && c.source == ChunkSource::CodeSymbol)
         );
         assert!(doc.chunks.iter().any(|c| c.text.contains("struct Point")));
-        // "use std::fmt;" is its own top-level chunk too, which is fine —
-        // harmless noise for keyword search.
         for chunk in &doc.chunks {
             assert!(chunk.line_start.is_some());
             assert!(chunk.line_end.is_some());
@@ -219,6 +234,47 @@ struct Point {
                 .iter()
                 .all(|c| c.text.split_whitespace().count() <= crate::chunk::TARGET_MAX_TOKENS),
             "a piece is still over the chunker's target"
+        );
+    }
+
+    /// A run of tiny items (`pub mod x;`) is one chunk, not one embedding
+    /// per line.
+    #[test]
+    fn small_adjacent_symbols_are_merged_into_one_chunk() {
+        let source: String = (0..20).map(|i| format!("pub mod m{i};\n")).collect();
+        let doc = CodeExtractor
+            .extract(Path::new("lib.rs"), source.as_bytes())
+            .unwrap();
+
+        assert_eq!(doc.chunks.len(), 1);
+        assert_eq!(doc.chunks[0].source, ChunkSource::CodeSymbol);
+        assert_eq!(doc.chunks[0].line_start, Some(1));
+        assert_eq!(doc.chunks[0].line_end, Some(20));
+        assert!(doc.chunks[0].text.contains("pub mod m0;"));
+        assert!(doc.chunks[0].text.contains("pub mod m19;"));
+    }
+
+    /// Merging stops at the token target: symbols that don't fit together
+    /// stay in separate chunks, never sharing one.
+    #[test]
+    fn symbols_are_not_merged_past_the_token_target() {
+        let body = (0..150)
+            .map(|i| format!("x{i}"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let source: String = ["a", "b", "c"]
+            .iter()
+            .map(|name| format!("fn {name}() -> i32 {{ {body} }}\n"))
+            .collect();
+        let doc = CodeExtractor
+            .extract(Path::new("big.rs"), source.as_bytes())
+            .unwrap();
+
+        assert!(doc.chunks.len() >= 3);
+        assert!(
+            doc.chunks
+                .iter()
+                .all(|c| c.text.matches("fn ").count() <= 1)
         );
     }
 

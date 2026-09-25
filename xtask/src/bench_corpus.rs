@@ -161,7 +161,7 @@ pub fn bench_corpus() -> Result<()> {
             size: 0,
             mtime_ns: i as i64,
             lang: Some("en"),
-            state: "indexed",
+            state: magi_core::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,

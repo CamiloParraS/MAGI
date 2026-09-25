@@ -31,10 +31,9 @@ fn qr_image_is_searchable_in_both_languages_and_gets_hash_and_thumbnail() {
         root.id,
         &root_path,
         &options,
-        1,
         &IndexContext {
             image_embedder: Some(std::sync::Arc::new(FakeImageEmbedder)),
-            ..IndexContext::new(&FakeEmbedder)
+            ..IndexContext::new(std::sync::Arc::new(FakeEmbedder))
         },
     )
     .unwrap();
