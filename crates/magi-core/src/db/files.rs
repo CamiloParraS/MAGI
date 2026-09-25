@@ -594,7 +594,10 @@ pub struct MoveTarget<'a> {
 /// A move or rename: `keep_id` (already indexed) takes over the new location.
 /// Chunks and vectors are kept, not recomputed (SPEC.md §5.4 step 4). The
 /// filename chunk's text follows the new name so it stays findable by it; its
-/// vector still describes the old name. Runs inside the caller's transaction.
+/// vector still describes the old name. A row in the pipeline goes back to
+/// `pending`: its result was read at the old path, so the writer drops it and
+/// the file is looked at again where it now is. Runs inside the caller's
+/// transaction.
 pub fn rename_file_to(
     conn: &Connection,
     keep_id: i64,
@@ -604,7 +607,8 @@ pub fn rename_file_to(
 ) -> Result<()> {
     conn.execute(
         "UPDATE files SET root_id = ?2, path = ?3, rel_path = ?4, file_name = ?5, ext = ?6,
-                size = ?7, mtime_ns = ?8, seen_scan_id = ?9
+                size = ?7, mtime_ns = ?8, seen_scan_id = ?9,
+                state = CASE state WHEN 'indexing' THEN 'pending' ELSE state END
          WHERE id = ?1",
         params![
             keep_id,

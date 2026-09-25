@@ -343,6 +343,36 @@ mod tests {
         assert_eq!(seen, 5);
     }
 
+    /// A scan matched the file's move while it was in the pipeline: the result
+    /// was read at the old path and must not bring that path back.
+    #[test]
+    fn a_result_for_a_file_moved_mid_flight_is_dropped() {
+        let mut f = Fixture::new();
+        let (start, job) = begin(&f.conn, f.stable("old.txt"), &f.roots);
+        let job = job.unwrap();
+        apply(&mut f.conn, start).unwrap();
+        let new_path = f.dir.path().join("new.txt");
+        let to = files::MoveTarget {
+            path: &new_path,
+            rel_path: Path::new("new.txt"),
+            size: job.entry.size,
+            mtime_ns: job.entry.mtime_ns,
+        };
+        files::rename_file_to(&f.conn, job.stored.id, job.root_id, to, 2).unwrap();
+
+        assert!(apply(&mut f.conn, keep(&job)).unwrap().is_none());
+        assert_eq!(
+            f.state(job.stored.id),
+            Some(FileState::Pending),
+            "queued at its new path"
+        );
+        assert!(
+            files::get_stored(&f.conn, &job.entry.path)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// The one-shot run is the only writer: nothing can queue a file again
     /// mid-flight, so it writes no `indexing` mark and its results still land.
     #[test]

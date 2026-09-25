@@ -352,7 +352,8 @@ brand-new `pending` row has the same size, kind and blake3 hash, and deletes the
 rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`); every scan
 takes its own, `index_root` included, and only scans write `seen_scan_id`
 (storing a result does not). Unseen rows carry the id of the scan that missed
-them (`reconcile::Unseen`).
+them (`reconcile::Unseen`). A move that claims a row still in the pipeline puts
+it back to `pending`, so its stale result, read at the old path, is dropped.
 
 **Root status.** `platform::FsProbe` maps a failed `read_dir`/`metadata` to
 `permission_denied` or `missing`; `roots::set_access` stores it. The rules live
