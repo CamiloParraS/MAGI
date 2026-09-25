@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
@@ -15,8 +16,110 @@ pub struct Root {
     pub id: i64,
     pub path: PathBuf,
     pub enabled: bool,
-    pub status: String,
+    pub status: Health,
 }
+
+impl Root {
+    /// Scanned, queued and indexed: enabled and readable.
+    pub fn indexable(&self) -> bool {
+        self.enabled && self.status.readable()
+    }
+
+    /// Shown in search: enabled and not missing. An unreadable root's index is
+    /// still right, so it stays searchable; a missing one is hidden until it is
+    /// back.
+    pub fn searchable(&self) -> bool {
+        self.enabled && self.status != Health::Missing
+    }
+}
+
+/// What a root's last probe or watch attempt found (`roots.status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Health {
+    Ok,
+    PermissionDenied,
+    Missing,
+    /// Readable but not watched: polled instead.
+    WatchFailed,
+}
+
+impl Health {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::PermissionDenied => "permission_denied",
+            Self::Missing => "missing",
+            Self::WatchFailed => "watch_failed",
+        }
+    }
+
+    /// Its files can be read, so it is scanned, watched or polled, and indexed.
+    /// The other statuses are re-probed until the root is back.
+    pub fn readable(self) -> bool {
+        matches!(self, Self::Ok | Self::WatchFailed)
+    }
+}
+
+impl From<RootAccess> for Health {
+    fn from(access: RootAccess) -> Self {
+        match access {
+            RootAccess::Ok => Self::Ok,
+            RootAccess::PermissionDenied => Self::PermissionDenied,
+            RootAccess::Missing => Self::Missing,
+        }
+    }
+}
+
+impl std::fmt::Display for Health {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl ToSql for Health {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl FromSql for Health {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "ok" => Ok(Self::Ok),
+            "permission_denied" => Ok(Self::PermissionDenied),
+            "missing" => Ok(Self::Missing),
+            "watch_failed" => Ok(Self::WatchFailed),
+            other => Err(FromSqlError::Other(
+                format!("unknown root status {other:?}").into(),
+            )),
+        }
+    }
+}
+
+// The same rules as SQL over a `roots` row, for queries to splice in with
+// `concat!`. Column names are bare, so they work with or without a `roots r`
+// alias; only `roots` has `enabled` and `status`. `root_rules_agree_with_their_sql`
+// checks each against its Rust twin.
+
+/// [`Health::readable`].
+macro_rules! readable_sql {
+    () => {
+        "status IN ('ok', 'watch_failed')"
+    };
+}
+/// [`Root::indexable`].
+macro_rules! indexable_sql {
+    () => {
+        concat!("enabled = 1 AND ", $crate::db::roots::readable_sql!())
+    };
+}
+/// [`Root::searchable`].
+macro_rules! searchable_sql {
+    () => {
+        "enabled = 1 AND status <> 'missing'"
+    };
+}
+pub(crate) use {indexable_sql, readable_sql, searchable_sql};
 
 /// [`add_collapsing`] for callers that don't care which roots it collapsed.
 pub fn add(conn: &Connection, path: &Path) -> Result<Root> {
@@ -95,7 +198,7 @@ pub fn add_collapsing(conn: &Connection, path: &Path) -> Result<(Root, Vec<i64>)
         id,
         path: canonical,
         enabled: true,
-        status: "ok".into(),
+        status: Health::Ok,
     };
     Ok((root, children))
 }
@@ -150,7 +253,7 @@ pub fn remove(conn: &Connection, id: i64) -> Result<()> {
 }
 
 /// Sets a root's status directly (e.g. `watch_failed`).
-pub fn set_status(conn: &Connection, id: i64, status: &str) -> Result<()> {
+pub fn set_status(conn: &Connection, id: i64, status: Health) -> Result<()> {
     conn.execute(
         "UPDATE roots SET status = ?2 WHERE id = ?1",
         params![id, status],
@@ -158,18 +261,17 @@ pub fn set_status(conn: &Connection, id: i64, status: &str) -> Result<()> {
     Ok(())
 }
 
-/// Records what the access probe found. `ok` only replaces the statuses a probe
-/// can set, so it does not clear `watch_failed`.
+/// Records what the access probe found. `ok` only replaces an unreadable
+/// status, so it does not clear `watch_failed`.
 pub fn set_access(conn: &Connection, id: i64, access: &RootAccess) -> Result<()> {
-    let status = match access {
-        RootAccess::Ok => "ok",
-        RootAccess::PermissionDenied => "permission_denied",
-        RootAccess::Missing => "missing",
-    };
     conn.execute(
-        "UPDATE roots SET status = ?2
-         WHERE id = ?1 AND (?2 <> 'ok' OR status IN ('missing', 'permission_denied'))",
-        params![id, status],
+        concat!(
+            "UPDATE roots SET status = ?2
+             WHERE id = ?1 AND (?2 <> 'ok' OR NOT ",
+            readable_sql!(),
+            ")"
+        ),
+        params![id, Health::from(*access)],
     )?;
     Ok(())
 }
@@ -201,6 +303,61 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = db::open(&dir.path().join("magi.db")).unwrap();
         (dir, conn)
+    }
+
+    /// Every status reads back as written, and each rule gives the same answer
+    /// in Rust and in the SQL the queries splice in.
+    #[test]
+    fn root_rules_agree_with_their_sql() {
+        let (_dir, conn) = open_test_db();
+        let root_dir = tempfile::tempdir().unwrap();
+        let id = add(&conn, root_dir.path()).unwrap().id;
+        let sql = |rule: &str| -> bool {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM roots WHERE id = ?1 AND {rule}"),
+                [id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+                == 1
+        };
+        let all = [
+            Health::Ok,
+            Health::PermissionDenied,
+            Health::Missing,
+            Health::WatchFailed,
+        ];
+        for health in all {
+            for enabled in [true, false] {
+                set_status(&conn, id, health).unwrap();
+                set_enabled(&conn, id, enabled).unwrap();
+                let root = get(&conn, id).unwrap();
+                let case = format!("{health} enabled={enabled}");
+                assert_eq!(root.status, health, "{case}");
+                assert_eq!(root.indexable(), sql(indexable_sql!()), "{case}");
+                assert_eq!(root.searchable(), sql(searchable_sql!()), "{case}");
+                assert_eq!(health.readable(), sql(readable_sql!()), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_root_stays_searchable_but_is_not_indexed() {
+        let root = |status, enabled| Root {
+            id: 1,
+            path: PathBuf::new(),
+            enabled,
+            status,
+        };
+        assert!(
+            root(Health::WatchFailed, true).indexable(),
+            "polled instead"
+        );
+        assert!(!root(Health::PermissionDenied, true).indexable());
+        assert!(root(Health::PermissionDenied, true).searchable());
+        assert!(!root(Health::Missing, true).searchable());
+        assert!(!root(Health::Ok, false).indexable());
+        assert!(!root(Health::Ok, false).searchable());
     }
 
     #[test]
@@ -318,7 +475,7 @@ mod tests {
         let path = child.path.join("notes.txt");
         let rel = PathBuf::from("notes.txt");
         let mut record = indexed_record(child.id, &path, &rel);
-        record.state = "indexing";
+        record.state = crate::db::files::FileState::Indexing;
         crate::db::files::upsert_file(&mut conn, &record, &[], &[], None).unwrap();
 
         add(&conn, parent.path()).unwrap();
@@ -344,7 +501,7 @@ mod tests {
             size: 11,
             mtime_ns: 1,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
@@ -405,7 +562,7 @@ mod tests {
             size: 11,
             mtime_ns: 1,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,

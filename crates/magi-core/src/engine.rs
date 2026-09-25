@@ -28,7 +28,8 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, select};
 use rusqlite::Connection;
 
 use crate::config::{Config, IndexingConfig};
-use crate::db::roots::Root;
+use crate::db::files::FileState;
+use crate::db::roots::{Health, Root};
 use crate::db::{self, files, meta, roots};
 use crate::dto::{IndexState, IndexStatus, RootStatus};
 use crate::embed::{ImageEmbedder, TextEmbedder};
@@ -137,9 +138,9 @@ impl Engine {
         for root in &accessible {
             let failed_now = failed.contains(&root.id);
             if failed_now {
-                roots::set_status(&write_conn, root.id, "watch_failed")?;
-            } else if root.status == "watch_failed" {
-                roots::set_status(&write_conn, root.id, "ok")?;
+                roots::set_status(&write_conn, root.id, Health::WatchFailed)?;
+            } else if root.status == Health::WatchFailed {
+                roots::set_status(&write_conn, root.id, Health::Ok)?;
             }
         }
         // Roots polled instead of watched: failed ones, and any not accessible.
@@ -373,12 +374,12 @@ impl EngineHandle {
             watchers.extend(started);
         }
         let status = if failed.is_empty() {
-            "ok"
+            Health::Ok
         } else {
             self.inner.unwatched.store(true, Ordering::SeqCst);
-            "watch_failed"
+            Health::WatchFailed
         };
-        if matches!(root.status.as_str(), "ok" | "watch_failed") && root.status != status {
+        if root.status.readable() && root.status != status {
             let id = root.id;
             return self.write(move |conn| {
                 roots::set_status(conn, id, status)?;
@@ -512,8 +513,8 @@ impl StatusSource {
     fn read(&self) -> Result<IndexStatus> {
         let conn = lock(&self.reader);
         let counts = files::count_states(&conn)?;
-        let count = |state: &str| counts.get(state).copied().unwrap_or(0);
-        let queued = count("pending") + count("indexing");
+        let count = |state: FileState| counts.get(&state).copied().unwrap_or(0);
+        let queued = count(FileState::Pending) + count(FileState::Indexing);
         let state = if self.pause.any() {
             IndexState::Paused
         } else if self.stats.is_scanning() {
@@ -525,15 +526,15 @@ impl StatusSource {
         };
         // The last file started is current only while one is in the pipeline.
         let current_file = match state {
-            IndexState::Indexing if count("indexing") > 0 => self.stats.current_file(),
+            IndexState::Indexing if count(FileState::Indexing) > 0 => self.stats.current_file(),
             _ => None,
         };
         Ok(IndexStatus {
             state,
             queued,
-            indexed: count("indexed"),
-            skipped: count("skipped"),
-            errors: count("error"),
+            indexed: count(FileState::Indexed),
+            skipped: count(FileState::Skipped),
+            errors: count(FileState::Error),
             current_file: current_file.map(|p| p.to_string_lossy().into_owned()),
             roots: roots::list(&conn)?
                 .into_iter()

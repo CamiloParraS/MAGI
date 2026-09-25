@@ -33,7 +33,7 @@ fn a_shared_thumbnail_survives_until_its_last_file_is_deleted() {
             size: 1,
             mtime_ns: 1,
             lang: None,
-            state: "indexed",
+            state: magi_core::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,

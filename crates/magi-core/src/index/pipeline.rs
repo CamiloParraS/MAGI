@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use crate::db::files::{self, FileRecord, StoredFile, upsert_file};
+use crate::db::files::{self, FileRecord, FileState, StoredFile, upsert_file};
 use crate::db::roots;
 use crate::discovery::{self, Kind, WalkEntry, WalkOptions};
 use crate::embed::{ImageEmbedder, TextEmbedder};
@@ -251,7 +251,7 @@ pub(crate) enum Status {
 /// the result.
 pub(crate) enum Extracted {
     /// Nothing to redo: only size, mtime, scan and state are refreshed.
-    Keep { state: String },
+    Keep { state: FileState },
     /// Read and extracted, ready to embed.
     Fresh(Box<Fresh>),
     /// Could not be read just now (I/O): try again later, with backoff.
@@ -297,7 +297,7 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
             };
             if change::keeps(s, found) {
                 return Extracted::Keep {
-                    state: outcome.state.to_string(),
+                    state: outcome.state,
                 };
             }
             *outcome
@@ -310,7 +310,7 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
                 match hash_file(&entry.path) {
                     Ok(hash) if change::keeps(s, Found::Hashed(&hash)) => {
                         return Extracted::Keep {
-                            state: "indexed".into(),
+                            state: FileState::Indexed,
                         };
                     }
                     Ok(_) => {}
@@ -475,9 +475,9 @@ pub(crate) fn store_embedded(
         outcome.doc.image_embedding.as_deref(),
     )?;
     Ok(match outcome.state {
-        "indexed" => Status::Indexed,
-        "skipped" => Status::Skipped,
-        _ => Status::Errored,
+        FileState::Indexed => Status::Indexed,
+        FileState::Skipped => Status::Skipped,
+        FileState::Error | FileState::Pending | FileState::Indexing => Status::Errored,
     })
 }
 
@@ -523,7 +523,7 @@ fn embed_chunks(
             Ok(mut vectors) => embeddings.append(&mut vectors),
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "embedding failed");
-                outcome.state = "error";
+                outcome.state = FileState::Error;
                 outcome.error = Some(e.to_string());
                 chunks.drain(..chunks.len() - 1);
                 return embedder.embed_passages(&[chunks[0].text.as_str()]);
@@ -552,7 +552,7 @@ fn store_thumbnail(path: &Path, outcome: &FileOutcome) -> Option<String> {
 
 struct FileOutcome {
     kind: Kind,
-    state: &'static str,
+    state: FileState,
     skip_reason: Option<&'static str>,
     error: Option<String>,
     content_hash: Option<[u8; 32]>,
@@ -562,7 +562,7 @@ struct FileOutcome {
 fn indexed_no_chunks(kind: Kind) -> FileOutcome {
     FileOutcome {
         kind,
-        state: "indexed",
+        state: FileState::Indexed,
         skip_reason: None,
         error: None,
         content_hash: None,
@@ -573,7 +573,7 @@ fn indexed_no_chunks(kind: Kind) -> FileOutcome {
 /// Not broken, just outside what is indexed: SPEC.md section 5.4's `skipped`.
 fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
     FileOutcome {
-        state: "skipped",
+        state: FileState::Skipped,
         skip_reason: Some(reason),
         ..indexed_no_chunks(kind)
     }
@@ -581,7 +581,7 @@ fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
 
 fn errored(kind: Kind, message: String) -> FileOutcome {
     FileOutcome {
-        state: "error",
+        state: FileState::Error,
         error: Some(message),
         ..indexed_no_chunks(kind)
     }

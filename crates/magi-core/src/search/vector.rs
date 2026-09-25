@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
 
+use crate::db::roots::searchable_sql;
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
@@ -25,7 +26,7 @@ pub fn search_vector_text(
     if query_embedding.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(concat!(
         "WITH knn_matches AS (
             SELECT chunk_id, distance
             FROM vec_text
@@ -37,9 +38,11 @@ pub fn search_vector_text(
          JOIN chunks c ON c.id = knn_matches.chunk_id
          JOIN files f ON f.id = c.file_id
          JOIN roots r ON r.id = f.root_id
-         WHERE r.enabled = 1 AND r.status <> 'missing'
-         ORDER BY knn_matches.distance",
-    )?;
+         WHERE ",
+        searchable_sql!(),
+        "
+         ORDER BY knn_matches.distance"
+    ))?;
     // vec0 KNN queries only permit a single-column `ORDER BY distance` in
     // the statement (sqlite-vec rejects a compound ORDER BY here, even in
     // the outer SELECT over the CTE), so the `chunk_id` tie-break has to
@@ -92,7 +95,7 @@ pub fn search_vector_image(
     if query_embedding.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(concat!(
         "WITH knn_matches AS (
             SELECT file_id, distance
             FROM vec_image
@@ -102,9 +105,11 @@ pub fn search_vector_image(
          FROM knn_matches
          JOIN files f ON f.id = knn_matches.file_id
          JOIN roots r ON r.id = f.root_id
-         WHERE r.enabled = 1 AND r.status <> 'missing'
-         ORDER BY knn_matches.distance",
-    )?;
+         WHERE ",
+        searchable_sql!(),
+        "
+         ORDER BY knn_matches.distance"
+    ))?;
     let mut rows = stmt
         .query_map(params![embedding_to_blob(query_embedding), limit], |row| {
             let file_name: String = row.get(2)?;
@@ -159,7 +164,7 @@ mod tests {
             size: body.len() as u64,
             mtime_ns: 0,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
@@ -216,7 +221,7 @@ mod tests {
             size: 0,
             mtime_ns: 0,
             lang: None,
-            state: "indexed",
+            state: crate::db::files::FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,

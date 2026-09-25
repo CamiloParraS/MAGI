@@ -66,7 +66,7 @@ mod tests {
             id: 1,
             root_id: 1,
             kind: "text".into(),
-            state: "pending".into(),
+            state: crate::db::files::FileState::Pending,
             skip_reason: None,
             error: None,
             size: 10,

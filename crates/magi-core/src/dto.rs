@@ -48,7 +48,7 @@ impl From<Root> for RootStatus {
             id: root.id,
             path: root.path.to_string_lossy().into_owned(),
             enabled: root.enabled,
-            status: root.status,
+            status: root.status.as_str().to_string(),
         }
     }
 }

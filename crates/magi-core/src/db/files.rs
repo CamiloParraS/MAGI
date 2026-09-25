@@ -2,13 +2,59 @@
 
 use std::path::{Path, PathBuf};
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{Connection, params};
 
+use crate::db::roots::indexable_sql;
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::extract::RawChunk;
 
 /// Everything needed to upsert one file's row.
+/// Where a file is in the index (`files.state`): queued, in the pipeline, or
+/// settled by its last result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileState {
+    Pending,
+    Indexing,
+    Indexed,
+    Skipped,
+    Error,
+}
+
+impl FileState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Indexing => "indexing",
+            Self::Indexed => "indexed",
+            Self::Skipped => "skipped",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl ToSql for FileState {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl FromSql for FileState {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "pending" => Ok(Self::Pending),
+            "indexing" => Ok(Self::Indexing),
+            "indexed" => Ok(Self::Indexed),
+            "skipped" => Ok(Self::Skipped),
+            "error" => Ok(Self::Error),
+            other => Err(FromSqlError::Other(
+                format!("unknown file state {other:?}").into(),
+            )),
+        }
+    }
+}
+
 pub struct FileRecord<'a> {
     pub root_id: i64,
     pub path: &'a Path,
@@ -19,7 +65,7 @@ pub struct FileRecord<'a> {
     pub size: u64,
     pub mtime_ns: i64,
     pub lang: Option<&'a str>,
-    pub state: &'a str,
+    pub state: FileState,
     pub skip_reason: Option<&'a str>,
     pub error: Option<&'a str>,
     pub seen_scan_id: i64,
@@ -200,7 +246,7 @@ pub struct StoredFile {
     pub id: i64,
     pub root_id: i64,
     pub kind: String,
-    pub state: String,
+    pub state: FileState,
     pub skip_reason: Option<String>,
     /// The last result's or attempt's error, kept until a result replaces it.
     pub error: Option<String>,
@@ -245,7 +291,7 @@ pub fn touch_unchanged(
     size: u64,
     mtime_ns: i64,
     scan_id: i64,
-    state: &str,
+    state: FileState,
 ) -> Result<()> {
     conn.execute(
         "UPDATE files SET size = ?2, mtime_ns = ?3, seen_scan_id = ?4, state = ?5,
@@ -306,13 +352,16 @@ pub struct PendingFile {
 
 // `INDEXED BY`: left to itself the planner takes `idx_files_state` and sorts
 // every pending row per call (checked with EXPLAIN on a fresh database).
-const NEXT_PENDING_SQL: &str = "SELECT id, root_id, path, size, mtime_ns
+const NEXT_PENDING_SQL: &str = concat!(
+    "SELECT id, root_id, path, size, mtime_ns
      FROM files INDEXED BY idx_files_pending
      WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
-       AND root_id IN (SELECT id FROM roots
-                       WHERE enabled = 1 AND status IN ('ok', 'watch_failed'))
+       AND root_id IN (SELECT id FROM roots WHERE ",
+    indexable_sql!(),
+    ")
      ORDER BY mtime_ns DESC, id
-     LIMIT ?2";
+     LIMIT ?2"
+);
 
 /// The next files to work on: `pending`, not waiting out a retry delay, in a
 /// root that is enabled and readable, most recently modified first so fresh
@@ -497,7 +546,7 @@ pub fn is_unseen_since(conn: &Connection, file_id: i64, scan_id: i64) -> Result<
 }
 
 /// The row's current state, if it still exists.
-pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<String>> {
+pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<FileState>> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
@@ -508,10 +557,12 @@ pub fn state_of(conn: &Connection, file_id: i64) -> Result<Option<String>> {
         .optional()?)
 }
 
-const HASHED_OF_SIZE_SQL: &str = "SELECT f.id, f.path, f.content_hash FROM files f
+const HASHED_OF_SIZE_SQL: &str = concat!(
+    "SELECT f.id, f.path, f.content_hash FROM files f
      JOIN roots r ON r.id = f.root_id
-     WHERE f.size = ?1 AND f.kind = ?2 AND f.content_hash IS NOT NULL
-       AND r.enabled = 1 AND r.status IN ('ok', 'watch_failed')";
+     WHERE f.size = ?1 AND f.kind = ?2 AND f.content_hash IS NOT NULL AND ",
+    indexable_sql!()
+);
 
 /// Hashed rows of exactly `size` bytes and `kind` in a usable root, with their
 /// path and hash: what a newly found file may have been moved from.
@@ -662,7 +713,7 @@ pub fn retry_errors(conn: &Connection) -> Result<usize> {
 }
 
 /// How many files are in each state.
-pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<String, u64>> {
+pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<FileState, u64>> {
     let mut stmt = conn.prepare_cached("SELECT state, COUNT(*) FROM files GROUP BY state")?;
     let counts = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
@@ -718,7 +769,7 @@ mod tests {
             size: 11,
             mtime_ns: 123,
             lang: Some("en"),
-            state: "indexed",
+            state: FileState::Indexed,
             skip_reason: None,
             error: None,
             seen_scan_id: 1,
@@ -805,7 +856,7 @@ mod tests {
         let path = PathBuf::from("/roots/a/huge.bin");
         let rel = PathBuf::from("huge.bin");
         let mut record = sample_record(&path, &rel);
-        record.state = "skipped";
+        record.state = FileState::Skipped;
         record.skip_reason = Some("too_large");
 
         upsert(&mut conn, &record, &[], &[]).unwrap();
@@ -1156,6 +1207,28 @@ mod tests {
     }
 
     #[test]
+    fn file_states_read_back_as_written_and_are_counted() {
+        let (_dir, mut conn) = open_test_db();
+        let id = add_file(&mut conn, 1, "a.txt", 1, "x");
+        let all = [
+            FileState::Pending,
+            FileState::Indexing,
+            FileState::Indexed,
+            FileState::Skipped,
+            FileState::Error,
+        ];
+        for state in all {
+            conn.execute(
+                "UPDATE files SET state = ?2 WHERE id = ?1",
+                params![id, state],
+            )
+            .unwrap();
+            assert_eq!(state_of(&conn, id).unwrap(), Some(state));
+            assert_eq!(count_states(&conn).unwrap().get(&state), Some(&1));
+        }
+    }
+
+    #[test]
     fn retrying_errors_queues_them_afresh_and_leaves_the_rest() {
         let (_dir, mut conn) = open_test_db();
         let broken = add_file(&mut conn, 1, "broken.txt", 1, "x");
@@ -1163,7 +1236,10 @@ mod tests {
         for now in [1000, 2000, 3000] {
             record_failure(&conn, broken, "unreadable", now).unwrap();
         }
-        assert_eq!(count_states(&conn).unwrap().get("error"), Some(&1));
+        assert_eq!(
+            count_states(&conn).unwrap().get(&FileState::Error),
+            Some(&1)
+        );
 
         assert_eq!(retry_errors(&conn).unwrap(), 1);
         let row: (String, i64, Option<i64>, Option<String>) = conn
@@ -1176,7 +1252,7 @@ mod tests {
         // The error stays until a result replaces it, so change detection
         // re-reads the file instead of keeping it.
         assert_eq!(row, ("pending".into(), 0, None, Some("unreadable".into())));
-        assert_eq!(state_of(&conn, fine).unwrap().as_deref(), Some("indexed"));
+        assert_eq!(state_of(&conn, fine).unwrap(), Some(FileState::Indexed));
         assert_eq!(retry_errors(&conn).unwrap(), 0);
     }
 

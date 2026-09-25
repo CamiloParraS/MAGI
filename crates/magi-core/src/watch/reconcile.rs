@@ -128,7 +128,7 @@ pub fn scan_paths(
 ) -> Result<PathScan> {
     let usable: Vec<_> = roots::list(conn)?
         .into_iter()
-        .filter(|r| r.enabled && matches!(r.status.as_str(), "ok" | "watch_failed"))
+        .filter(|r| r.indexable())
         .collect();
     if paths.iter().any(|p| usable.iter().any(|r| r.path == *p)) {
         return Ok(PathScan {
@@ -319,11 +319,7 @@ pub fn reconcile_roots(
 pub fn recover(conn: &mut Connection, options: &IndexRootOptions) -> Result<Option<ScanSummary>> {
     let back: Vec<i64> = roots::list(conn)?
         .into_iter()
-        .filter(|r| {
-            r.enabled
-                && matches!(r.status.as_str(), "permission_denied" | "missing")
-                && FsProbe.probe(&r.path) == RootAccess::Ok
-        })
+        .filter(|r| r.enabled && !r.status.readable() && FsProbe.probe(&r.path) == RootAccess::Ok)
         .map(|r| r.id)
         .collect();
     if back.is_empty() {
@@ -486,7 +482,7 @@ mod tests {
         s.write("a.txt", "alpha");
         assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
 
-        roots::set_status(&s.conn, s.root.id, "permission_denied").unwrap();
+        roots::set_status(&s.conn, s.root.id, roots::Health::PermissionDenied).unwrap();
         let summary = recover(&mut s.conn, &s.options).unwrap().unwrap();
         assert_eq!(summary.inserted, 1);
         assert_eq!(s.status(), "ok");
@@ -495,7 +491,7 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         let unplugged = roots::add(&s.conn, other.path()).unwrap();
         drop(other);
-        roots::set_status(&s.conn, unplugged.id, "missing").unwrap();
+        roots::set_status(&s.conn, unplugged.id, roots::Health::Missing).unwrap();
         assert!(recover(&mut s.conn, &s.options).unwrap().is_none());
     }
 

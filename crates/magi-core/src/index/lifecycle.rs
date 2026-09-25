@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use crate::db::files;
+use crate::db::files::{self, FileState};
 use crate::error::Result;
 
 use super::pipeline::{Embedded, Job, Status, store_embedded, unix_now};
@@ -24,7 +24,7 @@ pub(crate) enum FileStep {
         embedded: Box<Embedded>,
     },
     /// Unchanged: refresh size, mtime and scan id only.
-    Keep { job: Box<Job>, state: String },
+    Keep { job: Box<Job>, state: FileState },
     /// Failed for a reason that may pass: back off and retry.
     Retry {
         file_id: i64,
@@ -133,7 +133,7 @@ fn apply_as(conn: &mut Connection, step: FileStep, writer: Writer) -> Result<Opt
                 job.entry.size,
                 job.entry.mtime_ns,
                 job.scan_id,
-                &state,
+                state,
             )?;
             Ok(Some(Status::Unchanged))
         }
@@ -161,7 +161,7 @@ fn apply_as(conn: &mut Connection, step: FileStep, writer: Writer) -> Result<Opt
 /// `Retry` and `Delete` are not checked: the scheduler sends them for rows it
 /// never started, which are still `pending`.
 fn superseded(conn: &Connection, file_id: i64) -> bool {
-    files::state_of(conn, file_id).is_ok_and(|state| state.as_deref() != Some("indexing"))
+    files::state_of(conn, file_id).is_ok_and(|state| state != Some(FileState::Indexing))
 }
 
 fn retry(conn: &Connection, file_id: i64, message: &str, locked: bool) -> Result<Status> {
@@ -234,7 +234,7 @@ mod tests {
             }
         }
 
-        fn state(&self, id: i64) -> Option<String> {
+        fn state(&self, id: i64) -> Option<FileState> {
             files::state_of(&self.conn, id).unwrap()
         }
     }
@@ -242,7 +242,7 @@ mod tests {
     fn keep(job: &Job) -> FileStep {
         FileStep::Keep {
             job: Box::new(job.clone()),
-            state: "indexed".into(),
+            state: FileState::Indexed,
         }
     }
 
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(job.scan_id, 7);
         assert!(matches!(step, FileStep::Start(id) if id == job.stored.id));
         assert!(apply(&mut f.conn, step).unwrap().is_none(), "not counted");
-        assert_eq!(f.state(job.stored.id).as_deref(), Some("indexing"));
+        assert_eq!(f.state(job.stored.id), Some(FileState::Indexing));
     }
 
     /// The row went between the scheduler's read and now: delete, never leave
@@ -309,14 +309,14 @@ mod tests {
             apply(&mut f.conn, keep(&job)).unwrap(),
             Some(Status::Unchanged)
         ));
-        assert_eq!(f.state(id).as_deref(), Some("indexed"));
+        assert_eq!(f.state(id), Some(FileState::Indexed));
 
         files::mark_pending(&f.conn, id).unwrap();
         assert!(
             apply(&mut f.conn, keep(&job)).unwrap().is_none(),
             "changed again while in the pipeline"
         );
-        assert_eq!(f.state(id).as_deref(), Some("pending"));
+        assert_eq!(f.state(id), Some(FileState::Pending));
 
         files::delete_file(&mut f.conn, id).unwrap();
         assert!(
@@ -334,12 +334,12 @@ mod tests {
         let (start, job) = begin(&f.conn, f.stable("a.txt"), &f.roots, 1);
         let job = job.unwrap();
         assert!(apply_alone(&mut f.conn, start).unwrap().is_none());
-        assert_eq!(f.state(job.stored.id).as_deref(), Some("pending"));
+        assert_eq!(f.state(job.stored.id), Some(FileState::Pending));
         assert!(matches!(
             apply_alone(&mut f.conn, keep(&job)).unwrap(),
             Some(Status::Unchanged)
         ));
-        assert_eq!(f.state(job.stored.id).as_deref(), Some("indexed"));
+        assert_eq!(f.state(job.stored.id), Some(FileState::Indexed));
     }
 
     /// A stat failure hits a row that never left `pending`: it must still be

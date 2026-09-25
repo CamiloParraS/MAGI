@@ -352,9 +352,14 @@ brand-new `pending` row has the same size, kind and blake3 hash, and deletes the
 rest. Scan ids come from `next_scan_id` (`meta.last_scan_id`) and must increase.
 
 **Root status.** `platform::FsProbe` maps a failed `read_dir`/`metadata` to
-`permission_denied` or `missing`; `roots::set_access` stores it. A root that is
-not `ok` is not scanned and keeps its rows. Search ignores files of roots that
-are `missing` or `enabled = 0`.
+`permission_denied` or `missing`; `roots::set_access` stores it. The rules live
+on `roots::Health` and `Root`, with SQL twins the queries splice in
+(`indexable_sql!`, `searchable_sql!`, `readable_sql!`):
+
+- **Indexable:** enabled and readable (`ok` or `watch_failed`). Only these
+  roots are scanned and indexed; the others keep their rows.
+- **Searchable:** enabled and not `missing`. An unreadable root stays
+  searchable, because its index is still right.
 
 ## Engine (M5 Slice 3)
 
