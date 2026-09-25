@@ -148,7 +148,7 @@ clean.
       index → extract → search pipeline.
 - [x] 83 unit tests + 9 golden tests + 1 idempotence test
       (`cargo test -p magi-core`), `cargo fmt --check` and `cargo clippy
-  --all-targets --all-features -- -D warnings` clean.
+--all-targets --all-features -- -D warnings` clean.
 
 M2 is complete per SPEC.md §7's verification list, pending the
 not-yet-verified-on-macOS/Linux caveat noted for earlier milestones.
@@ -327,7 +327,7 @@ verification checklist below, none of which is checked off yet.
 - [x] 130 unit tests (`cargo test -p magi-core`, plus 1 `#[ignore]`d real-
       tokenizer test run manually as above) + 9 golden + 1 idempotence
       test; `cargo fmt --check` and `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings` clean; `cargo test --workspace` green.
+--all-features -- -D warnings` clean; `cargo test --workspace` green.
 
 ### Slice: real e5 ONNX embedder
 
@@ -338,7 +338,7 @@ verification checklist below, none of which is checked off yet.
       wrong `pad_token_id` for this model — verified by inspecting both
       files directly, not assumed), `add_special_tokens = true` (the
       tokenizer's own `TemplateProcessing` post-processor wraps `<s> ...
-  </s>`, confirmed from `tokenizer.json`), mean pooling over the
+</s>`, confirmed from `tokenizer.json`), mean pooling over the
       attention mask (the exported ONNX graph has no pooling baked in —
       confirmed by inspecting its actual input/output tensor names and
       shapes with the `onnx` Python package, not assumed), L2
@@ -371,11 +371,11 @@ verification checklist below, none of which is checked off yet.
       manually with `MAGI_DATA_DIR` pointed at a directory containing the
       downloaded model/tokenizer, after `cargo xtask fetch-onnxruntime`).
 - [x] `magi-cli`'s `embedder_from_env()` now returns `Box<dyn
-  TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
+TextEmbedder>`: the real `E5Embedder` by default, `FakeEmbedder`
       under `MAGI_FAKE_EMBEDDER=1` (previously the CLI only ever bailed
       out asking for the fake one, since no real embedder existed).
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, and `cargo test --workspace` all
+--all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green with the new `ort`/`ndarray` dependencies.
 
 ### Slice: reference-vector parity, eval harness, quantization decision
@@ -488,7 +488,7 @@ verification checklist below, none of which is checked off yet.
       only 67 MB over (was 325 MB). Full writeup in ADR-0005's "Update:
       RSS root-cause investigation".
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, and `cargo test --workspace` (130
+--all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green after the `embed::e5`/`embed::manager`
       changes; the real-model `#[ignore]`d tests (parity, cross-lingual
       smoke test) re-verified manually.
@@ -538,7 +538,7 @@ and ADR-0005 rather than actioned here — each is its own scoped follow-up.
       (matches the 767.1 MB comparison measurement within noise) — 66 MB
       over the ≤700 MB target, the closest this project has measured.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, and `cargo test --workspace` (130
+--all-features -- -D warnings`, and `cargo test --workspace` (130
       unit tests) all clean/green.
 
 **Still open, unchanged**: the NFR-2/NFR-3 100k-chunk latency targets
@@ -656,7 +656,7 @@ Caveats stated rather than smoothed over:
       a real fix — recorded as a conscious scope boundary rather than
       silently left out.
 - [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  --all-features -- -D warnings`, and `cargo test --workspace` all
+--all-features -- -D warnings`, and `cargo test --workspace` all
       clean/green after the change.
 - [x] **Re-embed-on-model-change: reconfirmed as correctly deferred, not a
       gap to close here.** `TextEmbedder::model_id()`'s doc comment has said
@@ -702,7 +702,7 @@ marked complete — the idle-unload mechanism gap above is now closed.
       downloaded and SHA-256-verified the real `model.onnx` (118,346,824
       bytes) and `tokenizer.json` (17,082,730 bytes) into
       `<data_dir>/models/text/`; `cargo test -p magi-core --release --
-    --ignored` then passed all 3 real-model tests (parity, cross-lingual
+  --ignored` then passed all 3 real-model tests (parity, cross-lingual
       smoke test, repeated-load-is-safe) against those freshly-downloaded
       files.
 - [x] **RSS target closed for real, using the now-working fetch path to
@@ -716,18 +716,18 @@ marked complete — the idle-unload mechanism gap above is now closed.
       (`.with_execution_providers([ep::CPU::default().with_arena_allocator(false).build()])`)
       and re-measuring peak RSS the same way as ADR-0005 (Windows
       `PeakWorkingSet64`, polled every 50 ms, `magi-cli index
-    fixtures/corpus`, average of two runs, same reference machine): **from
+  fixtures/corpus`, average of two runs, same reference machine): **from
       766.55 MB (767.8/765.3, confirms ADR-0005's 766.4 MB was reproducible)
       down to 682.8 MB (683.8/681.8)** — SPEC.md §7 M3's ≤ 700 MB target is
       now **met**, not just closer. Re-verified this wasn't a silent
       correctness regression: `e5_parity` (cosine 0.9953, unchanged),
       `real_model_embeds_plausible_vectors` (cross-lingual smoke test,
       unchanged), and `magi-cli eval eval/queries.jsonl --corpus
-    fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
+  fixtures/corpus` (vector-only/hybrid recall@5 0.967, byte-for-byte the
       same numbers ADR-0005 recorded) all still pass — disabling the arena
       only changes allocation strategy, never model output. `cargo fmt`,
       `cargo clippy --workspace --all-targets --all-features -- -D
-    warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
+  warnings`, and `cargo test --workspace` (135 unit + 9 golden + 1
       idempotence) all clean/green.
 
 **Still open**: the NFR-2/NFR-3 100k-chunk latency targets (root cause is
@@ -846,7 +846,7 @@ were re-run manually against the actual downloaded int8 model.
       reference), the cross-lingual smoke test (`electrician invoice` →
       `factura_electricista.pdf`, `receta de arepas` → `arepas_recipe.txt`,
       both top-3), and `magi-cli eval eval/queries.jsonl --corpus
-    fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
+  fixtures/corpus` (recall@5 0.967, unchanged — the fusion refactor
       preserves ranking exactly). 136 unit + 9 golden + 1 idempotence tests
       green; the 5 `#[ignore]`d real-model tests were run manually against
       the actual downloaded int8 model.
@@ -886,7 +886,7 @@ tests, `cargo fmt --check` and `cargo clippy --workspace --all-targets
       contract; CLAUDE.md and AGENTS.md updated to match.
 - [x] **Two `.unwrap()`s on a mutex removed** (`discovery/walk.rs`), per
       CLAUDE.md's no-`unwrap` rule: `unwrap_or_else(|poisoned|
-    poisoned.into_inner())` — nothing in that closure breaks an invariant
+  poisoned.into_inner())` — nothing in that closure breaks an invariant
       when a walk panics.
 - [x] **Crate-wide `#![allow(dead_code)]` deleted** (`lib.rs`). An M0 stub
       leftover: removing it produces zero warnings with or without
@@ -985,7 +985,7 @@ recorded in the new `fixtures/README.md`:
       `Heic`. Local-only fixtures are skipped, never failed.
 - [x] `just check` green: 145 unit + 9 golden + 1 idempotence tests,
       `cargo fmt --check` and `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
+  --all-features -- -D warnings` clean, frontend lint/typecheck/test pass.
 
 - [x] **CI green on all three runners** (ubuntu-22.04, macos-14,
       windows-latest), which is SPEC.md §7 M4's "a spike branch must produce a
@@ -1569,7 +1569,7 @@ three misses), so the refactor of the per-file path changed no retrieval result.
       `unchanged`, zero chunks embedded). It also runs in ~100 s instead of
       200-400 s.
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets --all-features -D
-    warnings` clean; workspace tests pass (192 unit).
+  warnings` clean; workspace tests pass (192 unit).
 
 **Deviations from the plan.** `insert_pending`, `rename_file`, `find_by_hash` and
 `purge_excluded` were listed for Slice 1 but are only used by reconciliation and
@@ -1971,7 +1971,7 @@ engine test now also checks `add_root` on a folder inside a root fails with
 - A file already waiting out the stability check when its root is disabled
   may still be indexed once.
 
-### M5 Slice 8 - verification gaps, manual run (in progress)
+### M5 Slice 8 - verification gaps, manual run
 
 - [x] **Item 3b through the engine** (`a_changed_text_model_id_re_embeds_unchanged_files`):
       a restart with the same model embeds nothing; with `meta.text_model_id`
@@ -1998,6 +1998,44 @@ engine test now also checks `add_root` on a folder inside a root fails with
       tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
       accepted), and SigLIP builds its session before parsing its tokenizer.
       mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
-- [ ] Search latency while indexing (NFR-8).
-- [ ] ADR-0008 (runtime and threading), ADR-0009 (watcher, rename and
-      reconciliation policy); M5 sign-off table.
+- [ ] **Pending: search latency while indexing (NFR-8).** Not measured: it
+      needs indexing and search in one process, which arrives with the desktop
+      app (M6). The same goes for peak memory with a search during the first
+      index. Deferred by the owner, 2026-09-25.
+- [x] ADR-0008 (runtime and threading) and ADR-0009 (watchers and
+      reconciliation) written.
+- [x] CI green on all three OSes (confirmed by the owner, 2026-09-25).
+
+### M5 sign-off
+
+Integration tests are in `crates/magi-core/tests/incremental.rs` unless noted.
+They use a real watcher, temp dirs and `FakeEmbedder`, and run in CI on
+Windows, Ubuntu 22.04 and macOS 14.
+
+| Item   | Check                                                  | Evidence                                                                                                                                                               |
+| ------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1      | New file searchable within 10 s                        | `a_new_file_is_searchable_within_ten_seconds`                                                                                                                          |
+| 2      | Modified: old chunks, FTS, vectors gone                | `a_modified_file_replaces_its_old_content_everywhere`                                                                                                                  |
+| 3      | `touch` does not re-embed                              | `touching_a_file_does_not_re_embed_it`                                                                                                                                 |
+| 3b     | Model id changed re-embeds; same id skips              | `a_changed_text_model_id_re_embeds_unchanged_files`                                                                                                                    |
+| 4      | Rename in a root, no re-embed                          | `a_rename_inside_a_root_updates_the_path_without_re_embedding`                                                                                                         |
+| 5      | Move between roots, no re-embed                        | `a_move_between_roots_updates_the_root_without_re_embedding`                                                                                                           |
+| 6      | Moved out of every root: removed                       | `a_file_moved_out_of_every_root_is_removed`                                                                                                                            |
+| 7      | Delete removes every table                             | `a_deleted_file_is_removed_from_every_table`                                                                                                                           |
+| 8      | Changes while stopped converge                         | `changes_made_while_stopped_converge_on_restart`                                                                                                                       |
+| 9      | 1,000-file burst, each once                            | `a_burst_of_1000_files_created_while_running_is_indexed_exactly_once`, `a_burst_of_1000_files_is_indexed_exactly_once`                                                 |
+| 10     | Slow 5 s write indexed once, final content             | `a_file_written_slowly_under_a_watcher_is_indexed_once`, `a_file_written_slowly_is_indexed_once_with_its_final_content`                                                |
+| 11     | Killed mid-index: reset and completed, integrity ok    | `magi-cli/tests/daemon.rs` `a_daemon_killed_mid_index_finishes_on_restart_with_an_intact_database`; in process `rows_left_indexing_are_reset_and_completed_on_restart` |
+| 12     | Root removed: rows purged                              | `roots_are_added_disabled_and_removed_while_running`                                                                                                                   |
+| 13     | Exclusion added purges, removed restores               | `changing_an_exclusion_purges_and_restores_files`                                                                                                                      |
+| 14     | Unreadable file: `error`, others continue              | `a_file_without_read_permission_becomes_error_and_the_others_continue`                                                                                                 |
+| 15     | Root missing: index kept, resumes without re-embedding | `a_missing_root_keeps_its_index_and_resumes_without_re_embedding`                                                                                                      |
+| 16     | Windows locked file retried, indexed after release     | `a_locked_file_is_retried_and_indexed_after_release` (Windows only)                                                                                                    |
+| 17     | Memory pressure pauses and unloads the image model     | `memory_pressure_pauses_indexing_and_unloads_the_image_model`                                                                                                          |
+| Manual | Idle CPU under 1% after the first index                | 0.05–0.37% over ~80 min; **exception accepted:** 232 files, not 20k+ (docs/benchmarks.md, "M5 — idle cost")                                                            |
+| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB (docs/benchmarks.md, "M5 — peak memory")                                                                                                                |
+| NFR-12 | Peak memory, hybrid search only ≤ 900 MB               | 842–848 MB (same section)                                                                                                                                              |
+| NFR-8  | Search latency while indexing                          | **Pending**, deferred to M6 (above)                                                                                                                                    |
+| ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
+
+M5 is done, with the NFR-8 latency check carried over to M6.

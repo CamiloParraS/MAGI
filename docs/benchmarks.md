@@ -170,10 +170,10 @@ text, code, PDF, Office, JPEG/PNG/HEIC photos, QR codes), stopped when the
 status reports `idle, queued 0`. Result: 113 indexed, 4 skipped, 3 errors
 (the `edge/` files), in about 80 s.
 
-| `worker_threads`         | Peak working set             | Peak private                 |
-| ------------------------ | ---------------------------- | ---------------------------- |
-| auto (3 on this machine) | 1,337 / 1,335 / 1,215 MB     | 1,375 / 1,367 / 1,244 MB     |
-| 2 (the 8 GB-mode count)  | 1,250 / 1,253 MB             | 1,278 / 1,281 MB             |
+| `worker_threads`         | Peak working set         | Peak private             |
+| ------------------------ | ------------------------ | ------------------------ |
+| auto (3 on this machine) | 1,337 / 1,335 / 1,215 MB | 1,375 / 1,367 / 1,244 MB |
+| 2 (the 8 GB-mode count)  | 1,250 / 1,253 MB         | 1,278 / 1,281 MB         |
 
 - **Pass**, with 160–320 MB of headroom. The vision tower, OCR and e5 are
   loaded together here. The SigLIP **text** tower is not, because indexing
@@ -186,10 +186,10 @@ status reports `idle, queued 0`. Result: 113 indexed, 4 skipped, 3 errors
 **NFR-12 (≤ 900 MB):** `magi-cli search --mode hybrid` on that index, one
 process per query (e5 and the SigLIP text tower, no indexing), 5 queries.
 
-| Mode              | Peak working set    | Peak private        |
-| ----------------- | ------------------- | ------------------- |
-| hybrid (5 runs)   | 1,271–1,273 MB      | 1,437–1,442 MB      |
-| fts (no models)   | 8 MB                | 2 MB                |
+| Mode            | Peak working set | Peak private   |
+| --------------- | ---------------- | -------------- |
+| hybrid (5 runs) | 1,271–1,273 MB   | 1,437–1,442 MB |
+| fts (no models) | 8 MB             | 2 MB           |
 
 - **Fail** by about 370 MB. Almost all of it is the two query encoders, loaded
   one after the other but both still resident at the peak.
@@ -199,12 +199,12 @@ process per query (e5 and the SigLIP text tower, no indexing), 5 queries.
 `real_tokenizer_file_loads_and_encodes_plausible_counts` test (7 MB empty-test
 baseline subtracted). These are peaks, so they don't add up exactly.
 
-| Part                                  | Peak working set |
-| ------------------------------------- | ---------------- |
-| e5 model                              | ~225 MB          |
-| e5 `tokenizer.json` (XLM-R, 17 MB)    | ~266 MB          |
-| SigLIP 2 text tower (q4f16)           | ~400 MB          |
-| Gemma `tokenizer.json` (256k, 34 MB)  | ~373 MB          |
+| Part                                 | Peak working set |
+| ------------------------------------ | ---------------- |
+| e5 model                             | ~225 MB          |
+| e5 `tokenizer.json` (XLM-R, 17 MB)   | ~266 MB          |
+| SigLIP 2 text tower (q4f16)          | ~400 MB          |
+| Gemma `tokenizer.json` (256k, 34 MB) | ~373 MB          |
 
 The tokenizer figures are the peak while the JSON is parsed; how much stays
 resident afterwards was not measured.
@@ -214,10 +214,10 @@ embedder in `OneShotQuery`, which unloads the e5 session and the shared text
 tokenizer as soon as the query is embedded. Only the one-shot CLI does this;
 `eval` and a long-lived engine keep e5 cached.
 
-| Build (release, 5 queries × 3) | Peak working set          | Peak private     |
-| ------------------------------ | ------------------------- | ---------------- |
-| before                         | 1,271–1,273 MB            | 1,437–1,442 MB   |
-| free e5 first                  | 900–909 MB (14/15 ≤ 901)  | 1,056–1,069 MB   |
+| Build (release, 5 queries × 3) | Peak working set         | Peak private   |
+| ------------------------------ | ------------------------ | -------------- |
+| before                         | 1,271–1,273 MB           | 1,437–1,442 MB |
+| free e5 first                  | 900–909 MB (14/15 ≤ 901) | 1,056–1,069 MB |
 
 Latency, one cold process per query (model load included), 20 runs per build,
 the builds interleaved so machine load hits all of them alike:
@@ -245,6 +245,7 @@ the builds interleaved so machine load hits all of them alike:
   The Windows heap does return e5's memory. The peak is ONNX Runtime building
   the SigLIP text session: briefly ~800 MB (about twice the 443 MB file),
   settling at ~437 MB. The Gemma tokenizer, already loaded, sat on top of it.
+
 - **Fix: build the SigLIP session before parsing its tokenizer**
   (`embed::siglip::load_text`). Peak **842–848 MB** (15 runs, private
   993–1,001 MB): **pass**. Latency unchanged, interleaved against the build
