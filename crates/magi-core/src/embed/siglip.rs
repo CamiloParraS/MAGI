@@ -60,6 +60,14 @@ fn load_vision() -> Result<Mutex<Session>> {
 fn load_text() -> Result<TextTower> {
     crate::onnx::init()?;
     let dir = model_dir("image");
+    // Session first: building it briefly takes ~2x the model file (~800 MB),
+    // and the Gemma tokenizer (~64 MB resident) shouldn't sit on top of that
+    // peak (NFR-12, docs/benchmarks.md).
+    let session = Mutex::new(crate::onnx::session(
+        &dir.join("text_model.onnx"),
+        1,
+        false,
+    )?);
     let tokenizer_path = dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
         Error::Model(format!(
@@ -67,14 +75,7 @@ fn load_text() -> Result<TextTower> {
             tokenizer_path.display()
         ))
     })?;
-    Ok(TextTower {
-        session: Mutex::new(crate::onnx::session(
-            &dir.join("text_model.onnx"),
-            1,
-            false,
-        )?),
-        tokenizer,
-    })
+    Ok(TextTower { session, tokenizer })
 }
 
 /// Resizes to the model's square input and lays the pixels out as an NCHW
