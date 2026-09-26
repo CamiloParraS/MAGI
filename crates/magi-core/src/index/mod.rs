@@ -101,8 +101,8 @@ fn backfill_left(conn: &Connection, feature: Feature) -> Result<i64> {
     )?)
 }
 
-/// Re-queues the indexed files that were indexed without a feature that is
-/// now running (ADR-0010 backfill) and records the backfill's size for
+/// Re-queues the indexed and skipped files (a skipped file still has a
+/// filename chunk) that were indexed without a feature that is now running (ADR-0010 backfill) and records the backfill's size for
 /// progress. Re-queued files go through the normal pipeline, so their chunks
 /// are rebuilt at the real tokenizer's boundaries too. A restart mid-backfill
 /// keeps the original total. Returns how many rows were re-queued.
@@ -115,7 +115,7 @@ pub fn requeue_missing(conn: &mut Connection, running: &[Feature]) -> Result<usi
         let fresh = tx.execute(
             "UPDATE files SET state = 'pending', pipeline_version = 0, attempts = 0,
                               next_attempt_at = NULL
-             WHERE state = 'indexed' AND features_missing & ?1 != 0",
+             WHERE state IN ('indexed', 'skipped') AND features_missing & ?1 != 0",
             [feature.bit()],
         )? as i64;
         marked += fresh as usize;
@@ -220,6 +220,15 @@ mod tests {
             backfill_progress(&conn, Feature::Meaning).unwrap(),
             Some((0, 1))
         );
+    }
+
+    #[test]
+    fn skipped_files_missing_a_feature_are_backfilled_too() {
+        // A too-large or cloud-only file still has a filename chunk to embed;
+        // re-queueing it reads no content (plan_entry skips it first).
+        let (_dir, mut conn) = db_with_three_missing_meaning();
+        set(&conn, "/r/0.txt", "skipped", 1);
+        assert_eq!(requeue_missing(&mut conn, &[Feature::Meaning]).unwrap(), 3);
     }
 
     #[test]

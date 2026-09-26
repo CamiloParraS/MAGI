@@ -398,7 +398,7 @@ on `roots::Health` and `Root`, with SQL twins the queries splice in
   bits of the features it was indexed without. Only images extracted as
   images can miss image features.
 - **Backfill:** a feature becomes available → the host restarts the engine →
-  `index::requeue_missing` re-queues `indexed` files carrying the bit of any
+  `index::requeue_missing` re-queues `indexed` and `skipped` files carrying the bit of any
   running feature and stores `meta.backfill_total_<feature>` → the normal
   pipeline re-indexes them → the bit clears. `backfill_progress` is
   `(total - left, total)` while files carrying the bit are `pending` or

@@ -2061,7 +2061,7 @@ ADR-0010. Core and CLI only; the Tauri host follows in Plan 2.
 | Hybrid search without meaning uses keywords only | `search::tests::hybrid_search_without_a_text_embedder_uses_keywords_only` |
 | Files record the features they miss | `tests/features.rs` `files_indexed_without_a_feature_record_it`, `images_whose_content_is_not_extracted_do_not_miss_image_features` |
 | Enabling meaning embeds only the files missing it | `tests/features.rs` `enabling_meaning_embeds_only_the_files_missing_it` |
-| Backfill progress counts down, ignores errors, survives restart | `index::tests::backfill_progress_counts_down_and_ignores_failed_files`, `a_feature_that_is_not_running_queues_nothing` |
+| Backfill progress counts down, ignores errors, survives restart; skipped files are backfilled too | `index::tests::backfill_progress_counts_down_and_ignores_failed_files`, `a_feature_that_is_not_running_queues_nothing`, `skipped_files_missing_a_feature_are_backfilled_too` |
 | Complete status; download, failure, cancel, remove, set_enabled | `features::tests::status_reports_desire_availability_and_size_separately`, `a_download_reports_progress_then_installed`, `a_checksum_mismatch_is_failed_and_never_installed`, `cancel_clears_the_queue_and_a_later_download_works`, `remove_is_refused_while_downloading_and_deletes_only_the_download`, `set_enabled_persists_the_desire_and_leaves_the_install_alone` |
 | Backfill progress shows in status events | `features::tests::a_running_backfill_shows_in_status_and_events` |
 | Nothing loads for a feature that is off | `features::tests::nothing_loads_for_a_feature_that_is_off_or_not_installed` |
