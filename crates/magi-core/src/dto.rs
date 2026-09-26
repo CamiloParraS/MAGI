@@ -8,6 +8,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::roots::Root;
 
+/// Why a download failed: a stable code, localized by the UI (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadError {
+    DownloadNetworkError,
+    ChecksumMismatch,
+    DiskFull,
+    PermissionDenied,
+    /// Any other local I/O failure while saving the download.
+    WriteFailed,
+}
+
+impl DownloadError {
+    pub fn classify(error: &crate::Error) -> Self {
+        use std::io::ErrorKind;
+        match error {
+            crate::Error::Network { .. } => Self::DownloadNetworkError,
+            crate::Error::ChecksumMismatch { .. } => Self::ChecksumMismatch,
+            crate::Error::Io { source, .. } => match source.kind() {
+                ErrorKind::StorageFull => Self::DiskFull,
+                ErrorKind::PermissionDenied => Self::PermissionDenied,
+                _ => Self::WriteFailed,
+            },
+            _ => Self::WriteFailed,
+        }
+    }
+}
+
 /// What the engine is doing (`get_status`, `engine://status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

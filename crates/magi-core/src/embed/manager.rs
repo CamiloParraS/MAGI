@@ -74,6 +74,11 @@ impl ModelManifest {
 /// Where a slot's model files live: `<data_dir>/models/<slot>/` (see
 /// `paths::data_dir`'s doc comment — "database, models, thumbnails" — and
 /// SPEC.md §4.5's `MAGI_DATA_DIR`).
+/// Parent of every slot's folder: `<data_dir>/models`.
+pub fn models_root() -> PathBuf {
+    crate::paths::data_dir().join("models")
+}
+
 pub fn model_dir(slot: &str) -> PathBuf {
     crate::paths::data_dir().join("models").join(slot)
 }
@@ -110,7 +115,7 @@ pub trait ByteFetcher {
     fn fetch(&self, url: &str, offset: u64) -> Result<(bool, Box<dyn Read>)>;
 }
 
-struct UreqFetcher;
+pub(crate) struct UreqFetcher;
 
 impl ByteFetcher for UreqFetcher {
     fn fetch(&self, url: &str, offset: u64) -> Result<(bool, Box<dyn Read>)> {
@@ -118,9 +123,10 @@ impl ByteFetcher for UreqFetcher {
         if offset > 0 {
             request = request.header("Range", format!("bytes={offset}-"));
         }
-        let response = request
-            .call()
-            .map_err(|e| Error::Model(format!("GET {url}: {e}")))?;
+        let response = request.call().map_err(|e| Error::Network {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
         let resumed = offset > 0 && response.status().as_u16() == 206;
         let reader = response.into_body().into_reader();
         Ok((resumed, Box::new(reader)))
@@ -141,7 +147,7 @@ pub fn ensure_model_file(
     download_with_fetcher(&UreqFetcher, file, dest_dir, cancel, on_progress)
 }
 
-fn download_with_fetcher(
+pub(crate) fn download_with_fetcher(
     fetcher: &dyn ByteFetcher,
     file: &ModelFile,
     dest_dir: &Path,
@@ -192,14 +198,13 @@ fn download_with_fetcher(
     let mut buf = [0u8; DOWNLOAD_CHUNK_BYTES];
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(Error::Model(format!(
-                "download of {} cancelled (partial data kept for resume)",
-                file.name
-            )));
+            // Partial data is kept for a later resume.
+            return Err(Error::DownloadCancelled);
         }
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| Error::Model(format!("reading {} response body: {e}", file.url)))?;
+        let n = reader.read(&mut buf).map_err(|e| Error::Network {
+            url: file.url.clone(),
+            reason: e.to_string(),
+        })?;
         if n == 0 {
             break;
         }
@@ -215,10 +220,10 @@ fn download_with_fetcher(
     let actual = sha256_of_file(&partial_path)?;
     if actual != file.sha256 {
         std::fs::remove_file(&partial_path).ok();
-        return Err(Error::Model(format!(
-            "checksum mismatch for {}: expected {}, got {actual} (deleted; retry to re-download)",
-            file.name, file.sha256
-        )));
+        tracing::warn!(file = %file.name, expected = %file.sha256, %actual, "checksum mismatch");
+        return Err(Error::ChecksumMismatch {
+            file: file.name.clone(),
+        });
     }
     std::fs::rename(&partial_path, &final_path).map_err(|source| Error::Io {
         path: final_path.clone(),
@@ -603,7 +608,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let err =
             download_with_fetcher(&bad_fetcher, &file, dir.path(), &cancel, |_, _| {}).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert!(matches!(err, Error::ChecksumMismatch { .. }));
         assert!(!dir.path().join("weights.bin.partial").exists());
         assert!(!dir.path().join("weights.bin").exists());
 
@@ -631,7 +636,7 @@ mod tests {
 
         let err =
             download_with_fetcher(&fetcher, &file, dir.path(), &cancel, |_, _| {}).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert!(matches!(err, Error::DownloadCancelled));
         let partial_len = std::fs::metadata(dir.path().join("weights.bin.partial"))
             .unwrap()
             .len();

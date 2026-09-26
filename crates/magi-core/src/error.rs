@@ -79,6 +79,18 @@ pub enum Error {
 
     #[error("invalid setting {field}: {reason}")]
     InvalidSetting { field: &'static str, reason: String },
+
+    #[error("download cancelled")]
+    DownloadCancelled,
+
+    #[error("network error downloading {url}: {reason}")]
+    Network { url: String, reason: String },
+
+    #[error("checksum mismatch for {file} (deleted; retry to re-download)")]
+    ChecksumMismatch { file: String },
+
+    #[error("{} is downloading", .0.as_str())]
+    DownloadInProgress(crate::features::Feature),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
