@@ -616,7 +616,12 @@ its own read-only DB connection for search.
   `tauri::async_runtime::spawn_blocking` (`commands::run`), so the UI thread
   never waits on the database or a model. `open_file`/`reveal_file` resolve
   the path from the DB (`Host::file_path`) and hand it to
-  `tauri_plugin_opener`; the frontend never sends a raw path.
+  `tauri_plugin_opener`; the frontend never sends a raw path (the plugin's
+  JS link handler is off). `list_roots` also reads the DB
+  (`Host::list_roots`), so it answers while the engine restarts, and
+  `search` clamps its `limit` to 1..=500. The supervisor coalesces what
+  queues up while the engine starts or stops: the newest feature state
+  only, and one control (Stop > Clear > Restart).
 - **Events**: `engine://status` (`IndexStatus`) and `engine://features`
   (`FeatureStatus[]`, always complete), emitted from `Host::start`'s
   callback in `apps/desktop/src-tauri/src/lib.rs`.
@@ -628,8 +633,8 @@ its own read-only DB connection for search.
   `ts-rs` test harness), regenerating every `apps/desktop/src/bindings/*.ts`
   file from `dto.rs`; nothing there is hand-edited.
 - **Capabilities.** `apps/desktop/src-tauri/capabilities/default.json` grants
-  the `main` window exactly the 21 commands above (plus `core:event:default`
-  for `listen()`) and nothing else: no filesystem or shell-opener permission
+  the `main` window exactly the 21 commands above plus `ping` (22 commands),
+  and `core:event:default` for `listen()`, and nothing else: no filesystem or shell-opener permission
   reaches the webview directly. The asset protocol's static scope is empty;
   only the thumbnail cache directory is granted at runtime (see "Images"
   above). Plan 5 splits this capability file per window.

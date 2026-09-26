@@ -1189,6 +1189,7 @@ deletion on re-index, and reclaiming timed-out extraction threads.
 - [x] **Peak RSS measured:** OCR adds ~310 MB (885 MB with OCR vs. 576 MB
       for the same image pipeline without it; 7 fixtures incl. 12 MP HEICs).
       The 1.5 GB NFR-11 check with all models is still owed (needs SigLIP).
+      *(Superseded, see M6 Plan 2: NFR-11 measured.)*
 - [x] **Receipt and phone-photo CER:** receipt 0.773, 12 MP portrait 0.401,
       landscape 0.463 - the Python reference pipeline gets 0.784 / 0.339 /
       0.451, so this is the model's limit on hard photos, not a port bug. Not
@@ -2083,19 +2084,19 @@ ADR-0010. Core and CLI only; the Tauri host follows in Plan 2.
 
 ## M6 — Plan 2 (Tauri host and IPC)
 
-Plan: `.superpowers/sdd/2026-09-26-m6-plan2-tauri-host/`. Puts `magi-core`'s
+Plan: `docs/superpowers/plans/2026-09-26-m6-plan2-tauri-host.md`. Puts `magi-core`'s
 engine and features behind one `host::Host` (SPEC.md §5.3 "Desktop host";
 docs/architecture.md, "Desktop host (M6 Plan 2)"), then hosts it in Tauri
 with typed commands, events and least-privilege capabilities.
 
 | Behavior | Test |
 | --- | --- |
-| Every DTO's ts-rs export round-trips (root health crosses IPC as its database name) | `dto::tests::root_health_crosses_ipc_as_its_database_name` |
+| Root health crosses IPC under its database name (`Health`'s wire name) | `dto::tests::root_health_crosses_ipc_as_its_database_name` |
 | Snippet highlights are UTF-16 ranges; brackets in plain text are never mistaken for highlights | `dto::tests::snippet_highlights_are_utf16_ranges_and_brackets_stay_text`, `search::fts::tests::brackets_in_text_are_not_highlights` |
 | The best-matching chunk's source and page reach the search hit | `search::tests::the_best_chunks_source_and_page_reach_the_hit` |
 | A settings patch merges into the current config; typos, bad values and protected sections are rejected | `config::tests::a_settings_patch_merges_into_the_current_config`, `config::tests::a_settings_patch_rejects_typos_bad_values_and_protected_sections` |
 | Errors cross IPC as a stable code plus parameters | `dto::tests::errors_cross_ipc_as_codes_with_parameters` |
-| A failure records its error code; `clear_index` clears it | `db::files::tests::a_failure_records_its_code_and_a_clean_index_clears_it` |
+| A failure records its error code; a clean re-index of the file clears the code | `db::files::tests::a_failure_records_its_code_and_a_clean_index_clears_it` |
 | File error codes classify each failure and keep one wire name | `dto::tests::file_error_codes_classify_failures_and_keep_one_name` |
 | The host forwards engine status and feature state as they arrive | `tests/host.rs` `the_host_forwards_engine_status_and_feature_state` |
 | Disabling a feature restarts the engine without it | `tests/host.rs` `disabling_a_feature_restarts_the_engine_without_it` |
@@ -2108,6 +2109,9 @@ with typed commands, events and least-privilege capabilities.
 | Settings persist; an indexing change applies at once (restart) | `tests/host.rs` `settings_persist_and_an_indexing_change_applies_at_once` |
 | A feature toggle and a settings patch made at the same time lose no update | `tests/host.rs` `feature_toggles_and_settings_patches_at_once_lose_no_update` |
 | `clear_index` empties the index and keeps roots, config and models | `tests/host.rs` `clear_index_empties_the_index_and_keeps_roots` |
+| Queued restarts, clears and stops fold into one (Stop > Clear > Restart); every folded clear gets a reply | `host::tests::queued_controls_fold_into_the_strongest` |
+| Search clamps the webview's limit to 1..=500 | `tests/host.rs` `search_clamps_the_requested_limit` |
+| `list_roots` reads the database, so it answers while the engine is down | `tests/host.rs` `list_roots_reads_the_database_while_the_engine_is_down` |
 | Commands send the camelCase argument names Tauri expects | `apps/desktop/src/lib/ipc.test.ts` "commands send the camelCase argument names Tauri expects" |
 | Thumbnails go through the asset protocol; absent ones stay absent | `apps/desktop/src/lib/ipc.test.ts` "thumbnails go through the asset protocol, absent ones stay absent" |
 
@@ -2128,12 +2132,11 @@ to be bounded by one batch's duration (no per-batch timing was recorded).
 See docs/benchmarks.md, "M6 — NFR-8 search while indexing", and the M5
 sign-off table above (updated in place rather than duplicated).
 
-**`just eval` (M6 Plan Task 2):** not run. It needs a release build with the
+**`just eval` (M6 Plan Task 2): pending — run before merge.** It needs a release build with the
 real models loaded through the full desktop/CLI search path, and the
 ranking code this plan touches is unchanged from M5 (only metadata around a
-hit changed: page, source, `thumb_path`, `modified_at`). **Pending** —
-run it once a release build is exercised for another reason (e.g. the M7
-QA pass) rather than spending a release build on it here.
+hit changed: page, source, `thumb_path`, `modified_at`). **Pending — run
+before merge.**
 
 **Task 8 Step 7 manual in-app console checks — NOT run (need a human at a
 running `just dev`).** Each is **pending — needs a manual run in `just dev`**:
@@ -2144,8 +2147,9 @@ running `just dev`).** Each is **pending — needs a manual run in `just dev`**:
 - [ ] `plugin:fs|read_text_file` is denied (no filesystem permission is granted to the webview).
 - [ ] No CSP violations in the console, and `engine://status` events arrive.
 - [ ] Closing the window exits the process without hanging.
+- [ ] Quitting during a large startup scan exits (see the startup-walk gap below).
 
-**The M6 Plan 2 milestone is NOT fully verified until those six manual
+**The M6 Plan 2 milestone is NOT fully verified until those seven manual
 checks pass.** Everything else in this plan (Tasks 1–7, 9) is done and
 covered by the tests above, `just check` and `just bindings`.
 
@@ -2153,7 +2157,19 @@ covered by the tests above, `just check` and `just bindings`.
 `setup` hook, the app panics with no window, dialog or log — release builds
 set `windows_subsystem = "windows"` and `apps/desktop/src-tauri` has no
 `tracing` subscriber wired up, so there is nowhere for the panic message to
-go. Plan 5 (shell integration) is the right place to add one.
+go. Likewise, if the engine fails to start after setup, `Host::engine()`
+returns `EngineStarting` forever and the error is dropped for the same
+reason (no subscriber). Plan 5 (shell integration) is the right place to add
+one.
+
+**Known gap: `Engine::start` blocks for the whole startup reconciliation
+walk.** During launch and every restart, `get_status`/`pause`/`add_root`
+return `EngineStarting`, no `engine://status` events arrive, search is
+keyword-only, and quitting waits for the walk to finish. Fix: a stop flag
+for the walk, or move the startup scan off `start`.
+
+**Note:** `open_file` opens any indexed file, executables included, through
+the OS shell. That is intended: it is what double-clicking the file does.
 
 **Known gap: NFR-11 exceeds its budget with a concurrent search.** The
 NFR-8 benchmark's peak-memory sample (1,762–1,800 MB, `image_visual` on)
