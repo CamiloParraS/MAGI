@@ -108,3 +108,12 @@ Settings and onboarding windows stay solid.
   token count).
 - Features take effect when the engine starts. The host restarts the engine
   after `set_enabled` or a finished download (Plan 2).
+
+## Implementation notes (Plan 2)
+
+`host::Host` restarts the engine when any feature's `(enabled, installed)`
+pair changes — the same `engine_inputs` comparison `host::supervise` makes
+before and after each engine start, so a feature flip that lands mid-start is
+never lost. Progress (`Install::Downloading` byte counts) and backfill
+progress are excluded from that comparison on purpose: they change
+constantly and never change what the engine loads.

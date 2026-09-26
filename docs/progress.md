@@ -1998,10 +1998,12 @@ engine test now also checks `add_root` on a folder inside a root fails with
       tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
       accepted), and SigLIP builds its session before parsing its tokenizer.
       mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
-- [ ] **Pending: search latency while indexing (NFR-8).** Not measured: it
-      needs indexing and search in one process, which arrives with the desktop
-      app (M6). The same goes for peak memory with a search during the first
-      index. Deferred by the owner, 2026-09-25.
+- [x] **Search latency while indexing (NFR-8):** measured in M6 Plan 2, once
+      the desktop host put indexing and search in one process — p95 278 ms
+      busy vs. 144 ms idle, pass. See docs/benchmarks.md, "M6 — NFR-8 search
+      while indexing" and the M6 Plan 2 section below. Peak memory with a
+      search during the first index was not separately isolated from this
+      run (1,762–1,800 MB with `image_visual` on, same benchmark).
 - [x] ADR-0008 (runtime and threading) and ADR-0009 (watchers and
       reconciliation) written.
 - [x] CI green on all three OSes (confirmed by the owner, 2026-09-25).
@@ -2035,10 +2037,11 @@ Windows, Ubuntu 22.04 and macOS 14.
 | Manual | Idle CPU under 1% after the first index                | 0.05–0.37% over ~80 min; **exception accepted:** 232 files, not 20k+ (docs/benchmarks.md, "M5 — idle cost")                                                            |
 | NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB (docs/benchmarks.md, "M5 — peak memory")                                                                                                                |
 | NFR-12 | Peak memory, hybrid search only ≤ 900 MB               | 842–848 MB (same section)                                                                                                                                              |
-| NFR-8  | Search latency while indexing                          | **Pending**, deferred to M6 (above)                                                                                                                                    |
+| NFR-8  | Search latency while indexing                          | **Done in M6 Plan 2** (docs/benchmarks.md, "M6 — NFR-8 search while indexing")                                                                                        |
 | ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
 
-M5 is done, with the NFR-8 latency check carried over to M6.
+M5 is done. The NFR-8 latency check was carried over to M6 and is now done
+(M6 Plan 2, below).
 
 ## M6 — Plan 1 (optional search features)
 
@@ -2066,3 +2069,77 @@ ADR-0010. Core and CLI only; the Tauri host follows in Plan 2.
 | Backfill progress shows in status events | `features::tests::a_running_backfill_shows_in_status_and_events` |
 | Nothing loads for a feature that is off | `features::tests::nothing_loads_for_a_feature_that_is_off_or_not_installed` |
 | CLI lists, disables and persists; unknown feature names the valid ones | `magi-cli/tests/features.rs` `disabling_and_enabling_a_feature_is_listed_and_persisted`, `an_unknown_feature_is_an_error_naming_the_valid_ones` |
+
+## M6 — Plan 2 (Tauri host and IPC)
+
+Plan: `.superpowers/sdd/2026-09-26-m6-plan2-tauri-host/`. Puts `magi-core`'s
+engine and features behind one `host::Host` (SPEC.md §5.3 "Desktop host";
+docs/architecture.md, "Desktop host (M6 Plan 2)"), then hosts it in Tauri
+with typed commands, events and least-privilege capabilities.
+
+| Behavior | Test |
+| --- | --- |
+| Every DTO's ts-rs export round-trips (root health crosses IPC as its database name) | `dto::tests::root_health_crosses_ipc_as_its_database_name` |
+| Snippet highlights are UTF-16 ranges; brackets in plain text are never mistaken for highlights | `dto::tests::snippet_highlights_are_utf16_ranges_and_brackets_stay_text`, `search::fts::tests::brackets_in_text_are_not_highlights` |
+| The best-matching chunk's source and page reach the search hit | `search::tests::the_best_chunks_source_and_page_reach_the_hit` |
+| A settings patch merges into the current config; typos, bad values and protected sections are rejected | `config::tests::a_settings_patch_merges_into_the_current_config`, `config::tests::a_settings_patch_rejects_typos_bad_values_and_protected_sections` |
+| Errors cross IPC as a stable code plus parameters | `dto::tests::errors_cross_ipc_as_codes_with_parameters` |
+| A failure records its error code; `clear_index` clears it | `db::files::tests::a_failure_records_its_code_and_a_clean_index_clears_it` |
+| File error codes classify each failure and keep one wire name | `dto::tests::file_error_codes_classify_failures_and_keep_one_name` |
+| The host forwards engine status and feature state as they arrive | `tests/host.rs` `the_host_forwards_engine_status_and_feature_state` |
+| Disabling a feature restarts the engine without it | `tests/host.rs` `disabling_a_feature_restarts_the_engine_without_it` |
+| Download/backfill progress counts never count as an engine-input change (only `(enabled, installed)` does) | `host::tests::progress_and_backfill_do_not_change_engine_inputs` |
+| `Host::shutdown` stops the engine and the supervisor thread | `tests/host.rs` `shutdown_stops_the_engine` |
+| A search hit whose file was deleted after ranking is dropped, not the whole search | `host::tests::a_hit_whose_file_is_gone_is_dropped` |
+| A file's path resolves by id for `open_file`/`reveal_file` | `db::files::tests::paths_are_resolved_by_id` |
+| Search returns metadata, highlights and match sources through the host | `tests/host.rs` `search_returns_metadata_highlights_and_sources` |
+| Search falls back to keywords (no `EngineStarting` failure) while the engine is down | `tests/host.rs` `search_falls_back_to_keywords_while_the_engine_is_down` |
+| Settings persist; an indexing change applies at once (restart) | `tests/host.rs` `settings_persist_and_an_indexing_change_applies_at_once` |
+| A feature toggle and a settings patch made at the same time lose no update | `tests/host.rs` `feature_toggles_and_settings_patches_at_once_lose_no_update` |
+| `clear_index` empties the index and keeps roots, config and models | `tests/host.rs` `clear_index_empties_the_index_and_keeps_roots` |
+| Commands send the camelCase argument names Tauri expects | `apps/desktop/src/lib/ipc.test.ts` "commands send the camelCase argument names Tauri expects" |
+| Thumbnails go through the asset protocol; absent ones stay absent | `apps/desktop/src/lib/ipc.test.ts` "thumbnails go through the asset protocol, absent ones stay absent" |
+
+Task 5's review found that `supervise` compared feature inputs read *after*
+`start_engine` returned, so a feature change landing during that blocking
+call was folded into `inputs` as if already running and never triggered a
+restart. Fixed by reading `inputs` before `start_engine` (commit `60d03c5`);
+this is a timing-dependent race, so it has no dedicated regression test —
+the fix was reviewed by reading `host::supervise` rather than by a test that
+can reliably land in the window.
+
+**NFR-8 (search latency while indexing), carried over from M5:** now
+measured — p95 278 ms while indexing vs. 144 ms idle, pass. See
+docs/benchmarks.md, "M6 — NFR-8 search while indexing", and the M5 sign-off
+table above (updated in place rather than duplicated).
+
+**`just eval` (M6 Plan Task 2):** not run. It needs a release build with the
+real models loaded through the full desktop/CLI search path, and the
+ranking code this plan touches is unchanged from M5 (only metadata around a
+hit changed: page, source, `thumb_path`, `modified_at`). **Pending** —
+run it once a release build is exercised for another reason (e.g. the M7
+QA pass) rather than spending a release build on it here.
+
+**Task 8 Step 7 manual in-app console checks — NOT run (need a human at a
+running `just dev`).** Each is **pending — needs a manual run in `just dev`**:
+
+- [ ] `get_status` returns an `IndexStatus`.
+- [ ] `open_file` with `fileId -1` rejects with `{code: "FileIdNotFound", file_id: -1}`.
+- [ ] `plugin:opener|open_path` is denied (not in the `main` window's capability).
+- [ ] `plugin:fs|read_text_file` is denied (no filesystem permission is granted to the webview).
+- [ ] No CSP violations in the console, and `engine://status` events arrive.
+- [ ] Closing the window exits the process without hanging.
+
+**The M6 Plan 2 milestone is NOT fully verified until those six manual
+checks pass.** Everything else in this plan (Tasks 1–7, 9) is done and
+covered by the tests above, `just check` and `just bindings`.
+
+**Known gap, deferred to Plan 5:** if `Host::start` fails inside Tauri's
+`setup` hook, the app panics with no window, dialog or log — release builds
+set `windows_subsystem = "windows"` and `apps/desktop/src-tauri` has no
+`tracing` subscriber wired up, so there is nowhere for the panic message to
+go. Plan 5 (shell integration) is the right place to add one.
+
+**Windows build note:** `pnpm tauri build` needed the Windows SDK's `rc.exe`
+on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`);
+recorded in SPEC.md §4.3.

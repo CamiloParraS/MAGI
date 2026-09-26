@@ -178,6 +178,7 @@ Use **one repository (monorepo)** containing a Cargo workspace plus the frontend
 - Visual Studio 2022 Build Tools with the **"Desktop development with C++"** workload (MSVC + Windows SDK).
 - WebView2 Runtime (preinstalled on Windows 11; install the Evergreen runtime on Windows 10 if missing).
 - Enable long paths for development: Group Policy "Enable Win32 long paths", or registry `LongPathsEnabled=1`.
+- `pnpm tauri build` needs the Windows SDK's `rc.exe` on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`).
 
 **macOS**
 
@@ -604,6 +605,7 @@ CREATE TABLE files (
   state            TEXT NOT NULL,                  -- pending|indexing|indexed|skipped|error
   skip_reason      TEXT,
   error            TEXT,
+  error_code       TEXT,                          -- FileErrorCode, set exactly when error is (migration 4)
   attempts         INTEGER NOT NULL DEFAULT 0,
   next_attempt_at  INTEGER,
   pipeline_version INTEGER NOT NULL DEFAULT 0,
@@ -666,20 +668,22 @@ All DTOs live in `magi-core/src/dto.rs`, derive `Serialize`, `Deserialize`, and 
 
 | Command                                                                               | Request → Response                                                                                                                |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `search`                                                                              | `SearchRequest { query, limit?, kinds?, root_ids? }` → `SearchResponse { results: SearchResult[], took_ms }`                      |
+| `search`                                                                              | `SearchRequest { query, limit? }` → `SearchResponse { results: SearchResult[], took_ms }` (`kinds`/`root_ids` when a UI filter needs them)                     |
 | `get_status`                                                                          | → `IndexStatus { state: idle\|scanning\|indexing\|paused, queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` |
 | `list_roots` / `add_root(path)` / `remove_root(id)` / `set_root_enabled(id, enabled)` | Root management. `add_root` runs the permission probe and returns its result.                                                     |
 | `pause_indexing` / `resume_indexing` / `rescan_all`                                   | Indexing control                                                                                                                  |
 | `open_file(file_id)` / `reveal_file(file_id)`                                         | Use the opener plugin, resolving the path from the DB. The frontend never sends raw paths.                                        |
 | `get_settings` / `update_settings(patch)`                                             | Config read/write with validation                                                                                                 |
-| `get_permissions_report`                                                              | → `PermissionIssue[]` with per-OS guidance and a settings deep link                                                               |
-| `list_errors(limit)` / `retry_errors`                                                 | Error management                                                                                                                  |
+| `get_permissions_report` (M7)                                                        | → `PermissionIssue[]` with per-OS guidance and a settings deep link                                                               |
+| `list_errors(limit)` / `retry_errors`                                                 | Error management. `list_errors` → `FileError { file_id, path, code: FileErrorCode, detail, attempts }`.                          |
 | `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, download_size, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied\|WriteFailed`. Cancel returns to `NotInstalled`. |
-| `clear_index`                                                                         | Deletes the DB and thumbnails, keeps config and models, then restarts indexing                                                    |
+| `clear_index`                                                                         | Empties the index (files, chunks, vectors, thumbnails, backfill counters), keeps the DB file, roots, config and models, then restarts indexing |
 
-`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_url?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`
+`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_path?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`. `thumb_path` is a path inside the thumbnail cache, not a URL; the frontend builds the asset URL. `modified_at` is unix milliseconds.
 
-**Events:** `engine://status`, `engine://progress`, `engine://roots`, `engine://permissions`, `engine://features` (always the complete `FeatureStatus[]`, never a delta).
+**Errors:** every command rejects with `ErrorCode`, a stable code plus parameters (`{ code, ...params }`): `RootNotFound{path}`, `NestedRoot{path,conflicts_with}`, `RootAlreadyExists{path}`, `RootIdNotFound{id}`, `FileIdNotFound{file_id}`, `UnknownFeature{name}`, `DownloadInProgress{feature}`, `InvalidSetting{field}`, `InvalidGlob{glob}`, `EngineStarting` (the engine is starting or restarting; retry shortly), `Internal{detail}` (detail is for logs only).
+
+**Events:** `engine://status` carries `IndexStatus` (state, progress counts, per-root health), covering progress and roots. `engine://permissions` (M7). `engine://features` (always the complete `FeatureStatus[]`, never a delta).
 
 **Locale neutrality:** user-facing text originating in Rust (errors, permission guidance, failure codes) crosses IPC as a stable code plus parameters (`ts-rs` enums) and is localized by the frontend. Localized text is never a machine-readable contract. Changing `ui.language` changes presentation only, never indexed or search data.
 

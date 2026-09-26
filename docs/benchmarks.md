@@ -261,6 +261,35 @@ the builds interleaved so machine load hits all of them alike:
   interleaved comparisons are meaningful. Two back-to-back runs of the same
   build gave medians of 3,718 ms and 4,835 ms.
 
+## M6 — NFR-8 search while indexing, 2026-09-26
+
+Reference machine (above). `crates/magi-core/tests/nfr8.rs`
+(`search_latency_while_indexing`), run with the real models from the dev data
+directory (`just models`, already present):
+
+```
+cargo test -p magi-core --release --test nfr8 -- --ignored --nocapture
+```
+
+```
+NFR-8 while indexing: n 201 p50 185.502ms p95 278.3645ms max 3.340383s
+NFR-8 idle, warm:     n 5 p50 138.1647ms p95 144.1232ms max 144.1232ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 84.41s
+```
+
+Peak working set / private bytes of the test process, sampled every 2 s with
+PowerShell `Get-Process -Name 'nfr8-*'` for the whole run: **1,762 MB working
+set, 1,800 MB private** (`image_visual` enabled, so this includes SigLIP 2's
+vision tower alongside e5 and PaddleOCR while the fixture corpus indexes).
+
+NFR-8 itself has no fixed target in SPEC.md §2.2 beyond "search stays
+responsive while indexing"; p95 278 ms while busy (max 3.3 s, one query
+racing a burst of newly-queued files right after `add_root`) against p95
+144 ms idle reads as responsive — indexing yields to search
+(`EngineHandle::search_pending`/`SearchGuard`) rather than blocking it.
+**NFR-8 is now measured and passes** (carried over from M5; see
+docs/progress.md).
+
 ## Reproducing
 
 ```

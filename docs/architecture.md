@@ -23,11 +23,13 @@ DTOs live in `crates/magi-core/src/dto.rs` and are exported to
 `apps/desktop/src/bindings/` via `ts-rs`. See SPEC.md §5.7 for the full
 command table (populated as commands land, starting M1).
 
-So far (M5 Slice 7, serde only; the `ts-rs` derive comes with M6):
-`IndexStatus { state: idle|scanning|indexing|paused, queued, indexed, skipped,
-errors, current_file?, roots: RootStatus[] }` and `RootStatus { id, path,
-enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
-"Control surface" below for the `EngineHandle` methods behind them.
+Every DTO derives `ts_rs::TS` (M6 Plan 2) and is exported to
+`apps/desktop/src/bindings/` by `just bindings`; the frontend never
+hand-writes an IPC type. `IndexStatus { state: idle|scanning|indexing|paused,
+queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` and
+`RootStatus { id, path, enabled, status }`. Paths are strings (lossy for
+non-UTF-8 names). See "Control surface" below for the `EngineHandle` methods
+behind them.
 
 M6 Plan 1 adds `FeatureStatus { feature, enabled, download_size, install,
 backfill? }`, `Install` (`NotInstalled | Downloading { bytes, total } |
@@ -42,7 +44,8 @@ See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
 (`0001_init.sql`; `0002_files_indexes.sql` adds the partial indexes
 `idx_files_size`, for the move lookup, and `idx_files_pending`, which
 `next_pending` reads in order with `INDEXED BY`; `0003_features_missing.sql`
-adds `files.features_missing`, see "Search features"). `db::open()` registers `sqlite-vec`,
+adds `files.features_missing`, see "Search features"; `0004_error_code.sql`
+adds `files.error_code`, see "Desktop host"). `db::open()` registers `sqlite-vec`,
 sets `journal_mode=WAL`/`synchronous=NORMAL`/`foreign_keys=ON`/`busy_timeout`,
 and runs any pending migrations (tracked in `schema_migrations`, applied at
 most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
@@ -572,3 +575,66 @@ minute, 100% = one core), RSS and private memory once a minute. Private
 memory (`PrivateUsage` on Windows) is the idle number to compare: RSS moves
 with however much the OS trims the working set. Elsewhere that column is the
 virtual size.
+
+## Desktop host (M6 Plan 2)
+
+`crates/magi-core/src/host.rs`'s `Host` is what the Tauri app (and, later,
+any other shell) manages instead of an `Engine` directly: one clone-able
+handle backed by a supervisor thread that owns the engine's lifecycle, plus
+its own read-only DB connection for search.
+
+- **Supervisor thread** (`host::supervise`). Each loop iteration reads the
+  current feature inputs (`host::engine_inputs`: each feature's `(enabled,
+  installed)` pair) *before* calling `start_engine` — `Engine::start` loads
+  config, builds components and blocks, so a feature change landing during
+  that window must show up as a mismatch against the freshly-read inputs
+  afterward, not be silently folded into them as if it had already been
+  running (Task 5's review fix). It restarts the engine when: a feature's
+  `(enabled, installed)` pair changes (ADR-0010 Plan 2 notes; progress and
+  backfill counts never count as a change), `update_settings` changes
+  `indexing` or `models`, or `clear_index` finishes. `HostEvent::Status` and
+  `HostEvent::Features` are forwarded to the shell as they arrive — a closed
+  window just misses one; the next event is always complete, never a delta.
+- **Search's own connection.** `Host` opens a second SQLite connection with
+  `PRAGMA query_only = true` and never touches the engine's writer connection
+  pool; `Host::search` reads through it under a `Mutex`, independent of
+  whether the engine is running, restarting, or down (a keyword-only result
+  from FTS/filename data while `EngineHandle` is unavailable, rather than
+  `EngineStarting` failing every search).
+- **`SearchGuard` yield.** Before running the fused query, `Host::search`
+  takes `EngineHandle::search_pending().guard()` for the query's duration,
+  the same priority lock the embed worker checks before each batch (SPEC.md
+  §5.3) — indexing pauses between batches rather than making a search wait
+  behind one. This is what NFR-8 (docs/benchmarks.md, "M6 — NFR-8") measures.
+- **Commands** (`apps/desktop/src-tauri/src/commands.rs`, one per line):
+  `search`, `get_status`, `list_roots`, `add_root`, `remove_root`,
+  `set_root_enabled`, `pause_indexing`, `resume_indexing`, `rescan_all`,
+  `open_file`, `reveal_file`, `get_settings`, `update_settings`,
+  `list_errors`, `retry_errors`, `features_status`, `set_feature_enabled`,
+  `download_feature`, `cancel_download`, `remove_download`, `clear_index`.
+  Each wraps a blocking `Host`/`EngineHandle` call in
+  `tauri::async_runtime::spawn_blocking` (`commands::run`), so the UI thread
+  never waits on the database or a model. `open_file`/`reveal_file` resolve
+  the path from the DB (`Host::file_path`) and hand it to
+  `tauri_plugin_opener`; the frontend never sends a raw path.
+- **Events**: `engine://status` (`IndexStatus`) and `engine://features`
+  (`FeatureStatus[]`, always complete), emitted from `Host::start`'s
+  callback in `apps/desktop/src-tauri/src/lib.rs`.
+- **`ErrorCode`** (`dto.rs`): every command's `Result` error side, `{ code,
+  ...params }` (`#[serde(tag = "code")]`), built from `crate::Error` by
+  `commands::run`/`ErrorCode::from`. Locale-neutral by construction — see
+  SPEC.md §5.7 "Errors" for the variant list.
+- **`just bindings`** runs `cargo test -p magi-core export_bindings` (the
+  `ts-rs` test harness), regenerating every `apps/desktop/src/bindings/*.ts`
+  file from `dto.rs`; nothing there is hand-edited.
+- **Capabilities.** `apps/desktop/src-tauri/capabilities/default.json` grants
+  the `main` window exactly the 21 commands above (plus `core:event:default`
+  for `listen()`) and nothing else: no filesystem or shell-opener permission
+  reaches the webview directly. The asset protocol's static scope is empty;
+  only the thumbnail cache directory is granted at runtime (see "Images"
+  above). Plan 5 splits this capability file per window.
+
+Known gap: if `Host::start` fails inside Tauri's `setup` hook, the app
+panics with no window, dialog or log — release builds set
+`windows_subsystem = "windows"` and the desktop crate has no `tracing`
+subscriber wired up yet. Deferred to Plan 5.
