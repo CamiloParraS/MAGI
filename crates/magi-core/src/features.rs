@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -228,8 +228,11 @@ struct Inner {
     fetcher: Arc<dyn ByteFetcher + Send + Sync>,
     /// `Downloading` or `Failed` for features whose disk state is not the answer.
     runtime: Mutex<HashMap<Feature, Install>>,
+    /// Aborts the running download; `download_one` clears it.
     cancel: AtomicBool,
-    queue: Sender<Feature>,
+    /// Bumped by each cancel; a queued download from an older one is dropped.
+    cancels: AtomicU64,
+    queue: Sender<(Feature, u64)>,
     subscribers: Mutex<Vec<Sender<Vec<FeatureStatus>>>>,
     last_sent: Mutex<Option<Vec<FeatureStatus>>>,
 }
@@ -267,6 +270,7 @@ impl Features {
             fetcher,
             runtime: Mutex::default(),
             cancel: AtomicBool::new(false),
+            cancels: AtomicU64::new(0),
             queue,
             subscribers: Mutex::default(),
             last_sent: Mutex::default(),
@@ -309,19 +313,11 @@ impl Features {
     /// Queues `feature`'s download; one runs at a time.
     pub fn download(&self, feature: Feature) -> Result<()> {
         let total = self.inner.entry(feature).map(download_size).unwrap_or(0);
-        {
-            let mut runtime = lock(&self.inner.runtime);
-            if !runtime
-                .values()
-                .any(|i| matches!(i, Install::Downloading { .. }))
-            {
-                self.inner.cancel.store(false, Ordering::SeqCst);
-            }
-            runtime.insert(feature, Install::Downloading { bytes: 0, total });
-        }
+        lock(&self.inner.runtime).insert(feature, Install::Downloading { bytes: 0, total });
+        let cancels = self.inner.cancels.load(Ordering::SeqCst);
         self.inner
             .queue
-            .send(feature)
+            .send((feature, cancels))
             .map_err(|_| Error::Engine("the features thread stopped".into()))?;
         self.inner.emit();
         Ok(())
@@ -329,13 +325,10 @@ impl Features {
 
     /// Stops the running download and drops every queued one; they all go
     /// back to `NotInstalled`. Partial files stay for a later resume.
+    /// Downloads queued after the call still run.
     pub fn cancel_download(&self) {
-        if lock(&self.inner.runtime)
-            .values()
-            .any(|i| matches!(i, Install::Downloading { .. }))
-        {
-            self.inner.cancel.store(true, Ordering::SeqCst);
-        }
+        self.inner.cancels.fetch_add(1, Ordering::SeqCst);
+        self.inner.cancel.store(true, Ordering::SeqCst);
     }
 
     /// Deletes `feature`'s downloaded files; its indexed data stays.
@@ -403,8 +396,11 @@ impl Inner {
         *last = Some(now);
     }
 
-    fn download_one(&self, feature: Feature) {
-        if self.cancel.load(Ordering::SeqCst) {
+    fn download_one(&self, feature: Feature, queued_at: u64) {
+        // Clear before comparing: a cancel landing after the compare sets
+        // `cancel` again and aborts this download.
+        self.cancel.store(false, Ordering::SeqCst);
+        if queued_at != self.cancels.load(Ordering::SeqCst) {
             lock(&self.runtime).remove(&feature);
             return;
         }
@@ -451,17 +447,12 @@ impl Inner {
 
 /// The features thread: runs queued downloads one at a time and, between
 /// them, re-reads backfill progress so subscribers see it move.
-fn run(inner: Weak<Inner>, rx: Receiver<Feature>) {
+fn run(inner: Weak<Inner>, rx: Receiver<(Feature, u64)>) {
     loop {
         let next = rx.recv_timeout(TICK);
         let Some(inner) = inner.upgrade() else { return };
         match next {
-            Ok(feature) => {
-                inner.download_one(feature);
-                if rx.is_empty() {
-                    inner.cancel.store(false, Ordering::SeqCst);
-                }
-            }
+            Ok((feature, queued_at)) => inner.download_one(feature, queued_at),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
@@ -842,6 +833,24 @@ mod tests {
         assert_eq!(install_of(&s, Feature::Meaning), Install::NotInstalled);
 
         h.features.download(Feature::ImageText).unwrap(); // 3 bytes, ~0.6 s
+        wait_for(&rx, Feature::ImageText, |i| {
+            matches!(i, Install::Installed { .. })
+        });
+    }
+
+    #[test]
+    fn a_download_queued_right_after_a_cancel_still_runs() {
+        let h = harness(SlowFetcher(mem()), false);
+        let rx = h.features.subscribe();
+        h.features.download(Feature::Meaning).unwrap();
+        wait_for(
+            &rx,
+            Feature::Meaning,
+            |i| matches!(i, Install::Downloading { bytes, .. } if *bytes > 0),
+        );
+        h.features.cancel_download();
+        // Meaning is still mid-read (200 ms) when this is queued.
+        h.features.download(Feature::ImageText).unwrap();
         wait_for(&rx, Feature::ImageText, |i| {
             matches!(i, Install::Installed { .. })
         });
