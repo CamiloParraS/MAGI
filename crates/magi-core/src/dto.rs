@@ -155,6 +155,77 @@ impl Snippet {
     }
 }
 
+/// A failed command as a stable code plus parameters (SPEC.md §5.7 locale
+/// neutrality). The UI localizes it; `Internal.detail` is for logs only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(tag = "code")]
+#[ts(export)]
+pub enum ErrorCode {
+    RootNotFound {
+        path: String,
+    },
+    NestedRoot {
+        path: String,
+        conflicts_with: String,
+    },
+    RootAlreadyExists {
+        path: String,
+    },
+    RootIdNotFound {
+        id: i64,
+    },
+    FileIdNotFound {
+        file_id: i64,
+    },
+    UnknownFeature {
+        name: String,
+    },
+    DownloadInProgress {
+        feature: Feature,
+    },
+    InvalidSetting {
+        field: String,
+    },
+    InvalidGlob {
+        glob: String,
+    },
+    /// The engine is starting or restarting; retry shortly.
+    EngineStarting,
+    Internal {
+        detail: String,
+    },
+}
+
+impl From<&crate::Error> for ErrorCode {
+    fn from(error: &crate::Error) -> Self {
+        use crate::Error as E;
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        match error {
+            E::RootNotFound(p) => Self::RootNotFound { path: path(p) },
+            E::NestedRoot {
+                path: p,
+                conflicts_with,
+            } => Self::NestedRoot {
+                path: path(p),
+                conflicts_with: path(conflicts_with),
+            },
+            E::RootAlreadyExists(p) => Self::RootAlreadyExists { path: path(p) },
+            E::RootIdNotFound(id) => Self::RootIdNotFound { id: *id },
+            E::FileIdNotFound(file_id) => Self::FileIdNotFound { file_id: *file_id },
+            E::UnknownFeature(name) => Self::UnknownFeature { name: name.clone() },
+            E::DownloadInProgress(feature) => Self::DownloadInProgress { feature: *feature },
+            E::InvalidSetting { field, .. } => Self::InvalidSetting {
+                field: field.to_string(),
+            },
+            E::InvalidGlob { glob, .. } => Self::InvalidGlob { glob: glob.clone() },
+            E::EngineStarting => Self::EngineStarting,
+            other => Self::Internal {
+                detail: other.to_string(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +256,27 @@ mod tests {
         assert_eq!(
             Snippet::from_marked("\u{E000}open").highlights,
             vec![[0, 4]]
+        );
+    }
+
+    #[test]
+    fn errors_cross_ipc_as_codes_with_parameters() {
+        let json = |e: crate::Error| serde_json::to_value(ErrorCode::from(&e)).unwrap();
+        assert_eq!(
+            json(crate::Error::RootIdNotFound(7)),
+            serde_json::json!({"code": "RootIdNotFound", "id": 7})
+        );
+        assert_eq!(
+            json(crate::Error::InvalidSetting {
+                field: "ui.transparency_intensity",
+                reason: "english prose".into()
+            }),
+            serde_json::json!({"code": "InvalidSetting", "field": "ui.transparency_intensity"})
+        );
+        assert_eq!(json(crate::Error::EngineStarting)["code"], "EngineStarting");
+        assert_eq!(
+            json(crate::Error::Engine("boom".into()))["code"],
+            "Internal"
         );
     }
 }

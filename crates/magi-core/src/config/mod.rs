@@ -234,6 +234,53 @@ impl Config {
     }
 }
 
+/// Sections `update_settings` may change. Roots live in the database (root
+/// commands); features have their own commands (ADR-0010).
+const PATCHABLE: [&str; 3] = ["indexing", "models", "ui"];
+
+/// Applies a partial settings object and validates the result. Objects
+/// merge; anything else (numbers, strings, lists) replaces. A key the config
+/// does not have is an error, so a typo never silently does nothing.
+pub fn apply_patch(config: &Config, patch: &serde_json::Value) -> Result<Config> {
+    let invalid = |reason: String| Error::InvalidSetting {
+        field: "settings",
+        reason,
+    };
+    let serde_json::Value::Object(sections) = patch else {
+        return Err(invalid("expected an object".into()));
+    };
+    if let Some(key) = sections.keys().find(|k| !PATCHABLE.contains(&k.as_str())) {
+        return Err(invalid(format!("{key} cannot be changed here")));
+    }
+    let mut merged = serde_json::to_value(config).map_err(|e| invalid(e.to_string()))?;
+    merge(&mut merged, patch, "")?;
+    let next: Config = serde_json::from_value(merged).map_err(|e| invalid(e.to_string()))?;
+    next.validate()?;
+    Ok(next)
+}
+
+fn merge(target: &mut serde_json::Value, patch: &serde_json::Value, path: &str) -> Result<()> {
+    use serde_json::Value;
+    match (target, patch) {
+        (Value::Object(target), Value::Object(patch)) => {
+            for (key, value) in patch {
+                let path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                let slot = target.get_mut(key).ok_or_else(|| Error::InvalidSetting {
+                    field: "settings",
+                    reason: format!("unknown setting {path}"),
+                })?;
+                merge(slot, value, &path)?;
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+    Ok(())
+}
+
 /// Path to `config.toml` under the resolved config directory.
 pub fn config_path() -> PathBuf {
     crate::paths::config_dir().join("config.toml")
@@ -440,5 +487,43 @@ language = \"fr\"
         f.set(Feature::ImageVisual, true);
         f.set(Feature::Meaning, false);
         assert!(f.enabled(Feature::ImageVisual) && !f.enabled(Feature::Meaning));
+    }
+
+    #[test]
+    fn a_settings_patch_merges_into_the_current_config() {
+        let next = apply_patch(
+            &Config::default(),
+            &serde_json::json!({"ui": {"language": "es"}, "indexing": {"max_file_size_mb": 10}}),
+        )
+        .unwrap();
+        assert_eq!(next.ui.language, Language::Es);
+        assert_eq!(next.indexing.max_file_size_mb, 10);
+        assert_eq!(
+            next.ui.hotkey,
+            UiConfig::default().hotkey,
+            "untouched fields kept"
+        );
+    }
+
+    #[test]
+    fn a_settings_patch_rejects_typos_bad_values_and_protected_sections() {
+        use serde_json::json;
+        for patch in [
+            json!({"ui": {"langauge": "es"}}),
+            json!({"ui": {"transparency_intensity": 2.0}}),
+            json!({"ui": {"language": "fr"}}),
+            json!({"indexing": {"exclude_globs": ["[unclosed"]}}),
+            json!({"features": {"meaning": false}}),
+            json!({"roots": []}),
+            json!(["ui"]),
+        ] {
+            assert!(
+                matches!(
+                    apply_patch(&Config::default(), &patch),
+                    Err(Error::InvalidSetting { .. } | Error::InvalidGlob { .. })
+                ),
+                "{patch}"
+            );
+        }
     }
 }

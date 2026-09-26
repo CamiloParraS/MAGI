@@ -38,6 +38,9 @@ pub enum Error {
     #[error("root id {0} not found")]
     RootIdNotFound(i64),
 
+    #[error("file id {0} not found")]
+    FileIdNotFound(i64),
+
     #[error("extraction of {} timed out after {seconds}s", .path.display())]
     ExtractionTimeout { path: PathBuf, seconds: u64 },
 
@@ -91,6 +94,9 @@ pub enum Error {
 
     #[error("{} is downloading", .0.as_str())]
     DownloadInProgress(crate::features::Feature),
+
+    #[error("the engine is starting")]
+    EngineStarting,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
