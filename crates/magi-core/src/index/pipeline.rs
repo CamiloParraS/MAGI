@@ -17,6 +17,7 @@ use crate::extract::office::OfficeExtractor;
 use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
+use crate::features::Feature;
 use crate::ocr::{NoOcr, OcrEngine};
 use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{next_scan_id, reconcile_root, remove_unseen};
@@ -272,6 +273,8 @@ pub(crate) struct Fresh {
     /// Content chunks, filename chunk last.
     chunks: Vec<RawChunk>,
     thumb_key: Option<String>,
+    /// `Feature::bit`s of the search features this file is indexed without.
+    features_missing: i64,
 }
 
 impl Fresh {
@@ -297,6 +300,13 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
     };
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
+    let mut features_missing = if ctx.embedder.is_none() {
+        Feature::Meaning.bit()
+    } else {
+        0
+    };
+    // `Plan::Done` covers filename-only files and disabled kinds: they can
+    // only miss meaning.
     let mut outcome = match plan_entry(entry, max_size_bytes, options) {
         Plan::Unreadable(e) => return unreadable(e),
         Plan::Done(outcome) => {
@@ -326,6 +336,14 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
                     Err(e) => return unreadable(e),
                 }
             }
+            if kind == Kind::Image {
+                if ctx.ocr.is_none() {
+                    features_missing |= Feature::ImageText.bit();
+                }
+                if ctx.image_embedder.is_none() {
+                    features_missing |= Feature::ImageVisual.bit();
+                }
+            }
             match extract_entry(&entry.path, kind, options, ctx) {
                 Ok(outcome) => outcome,
                 Err(e) => return unreadable(e),
@@ -343,6 +361,7 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
         outcome,
         chunks,
         thumb_key,
+        features_missing,
     }))
 }
 
@@ -462,11 +481,13 @@ pub(crate) fn store_embedded(
     embedded: Embedded,
 ) -> Result<Status> {
     let Embedded {
-        fresh: Fresh {
-            outcome,
-            chunks,
-            thumb_key,
-        },
+        fresh:
+            Fresh {
+                outcome,
+                chunks,
+                thumb_key,
+                features_missing,
+            },
         embeddings,
     } = embedded;
     let entry = &job.entry;
@@ -498,6 +519,7 @@ pub(crate) fn store_embedded(
         seen_scan_id: 0,
         content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
         thumb_key: thumb_key.as_deref(),
+        features_missing,
     };
     upsert_file(
         conn,

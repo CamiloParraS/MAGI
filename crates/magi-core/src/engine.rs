@@ -41,7 +41,7 @@ use crate::index::pipeline::{
 use crate::index::resources::{self, Pause};
 use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
-use crate::index::{ModelIds, requeue_on_model_change};
+use crate::index::{ModelIds, requeue_missing, requeue_on_model_change};
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
 use crate::watch::watcher::Watchers;
@@ -89,6 +89,7 @@ impl Engine {
                 ocr: components.ocr.as_deref().map(|o| o.engine_id()),
             },
         )?;
+        requeue_missing(&mut write_conn, &components.running())?;
         let scheduler_conn = db::open(db_path)?;
         let pause = Arc::new(Pause::default());
         pause.user.store(

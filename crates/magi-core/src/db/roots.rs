@@ -507,6 +507,7 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         }
     }
 
@@ -568,6 +569,7 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         };
         upsert_file(
             &mut conn,

@@ -73,6 +73,8 @@ pub struct FileRecord<'a> {
     pub content_hash: Option<&'a [u8]>,
     /// Thumbnail cache key (see `crate::thumbs`).
     pub thumb_key: Option<&'a str>,
+    /// `Feature::bit`s of the search features this file was indexed without.
+    pub features_missing: i64,
 }
 
 /// Inserts or replaces `record`, its `chunks`, and their `vec_text`
@@ -117,8 +119,8 @@ pub fn upsert_file(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
             lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at,
-            content_hash, thumb_key
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15)
+            content_hash, thumb_key, features_missing
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15, ?17)
          ON CONFLICT(path) DO UPDATE SET
             root_id = excluded.root_id,
             rel_path = excluded.rel_path,
@@ -133,6 +135,7 @@ pub fn upsert_file(
             error = excluded.error,
             content_hash = excluded.content_hash,
             thumb_key = excluded.thumb_key,
+            features_missing = excluded.features_missing,
             pipeline_version = excluded.pipeline_version,
             attempts = 0,
             next_attempt_at = NULL,
@@ -155,6 +158,7 @@ pub fn upsert_file(
             record.content_hash,
             record.thumb_key,
             crate::index::PIPELINE_VERSION,
+            record.features_missing,
         ],
         |row| row.get(0),
     )?;
@@ -784,6 +788,7 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         }
     }
 

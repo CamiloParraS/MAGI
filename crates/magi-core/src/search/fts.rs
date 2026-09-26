@@ -100,6 +100,7 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         };
         let chunks = [RawChunk::body(body.to_string())];
         upsert_file(
@@ -200,6 +201,7 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         };
         let chunks = [
             RawChunk::body("apple banana".to_string()),

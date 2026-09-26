@@ -159,3 +159,78 @@ fn turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing() {
     assert_eq!(env.embedder.chunks(), embedded, "nothing re-indexed");
     assert_eq!(search_fts(&env.conn(), "invoice", 10).unwrap().len(), 1);
 }
+
+fn missing(env: &Env, name: &str) -> i64 {
+    env.conn()
+        .query_row(
+            "SELECT features_missing FROM files WHERE file_name = ?1",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn files_indexed_without_a_feature_record_it() {
+    let env = Env::new();
+    env.write("a.txt", "alpha");
+    env.write_png("pic.png");
+    let _engine = env.start(Components::default());
+    env.wait_drained(2);
+    assert_eq!(missing(&env, "a.txt"), 1, "text files only miss meaning");
+    assert_eq!(missing(&env, "pic.png"), 1 | 2 | 4);
+}
+
+#[test]
+fn images_whose_content_is_not_extracted_do_not_miss_image_features() {
+    let env = Env::new();
+    env.write_png("pic.png");
+    let mut config = Config::default();
+    config.indexing.worker_threads = 2;
+    config.indexing.pause_on_battery = false;
+    config
+        .indexing
+        .file_types
+        .retain(|k| *k != magi_core::discovery::Kind::Image);
+    let _engine = Engine::start(&config, &env.db_path, Components::default()).unwrap();
+    env.wait_drained(1);
+    assert_eq!(
+        missing(&env, "pic.png"),
+        1,
+        "otherwise every start would re-queue it"
+    );
+}
+
+#[test]
+fn enabling_meaning_embeds_only_the_files_missing_it() {
+    let env = Env::new();
+    env.write("a.txt", "alpha text");
+    let engine = env.start(env.text());
+    env.wait_drained(1);
+    engine.shutdown();
+
+    env.write("b.txt", "bravo text");
+    let engine = env.start(Components::default());
+    env.wait_drained(2);
+    engine.shutdown();
+    let before = env.embedder.chunks();
+
+    let _engine = env.start(env.text());
+    env.wait_drained(2);
+    let b_chunks = env.count(
+        "SELECT COUNT(*) FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.file_name = 'b.txt'",
+    );
+    assert_eq!(
+        (env.embedder.chunks() - before) as i64,
+        b_chunks,
+        "only b.txt embedded"
+    );
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM vec_text"),
+        env.count("SELECT COUNT(*) FROM chunks")
+    );
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE features_missing != 0"),
+        0
+    );
+}
