@@ -166,6 +166,86 @@ fn search_returns_metadata_highlights_and_sources() {
 }
 
 #[test]
+fn settings_persist_and_an_indexing_change_applies_at_once() {
+    let env = Env::start(meaning_only());
+    env.write("zebra.log", "zebra stripes");
+    wait_until(Duration::from_secs(30), "indexed", || {
+        !env.hits("zebra").is_empty()
+    });
+
+    env.host
+        .update_settings(&serde_json::json!({"ui": {"language": "es"}}))
+        .unwrap();
+    assert_eq!(
+        env.host.settings().unwrap().ui.language,
+        magi_core::config::Language::Es
+    );
+
+    let mut globs = Config::default().indexing.exclude_globs;
+    globs.push("**/*.log".into());
+    env.host
+        .update_settings(&serde_json::json!({"indexing": {"exclude_globs": globs}}))
+        .unwrap();
+    wait_until(
+        Duration::from_secs(30),
+        "the excluded file to leave the index",
+        || env.host.engine().is_ok() && env.hits("zebra").is_empty(),
+    );
+}
+
+#[test]
+fn feature_toggles_and_settings_patches_at_once_lose_no_update() {
+    let env = Env::start(meaning_only());
+    let (a, b) = (env.host.clone(), env.host.clone());
+    let toggles = std::thread::spawn(move || {
+        for i in 0..10 {
+            a.set_feature_enabled(Feature::ImageVisual, i % 2 == 0)
+                .unwrap();
+        }
+    });
+    let patches = std::thread::spawn(move || {
+        for i in 0..10u32 {
+            b.update_settings(&serde_json::json!({"ui": {"max_results": 10 + i}}))
+                .unwrap();
+        }
+    });
+    toggles.join().unwrap();
+    patches.join().unwrap();
+    let settings = env.host.settings().unwrap();
+    assert_eq!(
+        (settings.ui.max_results, settings.features.image_visual),
+        (19, false)
+    );
+}
+
+#[test]
+fn clear_index_empties_the_index_and_keeps_roots() {
+    let env = Env::start(meaning_only());
+    env.write("a.txt", "quarterly invoice");
+    wait_until(Duration::from_secs(30), "indexed", || {
+        !env.hits("invoice").is_empty()
+    });
+    // Paused (persisted across the restart), so nothing is re-indexed before we look.
+    env.host.engine().unwrap().pause().unwrap();
+
+    env.host.clear_index().unwrap();
+    wait_until(Duration::from_secs(30), "the restart", || {
+        env.host.engine().is_ok()
+    });
+    assert!(env.hits("invoice").is_empty(), "cleared");
+    assert_eq!(
+        env.host.engine().unwrap().status().unwrap().roots.len(),
+        1,
+        "roots kept"
+    );
+
+    env.host.engine().unwrap().resume().unwrap();
+    wait_until(Duration::from_secs(30), "re-indexed", || {
+        !env.hits("invoice").is_empty()
+    });
+}
+
+#[test]
 fn search_falls_back_to_keywords_while_the_engine_is_down() {
     let env = Env::start(meaning_only());
     env.write("a.txt", "zebra stripes");

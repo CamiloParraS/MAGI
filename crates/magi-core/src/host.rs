@@ -72,6 +72,7 @@ struct Running {
 enum Control {
     Restart,
     Stop,
+    Clear(Sender<Result<()>>),
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -132,6 +133,38 @@ impl Host {
 
     pub fn features(&self) -> &Features {
         &self.inner.features
+    }
+
+    pub fn settings(&self) -> Result<Config> {
+        self.inner.load_config()
+    }
+
+    /// Applies a partial settings object (`config::apply_patch`) and saves
+    /// it. The engine reads indexing and model settings when it starts, so a
+    /// change there restarts it.
+    /// ponytail: a restart re-walks every root; swap the options in place
+    /// (`EngineHandle::apply_indexing_config`) if that is slow on large roots.
+    pub fn update_settings(&self, patch: &serde_json::Value) -> Result<Config> {
+        let _config = lock(&self.inner.config);
+        let current = self.inner.load_config()?;
+        let next = config::apply_patch(&current, patch)?;
+        config::save_to(&self.inner.paths.config, &next)?;
+        if next.indexing != current.indexing || next.models != current.models {
+            let _ = self.inner.control.send(Control::Restart);
+        }
+        Ok(next)
+    }
+
+    /// Empties the index and re-indexes every root (SPEC.md §5.7
+    /// `clear_index`). Config, roots and models stay.
+    pub fn clear_index(&self) -> Result<()> {
+        let stopped = || Error::Engine("the host is stopped".into());
+        let (reply, result) = crossbeam_channel::bounded(1);
+        self.inner
+            .control
+            .send(Control::Clear(reply))
+            .map_err(|_| stopped())?;
+        result.recv().map_err(|_| stopped())?
     }
 
     /// Records the desire; the engine restarts with or without the feature
@@ -291,9 +324,29 @@ fn supervise(
         shared.stop_engine();
         match next {
             Control::Restart => {}
+            Control::Clear(reply) => {
+                let _ = reply.send(clear(&shared.paths.db));
+            }
             Control::Stop => return,
         }
     }
+}
+
+/// Deletes every file with its chunks, vectors and thumbnail, and the
+/// backfill counters, with the engine stopped. The database file and its
+/// roots stay: deleting an open SQLite file fails on Windows, and the roots
+/// are the user's choices.
+fn clear(db_path: &std::path::Path) -> Result<()> {
+    let mut conn = db::open(db_path)?;
+    let tx = conn.transaction()?;
+    let mut keys = Vec::new();
+    for root in db::roots::list(&tx)? {
+        keys.extend(files::purge_root(&tx, root.id)?);
+    }
+    tx.execute("DELETE FROM meta WHERE key LIKE 'backfill_total_%'", [])?;
+    tx.commit()?;
+    files::remove_unreferenced_thumbnails(&conn, &keys);
+    Ok(())
 }
 
 /// Joins in what the UI shows. `None` when the file was deleted after it
