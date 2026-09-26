@@ -71,14 +71,14 @@ impl ModelManifest {
     }
 }
 
-/// Where a slot's model files live: `<data_dir>/models/<slot>/` (see
-/// `paths::data_dir`'s doc comment — "database, models, thumbnails" — and
-/// SPEC.md §4.5's `MAGI_DATA_DIR`).
 /// Parent of every slot's folder: `<data_dir>/models`.
 pub fn models_root() -> PathBuf {
     crate::paths::data_dir().join("models")
 }
 
+/// Where a slot's model files live: `<data_dir>/models/<slot>/` (see
+/// `paths::data_dir`'s doc comment — "database, models, thumbnails" — and
+/// SPEC.md §4.5's `MAGI_DATA_DIR`).
 pub fn model_dir(slot: &str) -> PathBuf {
     crate::paths::data_dir().join("models").join(slot)
 }
