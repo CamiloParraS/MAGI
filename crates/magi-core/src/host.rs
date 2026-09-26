@@ -206,6 +206,11 @@ fn supervise(
     on_event: &dyn Fn(HostEvent),
 ) {
     loop {
+        // Read before starting: `start_engine` loads config and components and
+        // then blocks in `Engine::start`, so a feature change that lands during
+        // that window must still show up as a mismatch below, not be baked into
+        // `inputs` as if it were already running.
+        let inputs = shared.features.status().ok().map(|s| engine_inputs(&s));
         let mut status_rx = shared
             .start_engine()
             .unwrap_or_else(crossbeam_channel::never);
@@ -214,7 +219,6 @@ fn supervise(
         {
             on_event(HostEvent::Status(status));
         }
-        let inputs = shared.features.status().ok().map(|s| engine_inputs(&s));
         let next = loop {
             select! {
                 recv(status_rx) -> status => match status {
