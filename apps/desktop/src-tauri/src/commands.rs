@@ -46,7 +46,7 @@ pub async fn get_status(host: State<'_, Host>) -> Reply<IndexStatus> {
 
 #[tauri::command]
 pub async fn list_roots(host: State<'_, Host>) -> Reply<Vec<RootStatus>> {
-    run(host, |h| Ok(h.engine()?.status()?.roots)).await
+    run(host, |h| h.list_roots()).await
 }
 
 #[tauri::command]
