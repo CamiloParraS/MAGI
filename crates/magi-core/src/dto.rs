@@ -7,6 +7,37 @@
 use serde::{Deserialize, Serialize};
 
 use crate::db::roots::Root;
+use crate::features::Feature;
+
+/// Whether a feature's download is on disk (ADR-0010). Independent of
+/// `FeatureStatus::enabled`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Install {
+    NotInstalled,
+    Downloading { bytes: u64, total: u64 },
+    Installed { size_bytes: u64 },
+    Failed { code: DownloadError },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Backfill {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// One search feature at a glance (`features_status`, `engine://features`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureStatus {
+    pub feature: Feature,
+    /// What the user wants (config).
+    pub enabled: bool,
+    /// Bytes to download, shown before consent.
+    pub download_size: u64,
+    pub install: Install,
+    /// Files still being brought up to date after the feature came online.
+    pub backfill: Option<Backfill>,
+}
 
 /// Why a download failed: a stable code, localized by the UI (ADR-0010).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,13 +1,20 @@
 //! Optional search features (ADR-0010): which ones exist, where their
 //! downloads live, and the per-file record of what a file was indexed without.
 
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use serde::{Deserialize, Serialize};
 
-use crate::embed::manager::{ByteFetcher, ModelEntry, download_with_fetcher};
+use crate::dto::{Backfill, DownloadError, FeatureStatus, Install};
+use crate::embed::manager::{
+    ByteFetcher, ModelEntry, ModelManifest, UreqFetcher, download_with_fetcher, models_root,
+};
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::ocr::OcrEngine;
@@ -137,6 +144,267 @@ pub fn download_entry(
         done += file.size;
     }
     Ok(())
+}
+
+/// How often a running backfill's progress is re-read, and the minimum gap
+/// between two download-progress events.
+const TICK: Duration = Duration::from_millis(250);
+
+/// Owns search-feature state (ADR-0010): desire (config), availability
+/// (disk plus the download in flight) and backfill progress (database).
+/// Every change goes to subscribers as the complete `Vec<FeatureStatus>`.
+#[derive(Clone)]
+pub struct Features {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    db_path: PathBuf,
+    config_path: PathBuf,
+    models_root: PathBuf,
+    manifest: ModelManifest,
+    fetcher: Arc<dyn ByteFetcher + Send + Sync>,
+    /// `Downloading` or `Failed` for features whose disk state is not the answer.
+    runtime: Mutex<HashMap<Feature, Install>>,
+    cancel: AtomicBool,
+    queue: Sender<Feature>,
+    subscribers: Mutex<Vec<Sender<Vec<FeatureStatus>>>>,
+    last_sent: Mutex<Option<Vec<FeatureStatus>>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Features {
+    /// The real manager: `config.toml`, `<data_dir>/models`, the embedded
+    /// manifest, HTTPS downloads.
+    pub fn start(db_path: &Path) -> Result<Self> {
+        Self::start_with(
+            db_path,
+            crate::config::config_path(),
+            models_root(),
+            ModelManifest::load()?,
+            Arc::new(UreqFetcher),
+        )
+    }
+
+    pub(crate) fn start_with(
+        db_path: &Path,
+        config_path: PathBuf,
+        models_root: PathBuf,
+        manifest: ModelManifest,
+        fetcher: Arc<dyn ByteFetcher + Send + Sync>,
+    ) -> Result<Self> {
+        let (queue, rx) = crossbeam_channel::unbounded();
+        let inner = Arc::new(Inner {
+            db_path: db_path.to_path_buf(),
+            config_path,
+            models_root,
+            manifest,
+            fetcher,
+            runtime: Mutex::default(),
+            cancel: AtomicBool::new(false),
+            queue,
+            subscribers: Mutex::default(),
+            last_sent: Mutex::default(),
+        });
+        // The baseline: subscribers get it on `subscribe`, so the thread's
+        // first tick must not re-send it as a change.
+        *lock(&inner.last_sent) = inner.status().ok();
+        let weak = Arc::downgrade(&inner);
+        std::thread::Builder::new()
+            .name("features".into())
+            .spawn(move || run(weak, rx))
+            .map_err(|e| Error::Engine(format!("could not start the features thread: {e}")))?;
+        Ok(Self { inner })
+    }
+
+    pub fn status(&self) -> Result<Vec<FeatureStatus>> {
+        self.inner.status()
+    }
+
+    /// The current state now, then every change.
+    pub fn subscribe(&self) -> Receiver<Vec<FeatureStatus>> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        if let Ok(now) = self.inner.status() {
+            let _ = tx.send(now);
+        }
+        lock(&self.inner.subscribers).push(tx);
+        rx
+    }
+
+    /// Records what the user wants. Does not download, cancel or delete
+    /// anything; the host restarts the engine to apply it.
+    pub fn set_enabled(&self, feature: Feature, on: bool) -> Result<()> {
+        let mut config = crate::config::load_from(&self.inner.config_path)?;
+        config.features.set(feature, on);
+        crate::config::save_to(&self.inner.config_path, &config)?;
+        self.inner.emit();
+        Ok(())
+    }
+
+    /// Queues `feature`'s download; one runs at a time.
+    pub fn download(&self, feature: Feature) -> Result<()> {
+        let total = self.inner.entry(feature).map(download_size).unwrap_or(0);
+        {
+            let mut runtime = lock(&self.inner.runtime);
+            if !runtime
+                .values()
+                .any(|i| matches!(i, Install::Downloading { .. }))
+            {
+                self.inner.cancel.store(false, Ordering::SeqCst);
+            }
+            runtime.insert(feature, Install::Downloading { bytes: 0, total });
+        }
+        self.inner
+            .queue
+            .send(feature)
+            .map_err(|_| Error::Engine("the features thread stopped".into()))?;
+        self.inner.emit();
+        Ok(())
+    }
+
+    /// Stops the running download and drops every queued one; they all go
+    /// back to `NotInstalled`. Partial files stay for a later resume.
+    pub fn cancel_download(&self) {
+        if lock(&self.inner.runtime)
+            .values()
+            .any(|i| matches!(i, Install::Downloading { .. }))
+        {
+            self.inner.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Deletes `feature`'s downloaded files; its indexed data stays.
+    pub fn remove_download(&self, feature: Feature) -> Result<()> {
+        if matches!(
+            lock(&self.inner.runtime).get(&feature),
+            Some(Install::Downloading { .. })
+        ) {
+            return Err(Error::DownloadInProgress(feature));
+        }
+        remove_download_dir(&self.inner.models_root, feature)?;
+        lock(&self.inner.runtime).remove(&feature);
+        self.inner.emit();
+        Ok(())
+    }
+}
+
+impl Inner {
+    fn entry(&self, feature: Feature) -> Option<&ModelEntry> {
+        self.manifest.slot(feature.slot())
+    }
+
+    // ponytail: status re-reads config and opens a connection per tick; keep a connection in Inner if profiling shows it.
+    fn status(&self) -> Result<Vec<FeatureStatus>> {
+        let config = crate::config::load_from(&self.config_path)?;
+        let conn = crate::db::open(&self.db_path)?;
+        let runtime = lock(&self.runtime).clone();
+        Feature::ALL
+            .into_iter()
+            .map(|feature| {
+                let entry = self.entry(feature);
+                let install = match runtime.get(&feature) {
+                    Some(install) => install.clone(),
+                    None => match entry.and_then(|e| installed_size(&self.models_root, e)) {
+                        Some(size_bytes) => Install::Installed { size_bytes },
+                        None => Install::NotInstalled,
+                    },
+                };
+                Ok(FeatureStatus {
+                    feature,
+                    enabled: config.features.enabled(feature),
+                    download_size: entry.map(download_size).unwrap_or(0),
+                    install,
+                    backfill: crate::index::backfill_progress(&conn, feature)?
+                        .map(|(done, total)| Backfill { done, total }),
+                })
+            })
+            .collect()
+    }
+
+    /// Sends the complete state to every subscriber if it changed.
+    fn emit(&self) {
+        let now = match self.status() {
+            Ok(now) => now,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read feature status");
+                return;
+            }
+        };
+        let mut last = lock(&self.last_sent);
+        if last.as_ref() == Some(&now) {
+            return;
+        }
+        lock(&self.subscribers).retain(|tx| tx.send(now.clone()).is_ok());
+        *last = Some(now);
+    }
+
+    fn download_one(&self, feature: Feature) {
+        if self.cancel.load(Ordering::SeqCst) {
+            lock(&self.runtime).remove(&feature);
+            return;
+        }
+        let result = match self.entry(feature) {
+            Some(entry) => {
+                let mut last = Instant::now();
+                download_entry(
+                    &*self.fetcher,
+                    &self.models_root,
+                    entry,
+                    &self.cancel,
+                    |bytes, total| {
+                        if last.elapsed() >= TICK {
+                            last = Instant::now();
+                            lock(&self.runtime)
+                                .insert(feature, Install::Downloading { bytes, total });
+                            self.emit();
+                        }
+                    },
+                )
+            }
+            None => Err(Error::ManifestParse(format!(
+                "no manifest slot {}",
+                feature.slot()
+            ))),
+        };
+        let mut runtime = lock(&self.runtime);
+        match result {
+            Ok(()) | Err(Error::DownloadCancelled) => {
+                runtime.remove(&feature);
+            }
+            Err(e) => {
+                tracing::warn!(feature = feature.as_str(), error = %e, "download failed");
+                runtime.insert(
+                    feature,
+                    Install::Failed {
+                        code: DownloadError::classify(&e),
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// The features thread: runs queued downloads one at a time and, between
+/// them, re-reads backfill progress so subscribers see it move.
+fn run(inner: Weak<Inner>, rx: Receiver<Feature>) {
+    loop {
+        let next = rx.recv_timeout(TICK);
+        let Some(inner) = inner.upgrade() else { return };
+        match next {
+            Ok(feature) => {
+                inner.download_one(feature);
+                if rx.is_empty() {
+                    inner.cancel.store(false, Ordering::SeqCst);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        inner.emit();
+    }
 }
 
 #[cfg(test)]
@@ -346,5 +614,241 @@ mod tests {
         assert_eq!(bits, [1, 2, 4]);
         let slots: Vec<&str> = Feature::ALL.iter().map(|f| f.slot()).collect();
         assert_eq!(slots, ["text", "ocr", "image"]);
+    }
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crossbeam_channel::Receiver;
+
+    use crate::dto::{FeatureStatus, Install};
+    use crate::embed::manager::ModelManifest;
+
+    struct Harness {
+        _dir: tempfile::TempDir,
+        features: Features,
+        models_root: std::path::PathBuf,
+        config_path: std::path::PathBuf,
+    }
+
+    const TEXT: &[u8] = b"text-model-bytes";
+    const OCR: &[u8] = b"ocr";
+    const IMAGE: &[u8] = b"image-model";
+
+    fn harness(fetcher: impl ByteFetcher + Send + Sync + 'static, bad_ocr_hash: bool) -> Harness {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ocr = entry("ocr", &[("det.onnx", OCR)]);
+        if bad_ocr_hash {
+            ocr.files[0].sha256 = "0".repeat(64);
+        }
+        let manifest = ModelManifest {
+            models: vec![
+                entry("text", &[("model.onnx", TEXT)]),
+                ocr,
+                entry("image", &[("v.onnx", IMAGE)]),
+            ],
+        };
+        let models_root = dir.path().join("models");
+        let config_path = dir.path().join("config.toml");
+        let features = Features::start_with(
+            &dir.path().join("magi.db"),
+            config_path.clone(),
+            models_root.clone(),
+            manifest,
+            Arc::new(fetcher),
+        )
+        .unwrap();
+        Harness {
+            _dir: dir,
+            features,
+            models_root,
+            config_path,
+        }
+    }
+
+    fn mem() -> MemFetcher {
+        MemFetcher(HashMap::from([
+            ("mem://model.onnx".to_string(), TEXT.to_vec()),
+            ("mem://det.onnx".to_string(), OCR.to_vec()),
+            ("mem://v.onnx".to_string(), IMAGE.to_vec()),
+        ]))
+    }
+
+    fn install_of(s: &[FeatureStatus], f: Feature) -> Install {
+        s.iter().find(|x| x.feature == f).unwrap().install.clone()
+    }
+
+    /// Waits for an event where `f` is in a state `done` accepts; every event
+    /// on the way must be complete.
+    fn wait_for(
+        rx: &Receiver<Vec<FeatureStatus>>,
+        f: Feature,
+        done: impl Fn(&Install) -> bool,
+    ) -> Vec<FeatureStatus> {
+        loop {
+            let s = rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("no status event");
+            assert_eq!(s.len(), 3, "events carry the complete state");
+            if done(&install_of(&s, f)) {
+                return s;
+            }
+        }
+    }
+
+    #[test]
+    fn status_reports_desire_availability_and_size_separately() {
+        let h = harness(mem(), false);
+        let s = h.features.status().unwrap();
+        assert_eq!(
+            s.iter().map(|x| x.feature).collect::<Vec<_>>(),
+            Feature::ALL
+        );
+        assert!(s[0].enabled && s[1].enabled && !s[2].enabled);
+        assert!(
+            s.iter()
+                .all(|x| x.install == Install::NotInstalled && x.backfill.is_none())
+        );
+        assert_eq!(s[0].download_size, TEXT.len() as u64);
+    }
+
+    #[test]
+    fn a_download_reports_progress_then_installed() {
+        let h = harness(mem(), false);
+        let rx = h.features.subscribe();
+        h.features.download(Feature::Meaning).unwrap();
+        let s = wait_for(&rx, Feature::Meaning, |i| {
+            matches!(i, Install::Installed { .. })
+        });
+        assert_eq!(
+            install_of(&s, Feature::Meaning),
+            Install::Installed {
+                size_bytes: TEXT.len() as u64
+            }
+        );
+        assert!(h.models_root.join("text/model.onnx").exists());
+    }
+
+    #[test]
+    fn a_checksum_mismatch_is_failed_and_never_installed() {
+        let h = harness(mem(), true);
+        let rx = h.features.subscribe();
+        h.features.download(Feature::ImageText).unwrap();
+        let s = wait_for(&rx, Feature::ImageText, |i| {
+            matches!(i, Install::Failed { .. })
+        });
+        assert_eq!(
+            install_of(&s, Feature::ImageText),
+            Install::Failed {
+                code: DownloadError::ChecksumMismatch
+            }
+        );
+        assert!(!h.models_root.join("ocr/det.onnx").exists());
+    }
+
+    /// Hands out one byte per read, slowly, so a test can cancel mid-download.
+    #[derive(Clone)]
+    struct SlowFetcher(MemFetcher);
+
+    impl ByteFetcher for SlowFetcher {
+        fn fetch(&self, url: &str, offset: u64) -> crate::Result<(bool, Box<dyn Read>)> {
+            struct Slow(Box<dyn Read>);
+            impl Read for Slow {
+                fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                    std::thread::sleep(Duration::from_millis(200));
+                    self.0.read(&mut buf[..1])
+                }
+            }
+            let (resumed, inner) = self.0.fetch(url, offset)?;
+            Ok((resumed, Box::new(Slow(inner))))
+        }
+    }
+
+    #[test]
+    fn cancel_clears_the_queue_and_a_later_download_works() {
+        let h = harness(SlowFetcher(mem()), false);
+        let rx = h.features.subscribe();
+        h.features.download(Feature::Meaning).unwrap();
+        h.features.download(Feature::ImageVisual).unwrap();
+        wait_for(
+            &rx,
+            Feature::Meaning,
+            |i| matches!(i, Install::Downloading { bytes, .. } if *bytes > 0),
+        );
+        h.features.cancel_download();
+        let s = wait_for(&rx, Feature::ImageVisual, |i| *i == Install::NotInstalled);
+        assert_eq!(install_of(&s, Feature::Meaning), Install::NotInstalled);
+
+        h.features.download(Feature::ImageText).unwrap(); // 3 bytes, ~0.6 s
+        wait_for(&rx, Feature::ImageText, |i| {
+            matches!(i, Install::Installed { .. })
+        });
+    }
+
+    #[test]
+    fn remove_is_refused_while_downloading_and_deletes_only_the_download() {
+        let h = harness(SlowFetcher(mem()), false);
+        let rx = h.features.subscribe();
+        h.features.download(Feature::ImageText).unwrap();
+        wait_for(&rx, Feature::ImageText, |i| {
+            matches!(i, Install::Downloading { .. })
+        });
+        assert!(matches!(
+            h.features.remove_download(Feature::ImageText),
+            Err(Error::DownloadInProgress(Feature::ImageText))
+        ));
+        wait_for(&rx, Feature::ImageText, |i| {
+            matches!(i, Install::Installed { .. })
+        });
+        h.features.remove_download(Feature::ImageText).unwrap();
+        assert_eq!(
+            install_of(&h.features.status().unwrap(), Feature::ImageText),
+            Install::NotInstalled
+        );
+        assert!(
+            h.features.status().unwrap()[1].enabled,
+            "removing a download is not disabling"
+        );
+    }
+
+    #[test]
+    fn set_enabled_persists_the_desire_and_leaves_the_install_alone() {
+        let h = harness(mem(), false);
+        h.features.set_enabled(Feature::ImageVisual, true).unwrap();
+        h.features.set_enabled(Feature::Meaning, false).unwrap();
+        let c = crate::config::load_from(&h.config_path).unwrap();
+        assert!(c.features.image_visual && !c.features.meaning);
+        let s = h.features.status().unwrap();
+        assert!(!s[0].enabled && s[2].enabled);
+        assert!(s.iter().all(|x| x.install == Install::NotInstalled));
+    }
+
+    #[test]
+    fn a_running_backfill_shows_in_status_and_events() {
+        let h = harness(mem(), false);
+        let db_path = h._dir.path().join("magi.db");
+        let mut conn = crate::db::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO roots (id, path, added_at) VALUES (1, '/r', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files (root_id, path, rel_path, file_name, kind, size, mtime_ns,
+                                state, seen_scan_id, features_missing)
+             VALUES (1, '/r/a', 'a', 'a', 'text', 1, 0, 'indexed', 0, 1)",
+            [],
+        )
+        .unwrap();
+        let rx = h.features.subscribe();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(); // initial snapshot
+        crate::index::requeue_missing(&mut conn, &[Feature::Meaning]).unwrap();
+        let s = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("backfill change emitted");
+        assert_eq!(
+            s[0].backfill,
+            Some(crate::dto::Backfill { done: 0, total: 1 })
+        );
     }
 }
