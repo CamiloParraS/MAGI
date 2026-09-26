@@ -282,13 +282,26 @@ PowerShell `Get-Process -Name 'nfr8-*'` for the whole run: **1,762 MB working
 set, 1,800 MB private** (`image_visual` enabled, so this includes SigLIP 2's
 vision tower alongside e5 and PaddleOCR while the fixture corpus indexes).
 
-NFR-8 itself has no fixed target in SPEC.md §2.2 beyond "search stays
-responsive while indexing"; p95 278 ms while busy (max 3.3 s, one query
-racing a burst of newly-queued files right after `add_root`) against p95
-144 ms idle reads as responsive — indexing yields to search
-(`EngineHandle::search_pending`/`SearchGuard`) rather than blocking it.
-**NFR-8 is now measured and passes** (carried over from M5; see
-docs/progress.md).
+SPEC.md §2.2's NFR-8 ("Background politeness") is: "Indexing threads run at
+low OS priority; ONNX intra-op threads capped; search is never blocked
+behind an indexing batch for more than one small batch." ("Search stays
+responsive" is the M8 QA checklist's phrasing, SPEC.md:1019, not the NFR
+itself.)
+
+Graded against that: p95 278 ms while busy against p95 144 ms idle is good
+evidence that a search is usually not stuck behind an indexing batch at
+all — `EngineHandle::search_pending`/`SearchGuard` stops a *new* batch from
+starting while a search is pending, so most searches land between batches.
+But the recorded **max of 3.34 s while busy is not explained by that
+mechanism**: a `SearchGuard` cannot interrupt a batch already in flight
+(`engine::MAX_YIELD`, 5 s, only bounds how long the guard makes *indexing*
+wait, not how long a search waits behind an in-progress batch), and this
+benchmark did not record each embed batch's own duration, chunk count, or
+which queries landed mid-batch. So the "never blocked ... for more than one
+small batch" bound is **not verified by this measurement** — it is
+plausible the 3.34 s outlier *is* one batch's worth of blocking, but that
+has not been shown, only asserted. **Status: p95 recorded and looks good;
+the max-latency / one-batch bound is unverified** (see docs/progress.md).
 
 ## Reproducing
 

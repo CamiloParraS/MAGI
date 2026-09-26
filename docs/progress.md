@@ -1991,8 +1991,12 @@ engine test now also checks `add_root` on a folder inside a root fails with
       check. It now resumes only above 1.25 GiB (`memory_low`, unit test; item
       17 test still green).
 - [x] **NFR-11 peak RSS with the engine running:** 1,215–1,337 MB on
-      `fixtures/corpus` (≤ 1.5 GB, pass). A search during the first index was
-      not measured and would go over. See docs/benchmarks.md, "M5 — peak memory".
+      `fixtures/corpus` (≤ 1.5 GB, pass) for indexing alone. A search during
+      the first index is now measured (M6 Plan 2's NFR-8 benchmark,
+      `image_visual` on): **1,762–1,800 MB, which exceeds the 1.5 GB NFR-11
+      budget** by roughly 260–300 MB. Not a pass for that scenario — see
+      docs/benchmarks.md, "M5 — peak memory" and "M6 — NFR-8 search while
+      indexing", and the known gap in the M6 Plan 2 section below.
 - [x] **NFR-12 peak memory, hybrid search only:** 842–848 MB (≤ 900 MB, pass),
       down from 1,272 MB. `magi-cli search` frees e5 before the SigLIP text
       tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
@@ -2000,10 +2004,15 @@ engine test now also checks `add_root` on a folder inside a root fails with
       mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
 - [x] **Search latency while indexing (NFR-8):** measured in M6 Plan 2, once
       the desktop host put indexing and search in one process — p95 278 ms
-      busy vs. 144 ms idle, pass. See docs/benchmarks.md, "M6 — NFR-8 search
-      while indexing" and the M6 Plan 2 section below. Peak memory with a
-      search during the first index was not separately isolated from this
-      run (1,762–1,800 MB with `image_visual` on, same benchmark).
+      busy vs. 144 ms idle, which is good evidence search is usually
+      responsive. **The NFR itself ("never blocked behind an indexing batch
+      for more than one small batch", SPEC.md §2.2) is not fully verified**:
+      the recorded max of 3.34 s while busy is not shown to be bounded by
+      one batch. See docs/benchmarks.md, "M6 — NFR-8 search while indexing"
+      and the M6 Plan 2 section below. The same run measured peak memory
+      with a search during the first index: 1,762–1,800 MB with
+      `image_visual` on, which **exceeds** the NFR-11 1.5 GB budget (see the
+      NFR-11 line above and the known gap below).
 - [x] ADR-0008 (runtime and threading) and ADR-0009 (watchers and
       reconciliation) written.
 - [x] CI green on all three OSes (confirmed by the owner, 2026-09-25).
@@ -2035,13 +2044,15 @@ Windows, Ubuntu 22.04 and macOS 14.
 | 16     | Windows locked file retried, indexed after release     | `a_locked_file_is_retried_and_indexed_after_release` (Windows only)                                                                                                    |
 | 17     | Memory pressure pauses and unloads the image model     | `memory_pressure_pauses_indexing_and_unloads_the_image_model`                                                                                                          |
 | Manual | Idle CPU under 1% after the first index                | 0.05–0.37% over ~80 min; **exception accepted:** 232 files, not 20k+ (docs/benchmarks.md, "M5 — idle cost")                                                            |
-| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB (docs/benchmarks.md, "M5 — peak memory")                                                                                                                |
+| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB indexing alone, pass (docs/benchmarks.md, "M5 — peak memory"); **1,762–1,800 MB with a concurrent search (M6), exceeds the budget** — "M6 — NFR-8 search while indexing" |
 | NFR-12 | Peak memory, hybrid search only ≤ 900 MB               | 842–848 MB (same section)                                                                                                                                              |
-| NFR-8  | Search latency while indexing                          | **Done in M6 Plan 2** (docs/benchmarks.md, "M6 — NFR-8 search while indexing")                                                                                        |
+| NFR-8  | Search latency while indexing                          | p95 recorded (278 ms busy vs. 144 ms idle) in M6 Plan 2; **max-latency / one-batch bound unverified** (docs/benchmarks.md, "M6 — NFR-8 search while indexing")       |
 | ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
 
-M5 is done. The NFR-8 latency check was carried over to M6 and is now done
-(M6 Plan 2, below).
+M5 is done. The NFR-8 latency check was carried over to M6 and is now
+measured (M6 Plan 2, below) — p95 recorded, but the max-latency / one-batch
+bound is not yet verified, and that same measurement shows NFR-11 exceeding
+its budget when a search runs during the first index.
 
 ## M6 — Plan 1 (optional search features)
 
@@ -2109,9 +2120,13 @@ the fix was reviewed by reading `host::supervise` rather than by a test that
 can reliably land in the window.
 
 **NFR-8 (search latency while indexing), carried over from M5:** now
-measured — p95 278 ms while indexing vs. 144 ms idle, pass. See
-docs/benchmarks.md, "M6 — NFR-8 search while indexing", and the M5 sign-off
-table above (updated in place rather than duplicated).
+measured — p95 278 ms while indexing vs. 144 ms idle, good evidence of
+typical responsiveness. The NFR's actual criterion (SPEC.md §2.2:
+"search is never blocked behind an indexing batch for more than one small
+batch") is **not verified**: the recorded max of 3.34 s has not been shown
+to be bounded by one batch's duration (no per-batch timing was recorded).
+See docs/benchmarks.md, "M6 — NFR-8 search while indexing", and the M5
+sign-off table above (updated in place rather than duplicated).
 
 **`just eval` (M6 Plan Task 2):** not run. It needs a release build with the
 real models loaded through the full desktop/CLI search path, and the
@@ -2139,6 +2154,14 @@ covered by the tests above, `just check` and `just bindings`.
 set `windows_subsystem = "windows"` and `apps/desktop/src-tauri` has no
 `tracing` subscriber wired up, so there is nowhere for the panic message to
 go. Plan 5 (shell integration) is the right place to add one.
+
+**Known gap: NFR-11 exceeds its budget with a concurrent search.** The
+NFR-8 benchmark's peak-memory sample (1,762–1,800 MB, `image_visual` on)
+is also the first real measurement of "peak memory while indexing, search
+running" and it is **over** NFR-11's 1.5 GB budget by roughly 260–300 MB —
+this scenario was previously unmeasured and assumed to fail (M5 sign-off);
+it is now confirmed to fail, not just assumed. No fix is scoped in this
+plan. Recorded as a gap for whichever plan takes on memory budget work.
 
 **Windows build note:** `pnpm tauri build` needed the Windows SDK's `rc.exe`
 on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`);
