@@ -196,8 +196,8 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &root_row.path,
         &options,
         &IndexContext {
-            embedder: embedder.clone(),
-            ocr: ocr_from_env(),
+            embedder: Some(embedder.clone()),
+            ocr: Some(ocr_from_env()),
             image_gate: Default::default(),
             image_embedder: Some(image_embedder_from_env()),
         },
@@ -221,9 +221,11 @@ fn daemon_cmd(stats: bool) -> anyhow::Result<()> {
     let engine = Engine::start(
         &config,
         &db_path(),
-        embedder_from_env()?,
-        Some(image_embedder_from_env()),
-        ocr_from_env(),
+        magi_core::features::Components {
+            text: Some(embedder_from_env()?),
+            image: Some(image_embedder_from_env()),
+            ocr: Some(ocr_from_env()),
+        },
     )?;
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
@@ -367,7 +369,7 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
             let embedder = embedder_from_env()?;
             let hits = magi_core::search::hybrid_search(
                 &conn,
-                &OneShotQuery(embedder.as_ref()),
+                Some(&OneShotQuery(embedder.as_ref())),
                 Some(image_embedder_from_env().as_ref()),
                 query,
                 limit,

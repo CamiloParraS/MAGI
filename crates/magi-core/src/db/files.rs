@@ -80,6 +80,8 @@ pub struct FileRecord<'a> {
 /// unique `path`, and any previous chunks/vectors for that file are
 /// deleted before the new ones are inserted (idempotent re-indexing).
 /// `embeddings[i]` is the vector for `chunks[i]` — same length, same order.
+/// `embeddings` is `None` when meaning is not running: chunks are stored for
+/// keyword search with no `vec_text` rows.
 /// `image_embedding` replaces the file's `vec_image` row (or removes it
 /// when `None`) in the same transaction.
 ///
@@ -92,10 +94,12 @@ pub fn upsert_file(
     conn: &mut Connection,
     record: &FileRecord,
     chunks: &[RawChunk],
-    embeddings: &[Vec<f32>],
+    embeddings: Option<&[Vec<f32>]>,
     image_embedding: Option<&[f32]>,
 ) -> Result<i64> {
-    if chunks.len() != embeddings.len() {
+    if let Some(embeddings) = embeddings
+        && chunks.len() != embeddings.len()
+    {
         // `zip` below would silently drop the excess, i.e. lose chunks
         // from the index with no error anywhere.
         return Err(crate::error::Error::Model(format!(
@@ -179,7 +183,7 @@ pub fn upsert_file(
         )?;
         let mut insert_vector =
             tx.prepare("INSERT INTO vec_text (chunk_id, embedding) VALUES (?1, vec_f32(?2))")?;
-        for (ordinal, (chunk, embedding)) in chunks.iter().zip(embeddings).enumerate() {
+        for (ordinal, chunk) in chunks.iter().enumerate() {
             let chunk_id: i64 = insert_chunk.query_row(
                 params![
                     file_id,
@@ -192,7 +196,10 @@ pub fn upsert_file(
                 ],
                 |row| row.get(0),
             )?;
-            insert_vector.execute(params![chunk_id, embedding_to_blob(embedding)])?;
+            if let Some(embeddings) = embeddings {
+                insert_vector
+                    .execute(params![chunk_id, embedding_to_blob(&embeddings[ordinal])])?;
+            }
         }
     }
 
@@ -741,7 +748,7 @@ mod tests {
         chunks: &[RawChunk],
         embeddings: &[Vec<f32>],
     ) -> Result<i64> {
-        upsert_file(conn, record, chunks, embeddings, None)
+        upsert_file(conn, record, chunks, Some(embeddings), None)
     }
     use crate::db;
     use crate::embed::{FakeEmbedder, TextEmbedder};
@@ -983,8 +990,8 @@ mod tests {
         record.content_hash = Some(&hash);
         record.thumb_key = Some("abc");
 
-        upsert_file(&mut conn, &record, &[], &[], Some(&[0.5; 768])).unwrap();
-        upsert_file(&mut conn, &record, &[], &[], Some(&[0.25; 768])).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), Some(&[0.5; 768])).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), Some(&[0.25; 768])).unwrap();
 
         let (stored, key): (Vec<u8>, String) = conn
             .query_row("SELECT content_hash, thumb_key FROM files", [], |r| {
@@ -997,7 +1004,7 @@ mod tests {
             .unwrap();
         assert_eq!(vectors, 1);
 
-        upsert_file(&mut conn, &record, &[], &[], None).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap();
         let vectors: i64 = conn
             .query_row("SELECT COUNT(*) FROM vec_image", [], |r| r.get(0))
             .unwrap();
@@ -1017,7 +1024,7 @@ mod tests {
             &mut conn,
             &sample_record(&path, &rel),
             &chunks,
-            std::slice::from_ref(&embedding),
+            Some(std::slice::from_ref(&embedding)),
             None,
         )
         .unwrap();
@@ -1079,7 +1086,7 @@ mod tests {
             conn,
             &record,
             &chunks,
-            &fake_embeddings(&chunks),
+            Some(&fake_embeddings(&chunks)),
             Some(&[0.5; 768]),
         )
         .unwrap()
@@ -1353,7 +1360,7 @@ mod tests {
             let rel = PathBuf::from("p.jpg");
             let mut record = sample_record(&path, &rel);
             record.kind = "image";
-            upsert_file(&mut conn, &record, &[], &[], None).unwrap()
+            upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap()
         };
 
         assert_eq!(invalidate(&conn, Some("image")).unwrap(), 1);

@@ -32,8 +32,8 @@ use crate::db::files::FileState;
 use crate::db::roots::{Health, Root};
 use crate::db::{self, files, meta, roots};
 use crate::dto::{IndexState, IndexStatus, RootStatus};
-use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
+use crate::features::Components;
 use crate::index::lifecycle::{self, FileStep};
 use crate::index::pipeline::{
     EMBED_BATCH, Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed_group, prepare,
@@ -42,7 +42,6 @@ use crate::index::resources::{self, Pause};
 use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
 use crate::index::{ModelIds, requeue_on_model_change};
-use crate::ocr::OcrEngine;
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
 use crate::watch::watcher::Watchers;
@@ -70,18 +69,13 @@ impl Engine {
     /// Starts indexing (SPEC.md §5.4 startup steps 1, 2, 4 and 6): recovers rows
     /// left `indexing`, re-queues files made stale by a model change, probes and
     /// reconciles every enabled root, then runs the pipeline threads until
-    /// [`EngineHandle::shutdown`].
+    /// [`EngineHandle::shutdown`]. `components` are the running search
+    /// features (ADR-0010); a missing one is skipped by indexing.
     ///
     /// Blocks while the first reconciliation walk runs.
     /// ponytail: startup scan is synchronous; move it onto the writer without
     /// waiting if `start` blocks the UI on a very large root.
-    pub fn start(
-        config: &Config,
-        db_path: &Path,
-        text: Arc<dyn TextEmbedder>,
-        image: Option<Arc<dyn ImageEmbedder>>,
-        ocr: Arc<dyn OcrEngine>,
-    ) -> Result<EngineHandle> {
+    pub fn start(config: &Config, db_path: &Path, components: Components) -> Result<EngineHandle> {
         let options: SharedOptions = Arc::new(RwLock::new(Arc::new(
             IndexRootOptions::from_config(&config.indexing)?,
         )));
@@ -90,9 +84,9 @@ impl Engine {
         requeue_on_model_change(
             &mut write_conn,
             &ModelIds {
-                text: text.model_id(),
-                image: image.as_deref().map(|e| e.model_id()),
-                ocr: ocr.engine_id(),
+                text: components.text.as_deref().map(|e| e.model_id()),
+                image: components.image.as_deref().map(|e| e.model_id()),
+                ocr: components.ocr.as_deref().map(|o| o.engine_id()),
             },
         )?;
         let scheduler_conn = db::open(db_path)?;
@@ -103,9 +97,10 @@ impl Engine {
         );
 
         let ctx = Arc::new(IndexContext {
-            image_embedder: image,
-            ocr,
-            ..IndexContext::new(text)
+            embedder: components.text,
+            ocr: components.ocr,
+            image_embedder: components.image,
+            ..IndexContext::default()
         });
         let (total_memory, workers) = resources::machine(config.indexing.worker_threads);
         let max_in_flight = workers * 2 + 2;

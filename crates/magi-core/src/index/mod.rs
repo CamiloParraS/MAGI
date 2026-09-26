@@ -24,12 +24,12 @@ pub const PIPELINE_VERSION: i64 = 2;
 
 /// The identifiers of the components that produced a file's index rows. A
 /// stored id that differs from the running one means those rows are stale.
+/// Each is `None` when that component is not running: its rows are left as
+/// they are rather than judged against a model that is not running.
 pub struct ModelIds<'a> {
-    pub text: &'a str,
-    /// `None` when no image model is configured: image vectors are left as
-    /// they are rather than judged against a model that is not running.
+    pub text: Option<&'a str>,
     pub image: Option<&'a str>,
-    pub ocr: &'a str,
+    pub ocr: Option<&'a str>,
 }
 
 /// Re-queues files whose text vectors, image vectors or OCR text came from a
@@ -51,9 +51,11 @@ pub fn requeue_on_model_change(conn: &mut Connection, ids: &ModelIds) -> Result<
         Ok(meta::get(&tx, key)?.is_some_and(|stored| stored != current))
     };
 
-    if differs("text_model_id", ids.text)? {
+    if let Some(text) = ids.text
+        && differs("text_model_id", text)?
+    {
         tracing::info!(
-            current = ids.text,
+            current = text,
             "text model changed; re-embedding every file"
         );
         marked += files::invalidate(&tx, None)?;
@@ -64,16 +66,22 @@ pub fn requeue_on_model_change(conn: &mut Connection, ids: &ModelIds) -> Result<
         tracing::info!(current = image, "image model changed; re-embedding images");
         marked += files::invalidate(&tx, Some("image"))?;
     }
-    if differs("ocr_engine_id", ids.ocr)? {
-        tracing::info!(current = ids.ocr, "OCR engine changed; re-reading images");
+    if let Some(ocr) = ids.ocr
+        && differs("ocr_engine_id", ocr)?
+    {
+        tracing::info!(current = ocr, "OCR engine changed; re-reading images");
         marked += files::invalidate(&tx, Some("image"))?;
     }
 
-    meta::set(&tx, "text_model_id", ids.text)?;
-    if let Some(image) = ids.image {
-        meta::set(&tx, "image_model_id", image)?;
+    for (key, id) in [
+        ("text_model_id", ids.text),
+        ("image_model_id", ids.image),
+        ("ocr_engine_id", ids.ocr),
+    ] {
+        if let Some(id) = id {
+            meta::set(&tx, key, id)?;
+        }
     }
-    meta::set(&tx, "ocr_engine_id", ids.ocr)?;
     tx.commit()?;
     Ok(marked)
 }

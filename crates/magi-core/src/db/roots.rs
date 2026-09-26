@@ -432,7 +432,7 @@ mod tests {
             &mut conn,
             &indexed_record(child.id, &path, &rel),
             &chunks,
-            &embeddings,
+            Some(&embeddings),
             None,
         )
         .unwrap();
@@ -476,7 +476,7 @@ mod tests {
         let rel = PathBuf::from("notes.txt");
         let mut record = indexed_record(child.id, &path, &rel);
         record.state = crate::db::files::FileState::Indexing;
-        crate::db::files::upsert_file(&mut conn, &record, &[], &[], None).unwrap();
+        crate::db::files::upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap();
 
         add(&conn, parent.path()).unwrap();
 
@@ -569,7 +569,14 @@ mod tests {
             content_hash: None,
             thumb_key: None,
         };
-        upsert_file(&mut conn, &record, &chunks, &embeddings, Some(&[0.5; 768])).unwrap();
+        upsert_file(
+            &mut conn,
+            &record,
+            &chunks,
+            Some(&embeddings),
+            Some(&[0.5; 768]),
+        )
+        .unwrap();
 
         remove(&conn, root.id).unwrap();
 

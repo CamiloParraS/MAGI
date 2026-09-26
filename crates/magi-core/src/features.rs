@@ -2,12 +2,15 @@
 //! downloads live, and the per-file record of what a file was indexed without.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use serde::{Deserialize, Serialize};
 
 use crate::embed::manager::{ByteFetcher, ModelEntry, download_with_fetcher};
+use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
+use crate::ocr::OcrEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +61,31 @@ impl std::str::FromStr for Feature {
             .into_iter()
             .find(|f| f.as_str() == s)
             .ok_or_else(|| Error::UnknownFeature(s.to_string()))
+    }
+}
+
+/// The loaded parts behind each feature; `None` means the feature is not
+/// running (off or not installed), and indexing and search skip it.
+#[derive(Clone, Default)]
+pub struct Components {
+    pub text: Option<Arc<dyn TextEmbedder>>,
+    pub ocr: Option<Arc<dyn OcrEngine>>,
+    pub image: Option<Arc<dyn ImageEmbedder>>,
+}
+
+impl Components {
+    pub fn running(&self) -> Vec<Feature> {
+        let mut on = Vec::new();
+        if self.text.is_some() {
+            on.push(Feature::Meaning);
+        }
+        if self.ocr.is_some() {
+            on.push(Feature::ImageText);
+        }
+        if self.image.is_some() {
+            on.push(Feature::ImageVisual);
+        }
+        on
     }
 }
 

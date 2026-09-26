@@ -102,7 +102,14 @@ mod tests {
             thumb_key: None,
         };
         let chunks = [RawChunk::body(body.to_string())];
-        upsert_file(conn, &record, &chunks, &fake_embeddings(&chunks), None).unwrap();
+        upsert_file(
+            conn,
+            &record,
+            &chunks,
+            Some(&fake_embeddings(&chunks)),
+            None,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -198,7 +205,14 @@ mod tests {
             RawChunk::body("apple banana".to_string()),
             RawChunk::body("apple cherry".to_string()),
         ];
-        upsert_file(&mut conn, &record, &chunks, &fake_embeddings(&chunks), None).unwrap();
+        upsert_file(
+            &mut conn,
+            &record,
+            &chunks,
+            Some(&fake_embeddings(&chunks)),
+            None,
+        )
+        .unwrap();
 
         let hits = search_fts(&conn, "apple", 10).unwrap();
         assert_eq!(hits.len(), 1);

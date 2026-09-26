@@ -12,7 +12,7 @@ use magi_core::config::Config;
 use magi_core::db::{self, files, roots};
 use magi_core::dto::IndexState;
 use magi_core::embed::{CountingEmbedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder};
-use magi_core::ocr::NoOcr;
+use magi_core::features::Components;
 use magi_core::search::fts::search_fts;
 use magi_core::{Engine, EngineHandle};
 use rusqlite::Connection;
@@ -80,9 +80,11 @@ impl Env {
         Engine::start(
             &config,
             &self.db_path,
-            self.embedder.clone(),
-            image,
-            Arc::new(NoOcr),
+            Components {
+                text: Some(self.embedder.clone()),
+                image,
+                ocr: None,
+            },
         )
         .unwrap()
     }

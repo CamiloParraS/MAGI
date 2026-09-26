@@ -183,7 +183,7 @@ pub fn rank_and_boost(
 /// on query order, so this defers threading to when that pool lands.
 pub fn hybrid_search(
     conn: &Connection,
-    embedder: &dyn TextEmbedder,
+    embedder: Option<&dyn TextEmbedder>,
     image_embedder: Option<&dyn ImageEmbedder>,
     query: &str,
     limit: u32,
@@ -193,8 +193,13 @@ pub fn hybrid_search(
     }
 
     let fts_hits = fts::search_fts(conn, query, FTS_FETCH_LIMIT)?;
-    let query_embedding = embedder.embed_query(query)?;
-    let vector_hits = vector::search_vector_text(conn, &query_embedding, VECTOR_FETCH_LIMIT)?;
+    // Without meaning, old `vec_text` rows stay unused.
+    let vector_hits = match embedder {
+        Some(embedder) => {
+            vector::search_vector_text(conn, &embedder.embed_query(query)?, VECTOR_FETCH_LIMIT)?
+        }
+        None => Vec::new(),
+    };
 
     // A missing or broken visual model degrades to text-only search rather
     // than failing the query.
@@ -257,7 +262,22 @@ mod tests {
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
+        upsert_file(conn, &record, &chunks, Some(&embeddings), None).unwrap();
+    }
+
+    #[test]
+    fn hybrid_search_without_a_text_embedder_uses_keywords_only() {
+        // vec_text rows from when meaning was on stay unused, and nothing
+        // tries to embed the query.
+        let (_dir, mut conn) = open_test_db();
+        index_text(&mut conn, "/roots/a/port.txt", "the harbor at dawn", 0);
+        let hits = hybrid_search(&conn, None, None, "harbor", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(
+            conn.query_row("SELECT COUNT(*) FROM vec_text", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+                > 0
+        );
     }
 
     #[test]
@@ -287,12 +307,19 @@ mod tests {
         let name_chunk = vec![RawChunk::body("IMG 0042 jpg".to_string())];
         let embeddings = FakeEmbedder.embed_passages(&["IMG 0042 jpg"]).unwrap();
         let visual = FakeImageEmbedder.embed_query("dog on the beach").unwrap();
-        upsert_file(&mut conn, &record, &name_chunk, &embeddings, Some(&visual)).unwrap();
+        upsert_file(
+            &mut conn,
+            &record,
+            &name_chunk,
+            Some(&embeddings),
+            Some(&visual),
+        )
+        .unwrap();
         index_text(&mut conn, "/roots/a/tax.txt", "quarterly tax filing", 0);
 
         let hits = hybrid_search(
             &conn,
-            &FakeEmbedder,
+            Some(&FakeEmbedder),
             Some(&FakeImageEmbedder),
             "dog on the beach",
             10,
@@ -304,7 +331,7 @@ mod tests {
         // dragged into every search.
         let unrelated = hybrid_search(
             &conn,
-            &FakeEmbedder,
+            Some(&FakeEmbedder),
             Some(&FakeImageEmbedder),
             "quarterly tax filing",
             10,
@@ -317,7 +344,8 @@ mod tests {
             "{unrelated:?}"
         );
         // Without the image embedder the same query cannot reach it.
-        let text_only = hybrid_search(&conn, &FakeEmbedder, None, "dog on the beach", 10).unwrap();
+        let text_only =
+            hybrid_search(&conn, Some(&FakeEmbedder), None, "dog on the beach", 10).unwrap();
         assert!(
             !text_only
                 .iter()
@@ -332,12 +360,12 @@ mod tests {
         let embedder = FakeEmbedder;
 
         assert!(
-            hybrid_search(&conn, &embedder, None, "", 10)
+            hybrid_search(&conn, Some(&embedder), None, "", 10)
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            hybrid_search(&conn, &embedder, None, "hello", 0)
+            hybrid_search(&conn, Some(&embedder), None, "hello", 0)
                 .unwrap()
                 .is_empty()
         );
@@ -354,7 +382,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "arepas", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "arepas", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/recipe.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
@@ -374,7 +402,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "cat sat mat", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "cat sat mat", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/cats.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
         assert!(hits[0].match_sources.contains(&"semantic"));
@@ -403,7 +431,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "budget quarterly", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "budget quarterly", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/budget_report.txt"));
     }
 }

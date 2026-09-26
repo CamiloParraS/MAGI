@@ -173,7 +173,7 @@ mod tests {
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
+        upsert_file(conn, &record, &chunks, Some(&embeddings), None).unwrap();
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
         let embeddings = FakeEmbedder
             .embed_passages(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())
             .unwrap();
-        upsert_file(&mut conn, &record, &chunks, &embeddings, None).unwrap();
+        upsert_file(&mut conn, &record, &chunks, Some(&embeddings), None).unwrap();
 
         let query = FakeEmbedder.embed_query("apple").unwrap();
         let hits = search_vector_text(&conn, &query, 10).unwrap();

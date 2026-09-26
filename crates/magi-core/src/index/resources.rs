@@ -134,9 +134,13 @@ pub(crate) fn run(m: Monitor, stop: &AtomicBool, wake: Receiver<()>) {
         if let Some(image) = &m.ctx.image_embedder {
             image.unload_if_idle(if low { Duration::ZERO } else { m.idle });
         }
-        m.ctx.embedder.unload_if_idle(m.idle);
+        if let Some(embedder) = &m.ctx.embedder {
+            embedder.unload_if_idle(m.idle);
+        }
         crate::embed::manager::unload_text_tokenizer_if_idle(m.idle);
-        m.ctx.ocr.unload_if_idle(m.idle);
+        if let Some(ocr) = &m.ctx.ocr {
+            ocr.unload_if_idle(m.idle);
+        }
         let _ = wake.recv_timeout(CHECK);
     }
 }

@@ -32,25 +32,36 @@ const LARGE_IMAGE_PIXELS: u64 = 12_000_000;
 
 /// What an indexing run needs beyond the walk options: the models.
 pub struct IndexContext {
-    /// `Arc` because the runtime shares the models between threads.
-    pub embedder: Arc<dyn TextEmbedder>,
+    /// `Arc` because the runtime shares the models between threads. `None`
+    /// when search by meaning is not running.
+    pub embedder: Option<Arc<dyn TextEmbedder>>,
     /// `Arc` because extraction runs on a detached thread that must own it.
-    pub ocr: Arc<dyn OcrEngine>,
+    /// `None` when reading text in images is not running.
+    pub ocr: Option<Arc<dyn OcrEngine>>,
     /// `None` leaves `vec_image` empty: images are still found by their text.
     pub image_embedder: Option<Arc<dyn ImageEmbedder>>,
     /// Bounds concurrent image decodes.
     pub image_gate: Arc<ImageGate>,
 }
 
-impl IndexContext {
-    /// A context with no OCR engine and no image embedder; images still get
-    /// QR payloads and a thumbnail.
-    pub fn new(embedder: Arc<dyn TextEmbedder>) -> Self {
+impl Default for IndexContext {
+    /// No feature running: keyword and filename indexing only.
+    fn default() -> Self {
         Self {
-            embedder,
-            ocr: Arc::new(NoOcr),
+            embedder: None,
+            ocr: None,
             image_embedder: None,
             image_gate: Arc::default(),
+        }
+    }
+}
+
+impl IndexContext {
+    /// Meaning on, OCR and visual off; images still get QR payloads and a thumbnail.
+    pub fn new(embedder: Arc<dyn TextEmbedder>) -> Self {
+        Self {
+            embedder: Some(embedder),
+            ..Self::default()
         }
     }
 }
@@ -140,9 +151,9 @@ pub fn index_root(
     requeue_on_model_change(
         conn,
         &ModelIds {
-            text: ctx.embedder.model_id(),
+            text: ctx.embedder.as_deref().map(|e| e.model_id()),
             image: ctx.image_embedder.as_deref().map(|e| e.model_id()),
-            ocr: ctx.ocr.engine_id(),
+            ocr: ctx.ocr.as_deref().map(|o| o.engine_id()),
         },
     )?;
 
@@ -271,7 +282,8 @@ impl Fresh {
 
 pub(crate) struct Embedded {
     fresh: Fresh,
-    embeddings: Vec<Vec<f32>>,
+    /// `None` when search by meaning is not running.
+    embeddings: Option<Vec<Vec<f32>>>,
 }
 
 /// Stage 1, extract: is it unchanged ([`change::keeps`])? Otherwise read,
@@ -342,13 +354,16 @@ pub(crate) fn embed(
     mut fresh: Fresh,
     before_batch: &dyn Fn(),
 ) -> Result<Embedded> {
-    let embeddings = embed_chunks(
-        &*ctx.embedder,
-        &job.entry.path,
-        &mut fresh.chunks,
-        &mut fresh.outcome,
-        before_batch,
-    )?;
+    let embeddings = match &ctx.embedder {
+        Some(embedder) => Some(embed_chunks(
+            &**embedder,
+            &job.entry.path,
+            &mut fresh.chunks,
+            &mut fresh.outcome,
+            before_batch,
+        )?),
+        None => None,
+    };
     Ok(Embedded { fresh, embeddings })
 }
 
@@ -363,6 +378,18 @@ pub(crate) fn embed_group(
     group: Vec<(Job, Fresh)>,
     before_batch: &dyn Fn(),
 ) -> Vec<(Job, Result<Embedded>)> {
+    let Some(embedder) = ctx.embedder.as_deref() else {
+        return group
+            .into_iter()
+            .map(|(job, fresh)| {
+                let embedded = Embedded {
+                    fresh,
+                    embeddings: None,
+                };
+                (job, Ok(embedded))
+            })
+            .collect();
+    };
     let chunk = |(f, c): (usize, usize)| group[f].1.chunks[c].text.as_str();
     let mut order: Vec<(usize, usize)> = group
         .iter()
@@ -378,7 +405,7 @@ pub(crate) fn embed_group(
     for batch in batches_by_length(&order, |at| chunk(at).len()) {
         before_batch();
         let texts: Vec<&str> = batch.iter().map(|&at| chunk(at)).collect();
-        match ctx.embedder.embed_passages(&texts) {
+        match embedder.embed_passages(&texts) {
             Ok(out) if out.len() == texts.len() => {
                 for (&(f, c), v) in batch.iter().zip(out) {
                     vectors[f][c] = v;
@@ -398,7 +425,13 @@ pub(crate) fn embed_group(
     group
         .into_iter()
         .zip(vectors)
-        .map(|((job, fresh), embeddings)| (job, Ok(Embedded { fresh, embeddings })))
+        .map(|((job, fresh), embeddings)| {
+            let embedded = Embedded {
+                fresh,
+                embeddings: Some(embeddings),
+            };
+            (job, Ok(embedded))
+        })
         .collect()
 }
 
@@ -470,7 +503,7 @@ pub(crate) fn store_embedded(
         conn,
         &record,
         &chunks,
-        &embeddings,
+        embeddings.as_deref(),
         outcome.doc.image_embedding.as_deref(),
     )?;
     Ok(match outcome.state {
@@ -668,7 +701,9 @@ fn extract_entry(
     });
     let (path_buf, ocr, image_embedder, max_megapixels) = (
         path.to_path_buf(),
-        Arc::clone(&ctx.ocr),
+        ctx.ocr
+            .clone()
+            .unwrap_or_else(|| Arc::new(NoOcr) as Arc<dyn OcrEngine>),
         ctx.image_embedder.clone(),
         options.max_image_megapixels,
     );
@@ -922,7 +957,7 @@ mod tests {
         assert_eq!((counting.calls(), counting.chunks()), (2, 6));
         let together: Vec<Vec<Vec<f32>>> = embedded
             .into_iter()
-            .map(|(_, e)| e.unwrap().embeddings)
+            .map(|(_, e)| e.unwrap().embeddings.unwrap())
             .collect();
         assert_eq!(together, alone);
     }
@@ -1547,7 +1582,7 @@ mod tests {
             .join("../../fixtures/corpus/qr/qr_url.png");
         fs::copy(qr, root.join("code.png")).unwrap();
         let with = |ocr: &'static str| IndexContext {
-            ocr: Arc::new(NamedOcr(ocr)),
+            ocr: Some(Arc::new(NamedOcr(ocr))),
             ..IndexContext::new(Arc::new(FakeEmbedder))
         };
         let go = |conn: &mut Connection, ctx: &IndexContext| {
