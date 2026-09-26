@@ -91,3 +91,20 @@ Settings and onboarding windows stay solid.
   deferred (fragile in two languages).
 - NFR-7 now describes the full download; the default download is ~148 MB.
 - Launch at login is offered in onboarding and checked by default (§9 Q7).
+
+## Implementation notes (Plan 1)
+
+- `FeatureStatus` also carries `download_size`, so sizes can be shown before
+  consent (FR-10).
+- `Failed.code` adds `WriteFailed` for local I/O failures other than disk full
+  or permission denied.
+- Partial files are kept after a cancel, and a later download resumes them
+  (existing M3 behavior). The state still returns to `NotInstalled`, and
+  nothing partial is ever `Installed`: installed means every manifest file is
+  at its final name with the manifest size.
+- Backfill re-processes the affected files through the normal pipeline instead
+  of embedding stored chunks. This keeps one code path, and it rebuilds chunks
+  at the real tokenizer's boundaries (chunking without e5 uses an approximate
+  token count).
+- Features take effect when the engine starts. The host restarts the engine
+  after `set_enabled` or a finished download (Plan 2).

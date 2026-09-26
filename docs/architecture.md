@@ -29,12 +29,20 @@ errors, current_file?, roots: RootStatus[] }` and `RootStatus { id, path,
 enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
 "Control surface" below for the `EngineHandle` methods behind them.
 
+M6 Plan 1 adds `FeatureStatus { feature, enabled, download_size, install,
+backfill? }`, `Install` (`NotInstalled | Downloading { bytes, total } |
+Installed { size_bytes } | Failed { code }`, tagged by `state`), `Backfill
+{ done, total }` and `DownloadError` (`DownloadNetworkError`,
+`ChecksumMismatch`, `DiskFull`, `PermissionDenied`, `WriteFailed`). See
+"Search features" below.
+
 ## Database schema
 
 See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
 (`0001_init.sql`; `0002_files_indexes.sql` adds the partial indexes
 `idx_files_size`, for the move lookup, and `idx_files_pending`, which
-`next_pending` reads in order with `INDEXED BY`). `db::open()` registers `sqlite-vec`,
+`next_pending` reads in order with `INDEXED BY`; `0003_features_missing.sql`
+adds `files.features_missing`, see "Search features"). `db::open()` registers `sqlite-vec`,
 sets `journal_mode=WAL`/`synchronous=NORMAL`/`foreign_keys=ON`/`busy_timeout`,
 and runs any pending migrations (tracked in `schema_migrations`, applied at
 most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
@@ -46,8 +54,12 @@ most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
 `<config_dir>/config.toml`, shape in SPEC.md §5.2. `config::load()` writes
 defaults on first run; `config::save()` writes to a temp file and renames it
 into place so a crash mid-save can't corrupt the existing config.
-`Config::validate()` rejects malformed exclude globs and roots whose path
-doesn't exist on disk.
+`Config::validate()` rejects malformed exclude globs, roots whose path
+doesn't exist on disk, and `ui.transparency_intensity` outside 0.40–0.95.
+M6 adds `[features] meaning = true, image_text = true, image_visual = false`
+(desired state only) and `ui.language` (`system|en|es`),
+`ui.transparency_mode` (`match_system|always|never`) and
+`ui.transparency_intensity` (default 0.75). Unknown enum values fail to parse.
 The default `exclude_globs` also skip Unity's regenerated `Library` caches,
 `*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
 apply only when the config file is first written: an existing config keeps
@@ -364,6 +376,45 @@ on `roots::Health` and `Root`, with SQL twins the queries splice in
   roots are scanned and indexed; the others keep their rows.
 - **Searchable:** enabled and not `missing`. An unreadable root stays
   searchable, because its index is still right.
+
+## Search features (M6 Plan 1, ADR-0010)
+
+`features::Feature` is `meaning` (e5, manifest slot `text`, bit 1),
+`image_text` (OCR, slot `ocr`, bit 2) or `image_visual` (SigLIP 2, slot
+`image`, bit 4).
+
+- **`Components { text, ocr, image }`**, every member an `Option`, is what
+  `Engine::start(config, db_path, Components)` runs with. A missing component
+  is skipped: no `vec_text` rows without meaning (chunks still go to FTS), no
+  OCR chunks without image text, no `vec_image` without image visual.
+  `hybrid_search(conn, Option<&dyn TextEmbedder>, ..)` skips the text vector
+  query when meaning is off; old `vec_text` rows stay unused, never deleted.
+  `ModelIds` is all-optional: a component that is not running never triggers
+  a model-change re-queue.
+- **`load_components(&FeaturesConfig)`** loads each enabled, installed
+  feature (fakes under `MAGI_FAKE_EMBEDDER=1`, except OCR); a load failure
+  leaves that feature out with a warning.
+- **`files.features_missing`** records, in the file's own transaction, the
+  bits of the features it was indexed without. Only images extracted as
+  images can miss image features.
+- **Backfill:** a feature becomes available → the host restarts the engine →
+  `index::requeue_missing` re-queues `indexed` files carrying the bit of any
+  running feature and stores `meta.backfill_total_<feature>` → the normal
+  pipeline re-indexes them → the bit clears. `backfill_progress` is
+  `(total - left, total)` while files carrying the bit are `pending` or
+  `indexing`; an `error` row counts as done. A restart mid-backfill keeps the
+  original total.
+- **`Features`** (`Features::start(db_path)`) owns the complete state: desire
+  from `config.toml`, availability from disk (`installed_size`: every
+  manifest file at its final name with the manifest size) plus the download in
+  flight, and backfill progress from the database. One `features` thread runs
+  queued downloads one at a time and re-reads progress every 250 ms;
+  `subscribe()` sends the current `Vec<FeatureStatus>` and then every change,
+  always complete. `cancel_download` stops the running download and drops the
+  queue (all back to `NotInstalled`); `remove_download` deletes only
+  `<data_dir>/models/<slot>/` and is refused while that feature downloads.
+- **CLI:** `magi-cli features list | enable <f> | disable <f>
+  [--delete-download]`; `doctor` prints the same table.
 
 ## Engine (M5 Slice 3)
 

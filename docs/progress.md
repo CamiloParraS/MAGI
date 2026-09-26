@@ -2039,3 +2039,30 @@ Windows, Ubuntu 22.04 and macOS 14.
 | ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
 
 M5 is done, with the NFR-8 latency check carried over to M6.
+
+## M6 — Plan 1 (optional search features)
+
+Plan: `docs/superpowers/plans/2026-09-25-m6-plan1-optional-features.md`;
+ADR-0010. Core and CLI only; the Tauri host follows in Plan 2.
+
+| Behavior | Test |
+| --- | --- |
+| Config defaults for features and M6 UI settings | `config::tests::feature_and_ui_defaults_match_adr_0010` |
+| Features and UI fields round-trip with wire names | `config::tests::features_and_ui_fields_round_trip_with_their_wire_names` |
+| Transparency intensity outside 0.40–0.95 rejected | `config::tests::transparency_intensity_outside_its_range_is_rejected` |
+| Unknown language rejected | `config::tests::an_unknown_language_is_rejected_at_load` |
+| Feature wire names, bits and slots | `features::tests::features_round_trip_through_their_wire_names`, `each_feature_has_its_own_bit_and_slot` |
+| Installed means every file at manifest size | `features::tests::a_slot_with_every_file_at_its_manifest_size_is_installed`, `a_wrong_size_file_is_not_installed` |
+| Downloads report cumulative progress | `features::tests::download_entry_installs_every_file_and_reports_cumulative_progress` |
+| Download failures map to stable codes; cancel is not a failure | `features::tests::download_failures_map_to_stable_codes`, `a_cancelled_download_is_its_own_error_not_a_failure_code` |
+| Remove deletes only that slot | `features::tests::removing_a_download_deletes_only_that_slot_and_tolerates_absence` |
+| No features: keyword and filename search work | `tests/features.rs` `with_no_features_files_are_found_by_keyword_and_name` |
+| Turning OCR off keeps OCR text, re-reads nothing | `tests/features.rs` `turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing` |
+| Hybrid search without meaning uses keywords only | `search::tests::hybrid_search_without_a_text_embedder_uses_keywords_only` |
+| Files record the features they miss | `tests/features.rs` `files_indexed_without_a_feature_record_it`, `images_whose_content_is_not_extracted_do_not_miss_image_features` |
+| Enabling meaning embeds only the files missing it | `tests/features.rs` `enabling_meaning_embeds_only_the_files_missing_it` |
+| Backfill progress counts down, ignores errors, survives restart | `index::tests::backfill_progress_counts_down_and_ignores_failed_files`, `a_feature_that_is_not_running_queues_nothing` |
+| Complete status; download, failure, cancel, remove, set_enabled | `features::tests::status_reports_desire_availability_and_size_separately`, `a_download_reports_progress_then_installed`, `a_checksum_mismatch_is_failed_and_never_installed`, `cancel_clears_the_queue_and_a_later_download_works`, `remove_is_refused_while_downloading_and_deletes_only_the_download`, `set_enabled_persists_the_desire_and_leaves_the_install_alone` |
+| Backfill progress shows in status events | `features::tests::a_running_backfill_shows_in_status_and_events` |
+| Nothing loads for a feature that is off | `features::tests::nothing_loads_for_a_feature_that_is_off_or_not_installed` |
+| CLI lists, disables and persists; unknown feature names the valid ones | `magi-cli/tests/features.rs` `disabling_and_enabling_a_feature_is_listed_and_persisted`, `an_unknown_feature_is_an_error_naming_the_valid_ones` |

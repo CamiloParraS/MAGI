@@ -577,7 +577,8 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- keys: pipeline_version, text_model_id, image_model_id, ocr_engine_id, last_scan_id
+-- keys: pipeline_version, text_model_id, image_model_id, ocr_engine_id, last_scan_id,
+--       backfill_total_<feature> (ADR-0010: size of a running backfill)
 
 CREATE TABLE roots (
   id                INTEGER PRIMARY KEY,
@@ -608,7 +609,8 @@ CREATE TABLE files (
   pipeline_version INTEGER NOT NULL DEFAULT 0,
   seen_scan_id     INTEGER NOT NULL,
   indexed_at       INTEGER,
-  thumb_key        TEXT                            -- content-hash-based cache key
+  thumb_key        TEXT,                           -- content-hash-based cache key
+  features_missing INTEGER NOT NULL DEFAULT 0      -- ADR-0010 bits: 1 meaning, 2 image_text, 4 image_visual
 );
 CREATE INDEX idx_files_state ON files(state, next_attempt_at);
 CREATE INDEX idx_files_root  ON files(root_id);
@@ -672,7 +674,7 @@ All DTOs live in `magi-core/src/dto.rs`, derive `Serialize`, `Deserialize`, and 
 | `get_settings` / `update_settings(patch)`                                             | Config read/write with validation                                                                                                 |
 | `get_permissions_report`                                                              | → `PermissionIssue[]` with per-OS guidance and a settings deep link                                                               |
 | `list_errors(limit)` / `retry_errors`                                                 | Error management                                                                                                                  |
-| `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied`. Cancel returns to `NotInstalled`. |
+| `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, download_size, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied\|WriteFailed`. Cancel returns to `NotInstalled`. |
 | `clear_index`                                                                         | Deletes the DB and thumbnails, keeps config and models, then restarts indexing                                                    |
 
 `SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_url?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`
