@@ -78,6 +78,16 @@ impl Env {
         }
     }
 
+    fn search(&self, query: &str, limit: Option<u32>) -> Vec<SearchResult> {
+        self.host
+            .search(&SearchRequest {
+                query: query.into(),
+                limit,
+            })
+            .unwrap()
+            .results
+    }
+
     fn root(&self) -> &Path {
         self.root.path()
     }
@@ -87,13 +97,13 @@ impl Env {
     }
 
     fn hits(&self, query: &str) -> Vec<SearchResult> {
-        self.host
-            .search(&SearchRequest {
-                query: query.into(),
-                limit: None,
-            })
-            .unwrap()
-            .results
+        self.search(query, None)
+    }
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        self.host.shutdown();
     }
 }
 
@@ -259,4 +269,28 @@ fn search_falls_back_to_keywords_while_the_engine_is_down() {
         hits[0].match_sources,
         vec![magi_core::dto::MatchSource::Keyword]
     );
+}
+
+#[test]
+fn search_clamps_the_requested_limit() {
+    let env = Env::start(meaning_only());
+    env.write("a.txt", "zebra stripes");
+    env.write("b.txt", "zebra crossing");
+    wait_until(Duration::from_secs(30), "indexed", || {
+        env.hits("zebra").len() == 2
+    });
+    assert_eq!(env.search("zebra", Some(0)).len(), 1, "at least one");
+    assert_eq!(
+        env.search("zebra", Some(u32::MAX)).len(),
+        2,
+        "a huge limit still answers"
+    );
+}
+
+#[test]
+fn list_roots_reads_the_database_while_the_engine_is_down() {
+    let env = Env::start(meaning_only());
+    env.host.shutdown();
+    let roots = env.host.list_roots().unwrap();
+    assert_eq!(roots.len(), 1);
 }

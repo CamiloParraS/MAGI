@@ -17,8 +17,8 @@ use crate::config::{self, Config};
 use crate::db::{self, files};
 use crate::discovery::Kind;
 use crate::dto::{
-    FeatureStatus, FileError, IndexStatus, Install, MatchSource, SearchRequest, SearchResponse,
-    SearchResult, Snippet,
+    FeatureStatus, FileError, IndexStatus, Install, MatchSource, RootStatus, SearchRequest,
+    SearchResponse, SearchResult, Snippet,
 };
 use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
@@ -83,6 +83,8 @@ impl Host {
     /// Opens the features, then starts the engine
     /// on the supervisor thread; [`engine`](Self::engine) fails with
     /// `EngineStarting` until the first reconciliation scan is done.
+    /// `on_event` runs on the supervisor thread; never call
+    /// [`shutdown`](Self::shutdown) from it.
     pub fn start(paths: HostPaths, on_event: impl Fn(HostEvent) + Send + 'static) -> Result<Self> {
         let features = Features::start_with(
             &paths.db,
@@ -178,10 +180,12 @@ impl Host {
     /// keywords alone while it (re)starts. Indexing yields to it.
     pub fn search(&self, request: &SearchRequest) -> Result<SearchResponse> {
         let started = Instant::now();
+        // The webview sets it: bound it at the trust boundary.
         let limit = match request.limit {
             Some(limit) => limit,
             None => self.inner.load_config()?.ui.max_results,
-        };
+        }
+        .clamp(1, 500);
         let running = self.inner.running();
         let _yield = running.as_ref().map(|r| r.engine.search_pending().guard());
         let components = running.map(|r| r.components).unwrap_or_default();
@@ -205,6 +209,14 @@ impl Host {
 
     pub fn file_path(&self, file_id: i64) -> Result<PathBuf> {
         files::path_of(&lock(&self.inner.reader), file_id)
+    }
+
+    /// From the database, so it answers while the engine (re)starts.
+    pub fn list_roots(&self) -> Result<Vec<RootStatus>> {
+        Ok(db::roots::list(&lock(&self.inner.reader))?
+            .into_iter()
+            .map(RootStatus::from)
+            .collect())
     }
 
     pub fn list_errors(&self, limit: u32) -> Result<Vec<FileError>> {
@@ -306,10 +318,18 @@ fn supervise(
             select! {
                 recv(status_rx) -> status => match status {
                     Ok(status) => on_event(HostEvent::Status(status)),
-                    Err(_) => status_rx = crossbeam_channel::never(),
+                    Err(_) => {
+                        tracing::warn!("the engine's status channel closed");
+                        status_rx = crossbeam_channel::never();
+                    }
                 },
                 recv(features) -> status => match status {
                     Ok(status) => {
+                        // Only the newest state matters; the rest are stale.
+                        let status = std::iter::once(status)
+                            .chain(features.try_iter())
+                            .last()
+                            .unwrap_or_default();
                         let changed = inputs.as_ref() != Some(&engine_inputs(&status));
                         on_event(HostEvent::Features(status));
                         if changed {
@@ -322,14 +342,57 @@ fn supervise(
             }
         };
         shared.stop_engine();
+        // What queued up while the engine started or stopped: one restart
+        // covers them all.
+        let (next, folded) = coalesce(next, control.try_iter());
         match next {
             Control::Restart => {}
             Control::Clear(reply) => {
-                let _ = reply.send(clear(&shared.paths.db));
+                let result = clear(&shared.paths.db);
+                for other in folded {
+                    let _ = other.send(
+                        result
+                            .as_ref()
+                            .map(|_| ())
+                            .map_err(|e| Error::Engine(e.to_string())),
+                    );
+                }
+                let _ = reply.send(result);
             }
-            Control::Stop => return,
+            Control::Stop => {
+                for other in folded {
+                    let _ = other.send(Err(Error::Engine("the host is stopped".into())));
+                }
+                return;
+            }
         }
     }
+}
+
+/// The strongest of `first` and the queued controls: Stop > Clear > Restart.
+/// Returns the replies of the clears folded into it, which still need one.
+fn coalesce(
+    first: Control,
+    queued: impl Iterator<Item = Control>,
+) -> (Control, Vec<Sender<Result<()>>>) {
+    let rank = |c: &Control| match c {
+        Control::Restart => 0,
+        Control::Clear(_) => 1,
+        Control::Stop => 2,
+    };
+    let mut folded = Vec::new();
+    let next = queued.fold(first, |kept, c| {
+        let (kept, dropped) = if rank(&c) > rank(&kept) {
+            (c, kept)
+        } else {
+            (kept, c)
+        };
+        if let Control::Clear(reply) = dropped {
+            folded.push(reply);
+        }
+        kept
+    });
+    (next, folded)
 }
 
 /// Deletes every file with its chunks, vectors and thumbnail, and the
@@ -420,6 +483,33 @@ mod tests {
             page: None,
         };
         assert!(result_of(&conn, hit).unwrap().is_none());
+    }
+
+    #[test]
+    fn queued_controls_fold_into_the_strongest() {
+        let (a, _a) = crossbeam_channel::bounded(1);
+        let (b, _b) = crossbeam_channel::bounded(1);
+        let (next, folded) = coalesce(
+            Control::Restart,
+            [Control::Clear(a), Control::Restart, Control::Clear(b)].into_iter(),
+        );
+        assert!(matches!(next, Control::Clear(_)));
+        assert_eq!(folded.len(), 1, "the other clear still gets a reply");
+
+        let (c, _c) = crossbeam_channel::bounded(1);
+        let (next, folded) = coalesce(
+            Control::Clear(c),
+            [Control::Restart, Control::Stop, Control::Restart].into_iter(),
+        );
+        assert!(matches!(next, Control::Stop));
+        assert_eq!(folded.len(), 1);
+
+        let (next, folded) = coalesce(
+            Control::Restart,
+            [Control::Restart, Control::Restart].into_iter(),
+        );
+        assert!(matches!(next, Control::Restart));
+        assert!(folded.is_empty());
     }
 
     #[test]
