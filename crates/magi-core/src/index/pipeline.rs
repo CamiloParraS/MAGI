@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use crate::db::files::{self, FileRecord, FileState, StoredFile, upsert_file};
 use crate::db::roots;
 use crate::discovery::{self, Kind, WalkEntry, WalkOptions};
+use crate::dto::FileErrorCode;
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::extract::code::CodeExtractor;
@@ -19,7 +20,7 @@ use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
 use crate::features::Feature;
 use crate::ocr::{NoOcr, OcrEngine};
-use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{next_scan_id, reconcile_root, remove_unseen};
 
 use super::change::{self, Found};
@@ -264,8 +265,10 @@ pub(crate) enum Extracted {
     /// Read and extracted, ready to embed.
     Fresh(Box<Fresh>),
     /// Could not be read just now (I/O): try again later, with backoff.
-    /// `locked`: another program holds it open ([`platform::is_locked`]).
-    Retry { message: String, locked: bool },
+    Retry {
+        code: FileErrorCode,
+        message: String,
+    },
 }
 
 pub(crate) struct Fresh {
@@ -295,8 +298,8 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
     let entry = &job.entry;
     let s = &job.stored;
     let unreadable = |e: std::io::Error| Extracted::Retry {
+        code: FileErrorCode::classify_io(&e),
         message: e.to_string(),
-        locked: platform::is_locked(&e),
     };
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
@@ -513,7 +516,10 @@ pub(crate) fn store_embedded(
         lang: outcome.doc.lang.as_deref(),
         state: outcome.state,
         skip_reason: outcome.skip_reason,
-        error: outcome.error.as_deref(),
+        error: outcome
+            .error
+            .as_ref()
+            .map(|(code, text)| (*code, text.as_str())),
         // Only inserts use it, and the row exists (a result for a vanished
         // row is dropped): scans own `seen_scan_id`.
         seen_scan_id: 0,
@@ -542,10 +548,10 @@ fn index_file(ctx: &IndexContext, options: &IndexRootOptions, job: Job) -> Resul
             job: Box::new(job),
             state,
         },
-        Extracted::Retry { message, locked } => FileStep::Retry {
+        Extracted::Retry { code, message } => FileStep::Retry {
             file_id: job.stored.id,
+            code,
             message,
-            locked,
         },
         Extracted::Fresh(fresh) => {
             let embedded = embed(ctx, &job, *fresh, &|| {})?;
@@ -578,7 +584,7 @@ fn embed_chunks(
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "embedding failed");
                 outcome.state = FileState::Error;
-                outcome.error = Some(e.to_string());
+                outcome.error = Some((FileErrorCode::EmbedFailed, e.to_string()));
                 chunks.drain(..chunks.len() - 1);
                 return embedder.embed_passages(&[chunks[0].text.as_str()]);
             }
@@ -608,7 +614,7 @@ struct FileOutcome {
     kind: Kind,
     state: FileState,
     skip_reason: Option<&'static str>,
-    error: Option<String>,
+    error: Option<(FileErrorCode, String)>,
     content_hash: Option<[u8; 32]>,
     doc: ExtractedDoc,
 }
@@ -633,10 +639,10 @@ fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
     }
 }
 
-fn errored(kind: Kind, message: String) -> FileOutcome {
+fn errored(kind: Kind, code: FileErrorCode, message: String) -> FileOutcome {
     FileOutcome {
         state: FileState::Error,
-        error: Some(message),
+        error: Some((code, message)),
         ..indexed_no_chunks(kind)
     }
 }
@@ -770,7 +776,7 @@ fn extract_entry(
         },
         Err(e) => FileOutcome {
             content_hash,
-            ..errored(kind, e.to_string())
+            ..errored(kind, FileErrorCode::classify(&e), e.to_string())
         },
     })
 }

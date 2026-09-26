@@ -705,6 +705,10 @@ fn a_file_without_read_permission_becomes_error_and_the_others_continue() {
     assert_eq!(env.hits("public"), 1);
     assert_eq!(env.hits("classified"), 0);
     assert_eq!(engine.status().unwrap().errors, 1);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE error_code = 'permission_denied'"),
+        1
+    );
 
     // Readable again: only a manual retry brings it back.
     make_readable(&env.root().join("secret.txt"));

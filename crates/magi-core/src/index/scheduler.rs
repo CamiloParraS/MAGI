@@ -13,6 +13,7 @@ use rusqlite::Connection;
 
 use crate::db::files::{self, PendingFile};
 use crate::discovery::{self, WalkEntry};
+use crate::dto::FileErrorCode;
 use crate::error::Result;
 
 /// A file modified more recently than this is probably still being written.
@@ -70,7 +71,11 @@ pub enum Action {
     /// Gone from disk: delete its row.
     Delete(i64),
     /// Could not be stat'd for a reason that may pass: back off and retry.
-    Fail { id: i64, message: String },
+    Fail {
+        id: i64,
+        code: FileErrorCode,
+        message: String,
+    },
 }
 
 enum Hold {
@@ -270,6 +275,7 @@ pub(crate) fn gone_or_failed(id: i64, e: &std::io::Error) -> Action {
     } else {
         Action::Fail {
             id,
+            code: FileErrorCode::classify_io(e),
             message: e.to_string(),
         }
     }
@@ -494,7 +500,14 @@ mod tests {
     fn a_row_in_backoff_is_left_alone() {
         let f = Fixture::new();
         let id = f.queue("later.txt", "x");
-        files::record_failure(&f.conn, id, "locked", Now::current().unix_secs).unwrap();
+        files::record_failure(
+            &f.conn,
+            id,
+            FileErrorCode::ReadFailed,
+            "locked",
+            Now::current().unix_secs,
+        )
+        .unwrap();
         let mut s = Scheduler::new(8);
         let t0 = Now::current().plus(Duration::from_secs(10));
         s.poll(&f.conn, t0).unwrap();

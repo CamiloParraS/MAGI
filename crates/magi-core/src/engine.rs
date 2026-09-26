@@ -31,7 +31,7 @@ use crate::config::{Config, IndexingConfig};
 use crate::db::files::FileState;
 use crate::db::roots::{Health, Root};
 use crate::db::{self, files, meta, roots};
-use crate::dto::{IndexState, IndexStatus, RootStatus};
+use crate::dto::{FileErrorCode, IndexState, IndexStatus, RootStatus};
 use crate::error::{Error, Result};
 use crate::features::Components;
 use crate::index::lifecycle::{self, FileStep};
@@ -675,12 +675,16 @@ fn extract_worker(
                 job: Box::new(job),
                 state,
             },
-            Ok(Extracted::Retry { message, locked }) => FileStep::Retry {
+            Ok(Extracted::Retry { code, message }) => FileStep::Retry {
                 file_id: job.stored.id,
+                code,
                 message,
-                locked,
             },
-            Err(_) => FileStep::retry(job.stored.id, "extraction panicked".into()),
+            Err(_) => FileStep::retry(
+                job.stored.id,
+                FileErrorCode::Crashed,
+                "extraction panicked".into(),
+            ),
         };
         let _ = write_tx.send(next.into());
     }
@@ -712,7 +716,9 @@ fn embed_worker(
         }));
         let Ok(results) = result else {
             for id in ids {
-                let _ = write_tx.send(FileStep::retry(id, "embedding panicked".into()).into());
+                let _ = write_tx.send(
+                    FileStep::retry(id, FileErrorCode::Crashed, "embedding panicked".into()).into(),
+                );
             }
             continue;
         };
@@ -722,7 +728,9 @@ fn embed_worker(
                     job: Box::new(job),
                     embedded: Box::new(embedded),
                 },
-                Err(e) => FileStep::retry(job.stored.id, e.to_string()),
+                Err(e) => {
+                    FileStep::retry(job.stored.id, FileErrorCode::classify(&e), e.to_string())
+                }
             };
             let _ = write_tx.send(next.into());
         }

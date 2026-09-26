@@ -155,6 +155,112 @@ impl Snippet {
     }
 }
 
+/// Why a file failed (`files.error_code`, `list_errors`): a stable code the
+/// UI localizes. `files.error` keeps the diagnostic text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum FileErrorCode {
+    PermissionDenied,
+    /// Another program holds it open; retried, never given up on.
+    Locked,
+    ReadFailed,
+    /// Damaged or unsupported content (PDF, Office, image, HEIC, code).
+    ExtractFailed,
+    TimedOut,
+    /// An extractor or the embedder panicked.
+    Crashed,
+    EmbedFailed,
+    /// The index could not store it.
+    WriteFailed,
+    Other,
+}
+
+impl FileErrorCode {
+    pub const ALL: [Self; 9] = [
+        Self::PermissionDenied,
+        Self::Locked,
+        Self::ReadFailed,
+        Self::ExtractFailed,
+        Self::TimedOut,
+        Self::Crashed,
+        Self::EmbedFailed,
+        Self::WriteFailed,
+        Self::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PermissionDenied => "permission_denied",
+            Self::Locked => "locked",
+            Self::ReadFailed => "read_failed",
+            Self::ExtractFailed => "extract_failed",
+            Self::TimedOut => "timed_out",
+            Self::Crashed => "crashed",
+            Self::EmbedFailed => "embed_failed",
+            Self::WriteFailed => "write_failed",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn classify_io(error: &std::io::Error) -> Self {
+        if crate::platform::is_locked(error) {
+            Self::Locked
+        } else if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Self::PermissionDenied
+        } else {
+            Self::ReadFailed
+        }
+    }
+
+    pub fn classify(error: &crate::Error) -> Self {
+        use crate::Error as E;
+        match error {
+            E::Io { source, .. } => Self::classify_io(source),
+            E::ExtractionTimeout { .. } | E::ExtractionBacklog { .. } => Self::TimedOut,
+            E::ExtractionPanicked { .. } => Self::Crashed,
+            E::Pdf(_)
+            | E::Image(_)
+            | E::Heic(_)
+            | E::Office(_)
+            | E::Code(_)
+            | E::ImageTooLarge { .. } => Self::ExtractFailed,
+            E::Model(_) => Self::EmbedFailed,
+            E::Db(_) => Self::WriteFailed,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl rusqlite::ToSql for FileErrorCode {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl rusqlite::types::FromSql for FileErrorCode {
+    /// A code from a newer build reads as `Other` rather than failing the row.
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let name = value.as_str()?;
+        Ok(Self::ALL
+            .into_iter()
+            .find(|c| c.as_str() == name)
+            .unwrap_or(Self::Other))
+    }
+}
+
+/// A file in `error` (`list_errors`). The UI shows `code`, localized;
+/// `detail` is diagnostic text for logs and "copy details".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct FileError {
+    pub file_id: i64,
+    pub path: String,
+    pub code: FileErrorCode,
+    pub detail: String,
+    pub attempts: u32,
+}
+
 /// A failed command as a stable code plus parameters (SPEC.md §5.7 locale
 /// neutrality). The UI localizes it; `Internal.detail` is for logs only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -257,6 +363,48 @@ mod tests {
             Snippet::from_marked("\u{E000}open").highlights,
             vec![[0, 4]]
         );
+    }
+
+    #[test]
+    fn file_error_codes_classify_failures_and_keep_one_name() {
+        use std::io::{Error as IoError, ErrorKind};
+        let io = |kind| crate::Error::Io {
+            path: "/f".into(),
+            source: IoError::from(kind),
+        };
+        assert_eq!(
+            FileErrorCode::classify(&io(ErrorKind::PermissionDenied)),
+            FileErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            FileErrorCode::classify(&io(ErrorKind::UnexpectedEof)),
+            FileErrorCode::ReadFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::ExtractionTimeout {
+                path: "/f".into(),
+                seconds: 30
+            }),
+            FileErrorCode::TimedOut
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Pdf("bad xref".into())),
+            FileErrorCode::ExtractFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Model("nan".into())),
+            FileErrorCode::EmbedFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Db(rusqlite::Error::InvalidQuery)),
+            FileErrorCode::WriteFailed
+        );
+        for code in FileErrorCode::ALL {
+            assert_eq!(
+                serde_json::to_value(code).unwrap(),
+                serde_json::json!(code.as_str())
+            );
+        }
     }
 
     #[test]

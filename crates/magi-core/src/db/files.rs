@@ -6,6 +6,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{Connection, params};
 
 use crate::db::roots::indexable_sql;
+use crate::dto::{FileError, FileErrorCode};
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::extract::RawChunk;
@@ -67,7 +68,7 @@ pub struct FileRecord<'a> {
     pub lang: Option<&'a str>,
     pub state: FileState,
     pub skip_reason: Option<&'a str>,
-    pub error: Option<&'a str>,
+    pub error: Option<(FileErrorCode, &'a str)>,
     pub seen_scan_id: i64,
     /// blake3 of the file's bytes; `None` when the content was never read.
     pub content_hash: Option<&'a [u8]>,
@@ -119,8 +120,8 @@ pub fn upsert_file(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
             lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at,
-            content_hash, thumb_key, features_missing
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15, ?17)
+            content_hash, thumb_key, features_missing, error_code
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15, ?17, ?18)
          ON CONFLICT(path) DO UPDATE SET
             root_id = excluded.root_id,
             rel_path = excluded.rel_path,
@@ -133,6 +134,7 @@ pub fn upsert_file(
             state = excluded.state,
             skip_reason = excluded.skip_reason,
             error = excluded.error,
+            error_code = excluded.error_code,
             content_hash = excluded.content_hash,
             thumb_key = excluded.thumb_key,
             features_missing = excluded.features_missing,
@@ -153,12 +155,13 @@ pub fn upsert_file(
             record.lang,
             record.state,
             record.skip_reason,
-            record.error,
+            record.error.map(|(_, text)| text),
             record.seen_scan_id,
             record.content_hash,
             record.thumb_key,
             crate::index::PIPELINE_VERSION,
             record.features_missing,
+            record.error.map(|(code, _)| code),
         ],
         |row| row.get(0),
     )?;
@@ -401,17 +404,24 @@ pub enum Failure {
     GaveUp { attempts: u32 },
 }
 
-pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
+pub fn record_failure(
+    conn: &Connection,
+    file_id: i64,
+    code: FileErrorCode,
+    message: &str,
+    now: i64,
+) -> Result<Failure> {
     let attempts = attempts_of(conn, file_id)? + 1;
     if attempts >= MAX_ATTEMPTS {
         conn.execute(
-            "UPDATE files SET state = 'error', attempts = ?2, error = ?3, next_attempt_at = NULL
+            "UPDATE files SET state = 'error', attempts = ?2, error = ?3, error_code = ?4,
+                    next_attempt_at = NULL
              WHERE id = ?1",
-            params![file_id, attempts, message],
+            params![file_id, attempts, message, code],
         )?;
         return Ok(Failure::GaveUp { attempts });
     }
-    retry_later(conn, file_id, attempts, message, now)
+    retry_later(conn, file_id, code, attempts, message, now)
 }
 
 /// A file another program holds open (Windows sharing or lock violation):
@@ -420,9 +430,15 @@ pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) 
 ///
 /// ponytail: shares `attempts` with real failures, so one real failure right
 /// after a long lock gives up at once; a separate lock counter if that bites.
-pub fn record_locked(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
+pub fn record_locked(
+    conn: &Connection,
+    file_id: i64,
+    code: FileErrorCode,
+    message: &str,
+    now: i64,
+) -> Result<Failure> {
     let attempts = (attempts_of(conn, file_id)? + 1).min(MAX_ATTEMPTS - 1);
-    retry_later(conn, file_id, attempts, message, now)
+    retry_later(conn, file_id, code, attempts, message, now)
 }
 
 fn attempts_of(conn: &Connection, file_id: i64) -> Result<u32> {
@@ -436,15 +452,17 @@ fn attempts_of(conn: &Connection, file_id: i64) -> Result<u32> {
 fn retry_later(
     conn: &Connection,
     file_id: i64,
+    code: FileErrorCode,
     attempts: u32,
     message: &str,
     now: i64,
 ) -> Result<Failure> {
     let next_attempt_at = now + backoff_secs(attempts);
     conn.execute(
-        "UPDATE files SET state = 'pending', attempts = ?2, error = ?3, next_attempt_at = ?4
+        "UPDATE files SET state = 'pending', attempts = ?2, error = ?3, error_code = ?5,
+                next_attempt_at = ?4
          WHERE id = ?1",
-        params![file_id, attempts, message, next_attempt_at],
+        params![file_id, attempts, message, next_attempt_at, code],
     )?;
     Ok(Failure::Retry {
         attempts,
@@ -725,6 +743,26 @@ pub fn retry_errors(conn: &Connection) -> Result<usize> {
     )?)
 }
 
+/// Files in `error`, newest first (SPEC.md §5.7 `list_errors`).
+pub fn list_errors(conn: &Connection, limit: u32) -> Result<Vec<FileError>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, path, COALESCE(error_code, 'other'), COALESCE(error, ''), attempts
+         FROM files WHERE state = 'error' ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(FileError {
+                file_id: row.get(0)?,
+                path: row.get(1)?,
+                code: row.get(2)?,
+                detail: row.get(3)?,
+                attempts: row.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// How many files are in each state.
 pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<FileState, u64>> {
     let mut stmt = conn.prepare_cached("SELECT state, COUNT(*) FROM files GROUP BY state")?;
@@ -790,6 +828,42 @@ mod tests {
             thumb_key: None,
             features_missing: 0,
         }
+    }
+
+    #[test]
+    fn a_failure_records_its_code_and_a_clean_index_clears_it() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let mut record = sample_record(&path, &rel);
+        record.state = FileState::Error;
+        record.error = Some((FileErrorCode::ExtractFailed, "bad pdf xref"));
+        let id = upsert(&mut conn, &record, &[], &[]).unwrap();
+        let listed = &list_errors(&conn, 10).unwrap()[0];
+        assert_eq!(
+            (listed.file_id, listed.code, listed.detail.as_str()),
+            (id, FileErrorCode::ExtractFailed, "bad pdf xref")
+        );
+
+        record_failure(&conn, id, FileErrorCode::PermissionDenied, "denied", 1000).unwrap();
+        let code = |conn: &Connection| {
+            conn.query_row(
+                "SELECT error_code FROM files WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<FileErrorCode>>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(code(&conn), Some(FileErrorCode::PermissionDenied));
+
+        record.state = FileState::Indexed;
+        record.error = None;
+        upsert(&mut conn, &record, &[], &[]).unwrap();
+        assert_eq!(
+            code(&conn),
+            None,
+            "a clean index clears the code with the text"
+        );
     }
 
     #[test]
@@ -1199,7 +1273,7 @@ mod tests {
         mark_indexing(&conn, id).unwrap();
 
         assert_eq!(
-            record_locked(&conn, id, "locked", 1000).unwrap(),
+            record_locked(&conn, id, FileErrorCode::Locked, "locked", 1000).unwrap(),
             Failure::Retry {
                 attempts: 1,
                 next_attempt_at: 1030
@@ -1207,7 +1281,7 @@ mod tests {
         );
         for now in 2000..2010 {
             assert_eq!(
-                record_locked(&conn, id, "locked", now).unwrap(),
+                record_locked(&conn, id, FileErrorCode::Locked, "locked", now).unwrap(),
                 Failure::Retry {
                     attempts: MAX_ATTEMPTS - 1,
                     next_attempt_at: now + 120
@@ -1248,7 +1322,7 @@ mod tests {
         let broken = add_file(&mut conn, 1, "broken.txt", 1, "x");
         let fine = add_file(&mut conn, 1, "fine.txt", 2, "y");
         for now in [1000, 2000, 3000] {
-            record_failure(&conn, broken, "unreadable", now).unwrap();
+            record_failure(&conn, broken, FileErrorCode::ReadFailed, "unreadable", now).unwrap();
         }
         assert_eq!(
             count_states(&conn).unwrap().get(&FileState::Error),
@@ -1294,14 +1368,14 @@ mod tests {
         mark_indexing(&conn, id).unwrap();
 
         assert_eq!(
-            record_failure(&conn, id, "locked", 1000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "locked", 1000).unwrap(),
             Failure::Retry {
                 attempts: 1,
                 next_attempt_at: 1030
             }
         );
         assert_eq!(
-            record_failure(&conn, id, "locked", 2000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "locked", 2000).unwrap(),
             Failure::Retry {
                 attempts: 2,
                 next_attempt_at: 2120
@@ -1314,7 +1388,7 @@ mod tests {
         assert_eq!(state(&conn), "pending");
 
         assert_eq!(
-            record_failure(&conn, id, "still locked", 3000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "still locked", 3000).unwrap(),
             Failure::GaveUp { attempts: 3 }
         );
         assert_eq!(state(&conn), "error");
