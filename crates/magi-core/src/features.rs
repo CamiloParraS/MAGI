@@ -15,9 +15,12 @@ use crate::dto::{Backfill, DownloadError, FeatureStatus, Install};
 use crate::embed::manager::{
     ByteFetcher, ModelEntry, ModelManifest, UreqFetcher, download_with_fetcher, models_root,
 };
-use crate::embed::{ImageEmbedder, TextEmbedder};
+use crate::embed::{
+    E5Embedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder, SigLipEmbedder, TextEmbedder,
+};
 use crate::error::{Error, Result};
 use crate::ocr::OcrEngine;
+use crate::ocr::paddle::PaddleOcr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +97,65 @@ impl Components {
         }
         on
     }
+}
+
+/// Loads what each enabled, installed feature needs. `MAGI_FAKE_EMBEDDER=1`
+/// (SPEC.md §4.5) swaps in the deterministic fakes for meaning and image
+/// visual whether installed or not; there is no fake OCR. A feature whose
+/// files fail to load is left out with a warning rather than failing startup.
+pub fn load_components(config: &crate::config::FeaturesConfig) -> Components {
+    let fake = std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1");
+    let manifest = match ModelManifest::load() {
+        Ok(m) => Some(m),
+        Err(e) => {
+            tracing::warn!(error = %e, "model manifest unreadable; no search features");
+            None
+        }
+    };
+    let root = models_root();
+    let installed = |f: Feature| {
+        manifest
+            .as_ref()
+            .and_then(|m| m.slot(f.slot()))
+            .and_then(|e| installed_size(&root, e))
+            .is_some()
+    };
+    let wanted =
+        |f: Feature| config.enabled(f) && (installed(f) || (fake && f != Feature::ImageText));
+
+    let text: Option<Arc<dyn TextEmbedder>> = if !wanted(Feature::Meaning) {
+        None
+    } else if fake {
+        Some(Arc::new(FakeEmbedder))
+    } else {
+        match E5Embedder::load() {
+            Ok(e) => Some(Arc::new(e)),
+            Err(e) => {
+                tracing::warn!(error = %e, "search by meaning not loaded");
+                None
+            }
+        }
+    };
+    let ocr: Option<Arc<dyn OcrEngine>> = if !wanted(Feature::ImageText) {
+        None
+    } else {
+        match PaddleOcr::load() {
+            Ok(o) => Some(Arc::new(o)),
+            Err(e) => {
+                tracing::warn!(error = %e, "reading text in images not loaded");
+                None
+            }
+        }
+    };
+    // `SigLipEmbedder::new()` is lazy: a broken install shows up at first use.
+    let image: Option<Arc<dyn ImageEmbedder>> = if !wanted(Feature::ImageVisual) {
+        None
+    } else if fake {
+        Some(Arc::new(FakeImageEmbedder))
+    } else {
+        Some(Arc::new(SigLipEmbedder::new()))
+    };
+    Components { text, ocr, image }
 }
 
 /// Bytes on disk when every file of `entry` is at its final name with the
@@ -850,5 +912,17 @@ mod tests {
             s[0].backfill,
             Some(crate::dto::Backfill { done: 0, total: 1 })
         );
+    }
+
+    #[test]
+    fn nothing_loads_for_a_feature_that_is_off_or_not_installed() {
+        // MAGI_DATA_DIR is not a test-controlled dir here; with fakes off and
+        // every feature disabled nothing is even looked up.
+        let off = crate::config::FeaturesConfig {
+            meaning: false,
+            image_text: false,
+            image_visual: false,
+        };
+        assert!(load_components(&off).running().is_empty());
     }
 }

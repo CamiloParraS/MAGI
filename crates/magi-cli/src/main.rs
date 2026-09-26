@@ -9,9 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use magi_core::dto::{IndexStatus, RootStatus};
+use magi_core::dto::Install;
+use magi_core::dto::{FeatureStatus, IndexStatus, RootStatus};
 use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
 use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
+use magi_core::features::{Components, Feature, Features, load_components};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
 use magi_core::search::fts::search_fts;
@@ -58,6 +60,26 @@ enum Command {
         #[arg(long)]
         corpus: PathBuf,
     },
+    /// Show and change the optional search features (ADR-0010).
+    Features {
+        #[command(subcommand)]
+        action: FeaturesAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum FeaturesAction {
+    List,
+    /// Turn a feature on, downloading it first if needed.
+    Enable {
+        feature: String,
+    },
+    Disable {
+        feature: String,
+        /// Also delete its downloaded files (indexed data is kept).
+        #[arg(long)]
+        delete_download: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -80,6 +102,7 @@ fn main() -> anyhow::Result<()> {
         Command::Daemon { stats } => daemon_cmd(stats)?,
         Command::Search { query, mode, limit } => search_cmd(&query, &mode, limit)?,
         Command::Eval { queries, corpus } => eval::eval_cmd(queries, corpus)?,
+        Command::Features { action } => features_cmd(action)?,
     }
     Ok(())
 }
@@ -98,7 +121,80 @@ fn doctor() -> anyhow::Result<()> {
     if let Some(limit) = magi_core::platform::inotify_watch_limit() {
         println!("inotify max_user_watches: {limit}");
     }
+    print_features(&Features::start(&db_path())?.status()?);
     Ok(())
+}
+
+fn features_cmd(action: FeaturesAction) -> anyhow::Result<()> {
+    std::fs::create_dir_all(paths::data_dir())?;
+    let features = Features::start(&db_path())?;
+    match action {
+        FeaturesAction::List => print_features(&features.status()?),
+        FeaturesAction::Enable { feature } => {
+            let feature: Feature = feature.parse()?;
+            features.set_enabled(feature, true)?;
+            let installed = |s: &[FeatureStatus]| {
+                s.iter()
+                    .any(|x| x.feature == feature && matches!(x.install, Install::Installed { .. }))
+            };
+            if !installed(&features.status()?) {
+                let rx = features.subscribe();
+                features.download(feature)?;
+                for s in rx {
+                    let this = s
+                        .iter()
+                        .find(|x| x.feature == feature)
+                        .map(|x| x.install.clone());
+                    match this {
+                        Some(Install::Downloading { bytes, total }) => println!(
+                            "downloading {}: {} / {} MB",
+                            feature.as_str(),
+                            bytes >> 20,
+                            total >> 20
+                        ),
+                        Some(Install::Failed { code }) => {
+                            anyhow::bail!("download failed: {code:?}")
+                        }
+                        Some(Install::Installed { .. }) => break,
+                        _ => {}
+                    }
+                }
+            }
+            println!("{} on", feature.as_str());
+        }
+        FeaturesAction::Disable {
+            feature,
+            delete_download,
+        } => {
+            let feature: Feature = feature.parse()?;
+            features.set_enabled(feature, false)?;
+            if delete_download {
+                features.remove_download(feature)?;
+            }
+            println!("{} off", feature.as_str());
+        }
+    }
+    Ok(())
+}
+
+/// One line per feature: name, on/off, install state, backfill.
+fn print_features(status: &[FeatureStatus]) {
+    for s in status {
+        let install = match &s.install {
+            Install::NotInstalled => format!("not installed ({} MB)", s.download_size >> 20),
+            Install::Downloading { bytes, total } => {
+                format!("downloading {} / {} MB", bytes >> 20, total >> 20)
+            }
+            Install::Installed { size_bytes } => format!("installed ({} MB)", size_bytes >> 20),
+            Install::Failed { code } => format!("failed: {code:?}"),
+        };
+        let backfill = s
+            .backfill
+            .map(|b| format!("\tbackfill {}/{}", b.done, b.total))
+            .unwrap_or_default();
+        let on = if s.enabled { "on" } else { "off" };
+        println!("{}\t{on}\t{install}{backfill}", s.feature.as_str());
+    }
 }
 
 fn roots(action: RootsAction) -> anyhow::Result<()> {
@@ -173,7 +269,7 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
     let config = config::load()?;
-    let embedder = embedder_from_env()?;
+    let components = load_components(&config.features);
 
     let root_row = match db::roots::add(&conn, &root) {
         Ok(r) => r,
@@ -196,10 +292,10 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
         &root_row.path,
         &options,
         &IndexContext {
-            embedder: Some(embedder.clone()),
-            ocr: Some(ocr_from_env()),
-            image_gate: Default::default(),
-            image_embedder: Some(image_embedder_from_env()),
+            embedder: components.text,
+            ocr: components.ocr,
+            image_embedder: components.image,
+            ..IndexContext::default()
         },
     )?;
 
@@ -218,15 +314,7 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
 fn daemon_cmd(stats: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let config = config::load()?;
-    let engine = Engine::start(
-        &config,
-        &db_path(),
-        magi_core::features::Components {
-            text: Some(embedder_from_env()?),
-            image: Some(image_embedder_from_env()),
-            ocr: Some(ocr_from_env()),
-        },
-    )?;
+    let engine = Engine::start(&config, &db_path(), load_components(&config.features))?;
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
         let stop = stop.clone();
@@ -366,11 +454,16 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
             }
         }
         "hybrid" => {
-            let embedder = embedder_from_env()?;
+            let Components { text, image, .. } = load_components(&config::load()?.features);
+            let Some(embedder) = text else {
+                anyhow::bail!(
+                    "search by meaning is not installed; run: magi-cli features enable meaning"
+                );
+            };
             let hits = magi_core::search::hybrid_search(
                 &conn,
                 Some(&OneShotQuery(embedder.as_ref())),
-                Some(image_embedder_from_env().as_ref()),
+                image.as_deref(),
                 query,
                 limit,
             )?;
