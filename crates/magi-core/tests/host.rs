@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use magi_core::config::{Config, FeaturesConfig};
+use magi_core::dto::{SearchRequest, SearchResult};
 use magi_core::features::Feature;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
@@ -84,6 +85,16 @@ impl Env {
     fn write(&self, name: &str, text: &str) {
         std::fs::write(self.root().join(name), text).unwrap();
     }
+
+    fn hits(&self, query: &str) -> Vec<SearchResult> {
+        self.host
+            .search(&SearchRequest {
+                query: query.into(),
+                limit: None,
+            })
+            .unwrap()
+            .results
+    }
 }
 
 #[test]
@@ -125,4 +136,47 @@ fn shutdown_stops_the_engine() {
         env.host.engine(),
         Err(magi_core::Error::EngineStarting)
     ));
+}
+
+#[test]
+fn search_returns_metadata_highlights_and_sources() {
+    let env = Env::start(meaning_only());
+    env.write("invoice.txt", "the quarterly invoice is due");
+    wait_until(Duration::from_secs(30), "the file to be searchable", || {
+        !env.hits("quarterly").is_empty()
+    });
+    let hit = &env.hits("quarterly")[0];
+    assert_eq!(
+        (hit.file_name.as_str(), hit.kind),
+        ("invoice.txt", magi_core::discovery::Kind::Text)
+    );
+    assert!(hit.modified_at > 0);
+    let snippet = hit.snippet.as_ref().unwrap();
+    assert_eq!(snippet.highlights.len(), 1);
+    assert!(
+        hit.match_sources
+            .contains(&magi_core::dto::MatchSource::Keyword)
+    );
+    assert_eq!(
+        env.host.file_path(hit.file_id).unwrap(),
+        magi_core::paths::canonicalize(env.root())
+            .unwrap()
+            .join("invoice.txt")
+    );
+}
+
+#[test]
+fn search_falls_back_to_keywords_while_the_engine_is_down() {
+    let env = Env::start(meaning_only());
+    env.write("a.txt", "zebra stripes");
+    wait_until(Duration::from_secs(30), "indexed", || {
+        !env.hits("zebra").is_empty()
+    });
+    env.host.shutdown();
+    let hits = env.hits("zebra");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].match_sources,
+        vec![magi_core::dto::MatchSource::Keyword]
+    );
 }

@@ -8,15 +8,23 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender, select};
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::config::{self, Config};
-use crate::dto::{FeatureStatus, IndexStatus, Install};
+use crate::db::{self, files};
+use crate::discovery::Kind;
+use crate::dto::{
+    FeatureStatus, FileError, IndexStatus, Install, MatchSource, SearchRequest, SearchResponse,
+    SearchResult, Snippet,
+};
 use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
 use crate::error::{Error, Result};
 use crate::features::{Components, Feature, Features, load_components};
+use crate::search::{SearchHit, hybrid_search};
 
 pub enum HostEvent {
     Status(IndexStatus),
@@ -51,6 +59,8 @@ struct Shared {
     config: Mutex<()>,
     control: Sender<Control>,
     supervisor: Mutex<Option<JoinHandle<()>>>,
+    /// Search reads here, never the engine's connections (`query_only`).
+    reader: Mutex<Connection>,
 }
 
 #[derive(Clone)]
@@ -81,6 +91,8 @@ impl Host {
             Arc::new(UreqFetcher),
         )?;
         let feature_rx = features.subscribe();
+        let reader = db::open(&paths.db)?;
+        reader.pragma_update(None, "query_only", true)?;
         let (control, control_rx) = crossbeam_channel::unbounded();
         let host = Self {
             inner: Arc::new(Shared {
@@ -90,6 +102,7 @@ impl Host {
                 config: Mutex::new(()),
                 control,
                 supervisor: Mutex::new(None),
+                reader: Mutex::new(reader),
             }),
         };
         let shared = host.inner.clone();
@@ -126,6 +139,43 @@ impl Host {
     pub fn set_feature_enabled(&self, feature: Feature, on: bool) -> Result<()> {
         let _config = lock(&self.inner.config);
         self.inner.features.set_enabled(feature, on)
+    }
+
+    /// Hybrid search with whatever features the running engine has, or
+    /// keywords alone while it (re)starts. Indexing yields to it.
+    pub fn search(&self, request: &SearchRequest) -> Result<SearchResponse> {
+        let started = Instant::now();
+        let limit = match request.limit {
+            Some(limit) => limit,
+            None => self.inner.load_config()?.ui.max_results,
+        };
+        let running = self.inner.running();
+        let _yield = running.as_ref().map(|r| r.engine.search_pending().guard());
+        let components = running.map(|r| r.components).unwrap_or_default();
+        let conn = lock(&self.inner.reader);
+        let hits = hybrid_search(
+            &conn,
+            components.text.as_deref(),
+            components.image.as_deref(),
+            &request.query,
+            limit,
+        )?;
+        let mut results = Vec::with_capacity(hits.len());
+        for hit in hits {
+            results.extend(result_of(&conn, hit)?);
+        }
+        Ok(SearchResponse {
+            results,
+            took_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub fn file_path(&self, file_id: i64) -> Result<PathBuf> {
+        files::path_of(&lock(&self.inner.reader), file_id)
+    }
+
+    pub fn list_errors(&self, limit: u32) -> Result<Vec<FileError>> {
+        files::list_errors(&lock(&self.inner.reader), limit)
     }
 
     /// Stops a running download (its partial files stay), then the engine
@@ -246,6 +296,49 @@ fn supervise(
     }
 }
 
+/// Joins in what the UI shows. `None` when the file was deleted after it
+/// was ranked: that result is dropped, not the search.
+fn result_of(conn: &Connection, hit: SearchHit) -> Result<Option<SearchResult>> {
+    let Some((file_name, kind, mtime_ns, thumb_key)) = conn
+        .query_row(
+            "SELECT file_name, kind, mtime_ns, thumb_key FROM files WHERE id = ?1",
+            [hit.file_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let visual_only = hit.match_sources == ["visual"];
+    Ok(Some(SearchResult {
+        file_id: hit.file_id,
+        path: hit.path.to_string_lossy().into_owned(),
+        file_name,
+        kind: serde_json::from_value(serde_json::Value::String(kind)).unwrap_or(Kind::Other),
+        score: hit.score,
+        snippet: (!visual_only).then(|| Snippet::from_marked(&hit.snippet)),
+        page: hit.page,
+        thumb_path: thumb_key.map(|key| {
+            crate::thumbs::thumb_path(&key)
+                .to_string_lossy()
+                .into_owned()
+        }),
+        modified_at: mtime_ns / 1_000_000,
+        match_sources: hit
+            .match_sources
+            .iter()
+            .filter_map(|s| MatchSource::from_wire(s))
+            .collect(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +352,21 @@ mod tests {
             install,
             backfill,
         }]
+    }
+
+    #[test]
+    fn a_hit_whose_file_is_gone_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::open(&dir.path().join("magi.db")).unwrap();
+        let hit = crate::search::SearchHit {
+            file_id: 42,
+            path: PathBuf::from("/gone.txt"),
+            score: 1.0,
+            snippet: "x".into(),
+            match_sources: vec!["keyword"],
+            page: None,
+        };
+        assert!(result_of(&conn, hit).unwrap().is_none());
     }
 
     #[test]

@@ -214,6 +214,19 @@ pub fn upsert_file(
     Ok(file_id)
 }
 
+/// Where a file is, for `open_file`/`reveal_file`: the UI never sends paths.
+pub fn path_of(conn: &Connection, file_id: i64) -> Result<PathBuf> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT path FROM files WHERE id = ?1",
+        params![file_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .map(PathBuf::from)
+    .ok_or(crate::error::Error::FileIdNotFound(file_id))
+}
+
 pub struct FileRow {
     pub id: i64,
     pub path: PathBuf,
@@ -783,6 +796,7 @@ pub fn count_chunks(conn: &Connection) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
 
     fn upsert(
         conn: &mut Connection,
@@ -828,6 +842,19 @@ mod tests {
             thumb_key: None,
             features_missing: 0,
         }
+    }
+
+    #[test]
+    fn paths_are_resolved_by_id() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let id = upsert(&mut conn, &sample_record(&path, &rel), &[], &[]).unwrap();
+        assert_eq!(path_of(&conn, id).unwrap(), path);
+        assert!(matches!(
+            path_of(&conn, id + 1),
+            Err(Error::FileIdNotFound(_))
+        ));
     }
 
     #[test]

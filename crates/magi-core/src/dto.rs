@@ -261,6 +261,69 @@ pub struct FileError {
     pub attempts: u32,
 }
 
+/// A search query (`search`, SPEC.md §5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct SearchRequest {
+    pub query: String,
+    /// `ui.max_results` when `null`.
+    pub limit: Option<u32>,
+}
+
+/// Why a result matched (SPEC.md §5.6): the UI shows a badge per source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum MatchSource {
+    Keyword,
+    Semantic,
+    Visual,
+    Ocr,
+    Qr,
+    Filename,
+}
+
+impl MatchSource {
+    /// `search::SearchHit::match_sources` names.
+    pub fn from_wire(name: &str) -> Option<Self> {
+        Some(match name {
+            "keyword" => Self::Keyword,
+            "semantic" => Self::Semantic,
+            "visual" => Self::Visual,
+            "ocr" => Self::Ocr,
+            "qr" => Self::Qr,
+            "filename" => Self::Filename,
+            _ => return None,
+        })
+    }
+}
+
+/// One search result with what the UI needs to render it (`search`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct SearchResult {
+    pub file_id: i64,
+    pub path: String,
+    pub file_name: String,
+    pub kind: crate::discovery::Kind,
+    pub score: f64,
+    /// `None` for a match on the image alone.
+    pub snippet: Option<Snippet>,
+    pub page: Option<i64>,
+    /// Inside the thumbnail cache; `lib/ipc.ts` turns it into an asset URL.
+    pub thumb_path: Option<String>,
+    /// Unix milliseconds.
+    pub modified_at: i64,
+    pub match_sources: Vec<MatchSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub took_ms: u64,
+}
+
 /// A failed command as a stable code plus parameters (SPEC.md §5.7 locale
 /// neutrality). The UI localizes it; `Internal.detail` is for logs only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
