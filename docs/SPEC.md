@@ -90,8 +90,8 @@ Read this entire file before writing code. It is the source of truth; if code an
 | FR-6  | Each result shows: file name, path, type icon or thumbnail, matched snippet with highlights, page number (PDF), modified date.                                                                                                                                                                                                                                                                                                                                       |
 | FR-7  | Global hotkey opens a Spotlight-style search window. `Enter` opens the file with the default app; `Ctrl/Cmd+Enter` reveals it in the file manager.                                                                                                                                                                                                                                                                                                                   |
 | FR-8  | Tray/menu-bar icon with: open search, pause/resume indexing, settings, status line, quit.                                                                                                                                                                                                                                                                                                                                                                            |
-| FR-9  | Settings: roots, exclusion globs, enabled file types, max file size, hotkey, pause-on-battery, launch-at-login, model status, index stats, error list with retry, "clear index".                                                                                                                                                                                                                                                                                     |
-| FR-10 | First-run onboarding: choose folders → permission check → consent + model download (sizes shown) → initial indexing progress (window can be closed; indexing continues in background).                                                                                                                                                                                                                                                                               |
+| FR-9  | Settings: roots, exclusion globs, enabled file types, max file size, hotkey, pause-on-battery, launch-at-login, search features (enable/disable, download status and size, remove download; ADR-0010), language, window background, index stats, error list with retry, "clear index". |
+| FR-10 | First-run onboarding: choose folders → permission check → choose search features with consent to download (sizes shown; "Search by meaning" and "Read text in images" pre-selected, "Find images by what they show" not) → "Start with your computer" (checked) → initial indexing progress (window can be closed; indexing continues in background). Every search feature is optional; with none installed, search is keyword + filename (ADR-0010). |
 | FR-11 | Per-root status visible to the user: `ok`, `permission_denied`, `missing`, `watch_failed (polling)`.                                                                                                                                                                                                                                                                                                                                                                 |
 | FR-12 | CLI (`magi-cli`) exposing indexing, search, diagnostics, and evaluation for development and testing.                                                                                                                                                                                                                                                                                                                                                                 |
 
@@ -105,7 +105,7 @@ Read this entire file before writing code. It is the source of truth; if code an
 | NFR-4  | Change-to-searchable latency, single small text file, idle system          | ≤ 10 s                                                                                                                                                |
 | NFR-5  | Crash safety                                                               | No index corruption after `kill -9` at any point; indexing resumes on restart                                                                         |
 | NFR-6  | Installer size (models excluded)                                           | ≤ 80 MB                                                                                                                                               |
-| NFR-7  | Total model download                                                       | Hard limit ≤ 1 GB, target ≤ 700 MB (quantized models; record exact sizes)                                                                             |
+| NFR-7  | Total model download | Hard limit ≤ 1 GB, target ≤ 700 MB for all features (quantized models; record exact sizes). Default onboarding selection ≈ 148 MB (ADR-0010) |
 | NFR-8  | Background politeness                                                      | Indexing threads run at low OS priority; ONNX intra-op threads capped; search is never blocked behind an indexing batch for more than one small batch |
 | NFR-9  | Privacy                                                                    | Zero outbound connections except model downloads from the manifest                                                                                    |
 | NFR-10 | Accessibility                                                              | Full keyboard operation; follows OS light/dark theme                                                                                                  |
@@ -429,7 +429,15 @@ idle_unload_minutes = 5            # auto-lowered to 2 on machines with ≤ 8 GB
 hotkey = "CmdOrCtrl+Shift+Space"   # NOT Alt+Space (conflicts with the Windows window menu / PowerToys)
 theme = "system"
 max_results = 30
-launch_at_login = false
+launch_at_login = false            # onboarding offers it checked (ADR-0010)
+language = "system"                # system | en | es; system = es-* → es, else en
+transparency_mode = "match_system" # match_system | always | never (search window only)
+transparency_intensity = 0.75      # 0.40–0.95, alpha of the tint over the native effect
+
+[features]                         # desired state; install state is on disk (ADR-0010)
+meaning = true                     # e5
+image_text = true                  # OCR
+image_visual = false               # SigLIP 2
 ```
 
 Per-OS default exclusions are added in code (not written to the file):
@@ -498,7 +506,7 @@ Search requests ──► reader connection pool + query encoders (shared sessio
 - SQLite: `cache_size` ≈ 64 MB, `mmap_size` ≤ 256 MB.
 - Available-memory check every 10 s (e.g. via `sysinfo`). Below 1 GB free → pause indexing and unload the image model (NFR-13).
 
-**Engine events** (sent to the UI): `IndexStatus` changes, progress (queued / done / errors / current file), root status changes, permission issues, model download progress.
+**Engine events** (sent to the UI): `IndexStatus` changes, progress (queued / done / errors / current file), root status changes, permission issues, search-feature status (complete `FeatureStatus[]`, including download and backfill progress).
 
 ### 5.4 Change detection and file state machine
 
@@ -664,12 +672,14 @@ All DTOs live in `magi-core/src/dto.rs`, derive `Serialize`, `Deserialize`, and 
 | `get_settings` / `update_settings(patch)`                                             | Config read/write with validation                                                                                                 |
 | `get_permissions_report`                                                              | → `PermissionIssue[]` with per-OS guidance and a settings deep link                                                               |
 | `list_errors(limit)` / `retry_errors`                                                 | Error management                                                                                                                  |
-| `models_status` / `download_models` / `cancel_download`                               | Model manager                                                                                                                     |
+| `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied`. Cancel returns to `NotInstalled`. |
 | `clear_index`                                                                         | Deletes the DB and thumbnails, keeps config and models, then restarts indexing                                                    |
 
 `SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_url?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`
 
-**Events:** `engine://status`, `engine://progress`, `engine://roots`, `engine://permissions`, `engine://models`.
+**Events:** `engine://status`, `engine://progress`, `engine://roots`, `engine://permissions`, `engine://features` (always the complete `FeatureStatus[]`, never a delta).
+
+**Locale neutrality:** user-facing text originating in Rust (errors, permission guidance, failure codes) crosses IPC as a stable code plus parameters (`ts-rs` enums) and is localized by the frontend. Localized text is never a machine-readable contract. Changing `ui.language` changes presentation only, never indexed or search data.
 
 **Security:** Tauri capabilities grant each window only the commands it needs. The frontend has **no** direct filesystem permissions. The asset protocol scope is limited to the thumbnail cache directory; full-size user files are never exposed to the webview. A strict CSP is set in `tauri.conf.json`.
 
@@ -947,14 +957,19 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - empty, loading, and error states, plus an "indexing in progress (N queued)" hint
 - **Tray menu:** status line, Open search, Pause/Resume, Settings, Quit.
 - **Global hotkey** (configurable, with conflict detection), single-instance, and `--toggle`.
-- **Settings window:** roots list with status badges and fix actions, add/remove/enable, exclusions editor, file types, max size, hotkey recorder, battery pause, launch at login, model status and sizes, index stats, error list with retry, clear index (with confirmation).
-- **Onboarding flow** per FR-10, including the model-download consent screen that states exact sizes and that no other network access occurs.
-- Light/dark theme following the OS. English UI strings kept in one file, ready for Spanish localization.
+- **Optional search features (core, first deliverable; ADR-0010):** `meaning` / `image_text` / `image_visual` each optional; pipeline and search skip a missing feature; `.tmp` + SHA-256 downloads with stable failure codes; enabling backfills only files missing that feature's output; disabling keeps derived data; "Remove download" deletes only the asset; `engine://features` carries the complete state; `magi-cli features list|enable|disable [--delete-download]`, `doctor` reports features. Tests first.
+- **Settings window:** roots list with status badges and fix actions, add/remove/enable, exclusions editor, file types, max size, hotkey recorder, battery pause, launch at login, search features (status, size, backfill progress, remove download), language, window background, index stats, error list with retry, clear index (with confirmation).
+- **Onboarding flow** per FR-10, including the feature-download consent screen that states exact sizes and that no other network access occurs, and "Keep Magi available in the background ☑ Start with your computer".
+- **Search hint:** when fewer than 3 results return and a feature that could help is off, a dismissible hint offers to turn it on (or reports its backfill progress).
+- **Localization:** complete English and Spanish UI. Typed dictionaries (`es` must satisfy the `en` type), `Intl` for plurals/dates/numbers, `ui.language = system|en|es`, live switch without restart; the Rust tray uses its own string table.
+- **Theme and window background:** light/dark following the OS. Search window uses native transparency via `window-vibrancy` (Mica on Windows 11, Acrylic on Windows 10, vibrancy on macOS, solid on Linux or failure), resolved from `ui.transparency_mode` and the OS reduce-transparency preference; `ui.transparency_intensity` slider ("More solid" ↔ "More transparent") is disabled when the effective state is solid. Other windows stay solid.
+- **Visual direction** chosen via a throwaway prototype (2–3 directions, fake data) before the UI is built.
 - Least-privilege capabilities per window, CSP, asset scope limited to the thumbnail cache.
 
 **Verification**
 
-- [ ] Vitest tests: result rendering (snippet highlights), keyboard navigation reducer, settings form validation.
+- [ ] Vitest tests: result rendering (snippet highlights), keyboard navigation reducer, settings form validation, transparency resolution, language resolution, and a type check that the `es` dictionary covers every `en` key.
+- [ ] Core tests: search and indexing work with no features installed (keyword + filename); enabling a feature backfills only files missing its output; disabling keeps derived data; a failed or cancelled download never leaves an `Installed` asset.
 - [ ] `docs/qa-checklist.md` completed on all three OSes, including:
   - hotkey toggle
   - open and reveal
@@ -1067,7 +1082,7 @@ Rules:
 | ~~Q4~~ | Minimum target hardware                                                                                                                                        | —      | **Answered 2026-09-10:** 8 GB RAM laptop (§1 reference machine)                            |
 | Q5     | Is macOS Intel (x86_64) support required?                                                                                                                      | M8     | Best-effort                                                                                |
 | Q6     | License for the repository (MIT assumed)                                                                                                                       | M0     | MIT                                                                                        |
-| Q7     | Should launch-at-login default to on after onboarding?                                                                                                         | M6     | Ask in onboarding, default off                                                             |
+| ~~Q7~~ | Should launch-at-login default to on after onboarding? | — | **Answered 2026-09-25:** Offered in onboarding, checked by default (ADR-0010) |
 | ~~Q8~~ | If ADR-0003 must fall back to native HEIC decoders and Windows lacks the HEVC extension, is "HEIC not supported on this PC, install the extension" acceptable? | —      | **Moot 2026-09-19:** ADR-0003 chose `heic-rs`, which decodes in-process on every platform. |
 
 Record answers here (with date) and update affected sections.
