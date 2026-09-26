@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rescan-all"
+description = "Enables the rescan_all command without any pre-configured scope."
+commands.allow = ["rescan_all"]
+
+[[permission]]
+identifier = "deny-rescan-all"
+description = "Denies the rescan_all command without any pre-configured scope."
+commands.deny = ["rescan_all"]

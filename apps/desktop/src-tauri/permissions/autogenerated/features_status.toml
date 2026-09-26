@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-features-status"
+description = "Enables the features_status command without any pre-configured scope."
+commands.allow = ["features_status"]
+
+[[permission]]
+identifier = "deny-features-status"
+description = "Denies the features_status command without any pre-configured scope."
+commands.deny = ["features_status"]

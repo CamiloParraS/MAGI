@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-download"
+description = "Enables the remove_download command without any pre-configured scope."
+commands.allow = ["remove_download"]
+
+[[permission]]
+identifier = "deny-remove-download"
+description = "Denies the remove_download command without any pre-configured scope."
+commands.deny = ["remove_download"]

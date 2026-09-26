@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-errors"
+description = "Enables the list_errors command without any pre-configured scope."
+commands.allow = ["list_errors"]
+
+[[permission]]
+identifier = "deny-list-errors"
+description = "Denies the list_errors command without any pre-configured scope."
+commands.deny = ["list_errors"]

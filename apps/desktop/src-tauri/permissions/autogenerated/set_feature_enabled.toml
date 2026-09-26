@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-feature-enabled"
+description = "Enables the set_feature_enabled command without any pre-configured scope."
+commands.allow = ["set_feature_enabled"]
+
+[[permission]]
+identifier = "deny-set-feature-enabled"
+description = "Denies the set_feature_enabled command without any pre-configured scope."
+commands.deny = ["set_feature_enabled"]

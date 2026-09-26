@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-indexing"
+description = "Enables the resume_indexing command without any pre-configured scope."
+commands.allow = ["resume_indexing"]
+
+[[permission]]
+identifier = "deny-resume-indexing"
+description = "Denies the resume_indexing command without any pre-configured scope."
+commands.deny = ["resume_indexing"]
