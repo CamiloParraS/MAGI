@@ -22,6 +22,11 @@ pub fn sanitize_query(query: &str) -> String {
         .join(" ")
 }
 
+/// Markers `snippet()` puts around matched terms. Unicode private-use
+/// characters, which indexed text does not contain, unlike `[` and `]`.
+pub const HIGHLIGHT_START: char = '\u{E000}';
+pub const HIGHLIGHT_END: char = '\u{E001}';
+
 /// Runs an FTS5 BM25 search and returns up to `limit` files, best match
 /// first, deduplicated so each file appears once (at its best-matching
 /// chunk).
@@ -33,7 +38,7 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
 
     let mut stmt = conn.prepare(concat!(
         "SELECT f.id, f.path, f.file_name, f.mtime_ns,
-                    snippet(chunks_fts, 0, '[', ']', '...', 10)
+                    snippet(chunks_fts, 0, char(57344), char(57345), '...', 10), c.page, c.source
              FROM chunks_fts
              JOIN chunks c ON c.id = chunks_fts.rowid
              JOIN files f ON f.id = c.file_id
@@ -52,6 +57,8 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
                 file_name: row.get(2)?,
                 mtime_ns: row.get(3)?,
                 snippet: row.get(4)?,
+                page: row.get(5)?,
+                source: Some(row.get(6)?),
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -146,7 +153,23 @@ mod tests {
         let hits = search_fts(&conn, "arepas", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/recipe.txt"));
-        assert!(hits[0].snippet.contains('['));
+        assert!(hits[0].snippet.contains(HIGHLIGHT_START));
+    }
+
+    #[test]
+    fn brackets_in_text_are_not_highlights() {
+        let (_dir, mut conn) = open_test_db();
+        index_text(&mut conn, "/roots/a/todo.txt", "[draft] invoice for march");
+        let hits = search_fts(&conn, "invoice", 10).unwrap();
+        let s = crate::dto::Snippet::from_marked(&hits[0].snippet);
+        assert!(s.text.contains("[draft]"));
+        let [start, end] = s.highlights[0];
+        let units: Vec<u16> = s.text.encode_utf16().collect();
+        assert_eq!(
+            String::from_utf16(&units[start as usize..end as usize]).unwrap(),
+            "invoice"
+        );
+        assert_eq!(hits[0].source.as_deref(), Some("body"));
     }
 
     #[test]

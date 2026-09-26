@@ -441,6 +441,14 @@ impl TextEmbedder for OneShotQuery<'_> {
     }
 }
 
+/// The terminal shows highlights as `[term]`.
+fn show(snippet: &str) -> String {
+    use magi_core::search::fts::{HIGHLIGHT_END, HIGHLIGHT_START};
+    snippet
+        .replace(HIGHLIGHT_START, "[")
+        .replace(HIGHLIGHT_END, "]")
+}
+
 fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
     let conn = db::open(&db_path())?;
     match mode {
@@ -450,7 +458,7 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
                 println!("no results");
             }
             for hit in hits {
-                println!("{}\t{}", hit.path.display(), hit.snippet);
+                println!("{}\t{}", hit.path.display(), show(&hit.snippet));
             }
         }
         "hybrid" => {
@@ -476,7 +484,7 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
                     hit.path.display(),
                     hit.score,
                     hit.match_sources,
-                    hit.snippet
+                    show(&hit.snippet)
                 );
             }
         }

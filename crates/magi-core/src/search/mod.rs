@@ -34,6 +34,8 @@ pub struct SearchHit {
     pub score: f64,
     pub snippet: String,
     pub match_sources: Vec<&'static str>,
+    /// Page of the best chunk (PDF page, slide), when it has one.
+    pub page: Option<i64>,
 }
 
 /// One file's best-matching chunk from a single ranked source. Both
@@ -47,6 +49,11 @@ pub struct FileHit {
     pub file_name: String,
     pub mtime_ns: i64,
     pub snippet: String,
+    /// Page of the best chunk (PDF page, slide), when it has one.
+    pub page: Option<i64>,
+    /// `chunks.source` of the best chunk (`body`, `ocr`, `qr`, `filename`,
+    /// `code_symbol`); `None` for a visual match, which has no chunk.
+    pub source: Option<String>,
 }
 
 /// How many chunk rows to read before per-file dedup: one file can
@@ -134,8 +141,8 @@ pub fn rank_and_boost(
 
     // `fused`'s ids are the union of the lists, so every lookup here
     // resolves. Preferring the FTS side keeps the snippet that carries the
-    // `[...]` match highlights, and the visual side (a bare file name) is
-    // the last resort.
+    // match highlights, and the visual side (a bare file name) is the last
+    // resort.
     let mut hits: Vec<SearchHit> = fused
         .into_iter()
         .filter_map(|(file_id, base_score)| {
@@ -153,12 +160,19 @@ pub fn rank_and_boost(
             if image.is_some() {
                 match_sources.push("visual");
             }
+            match hit.source.as_deref() {
+                Some("ocr") => match_sources.push("ocr"),
+                Some("qr") => match_sources.push("qr"),
+                Some("filename") => match_sources.push("filename"),
+                _ => {}
+            }
             Some(SearchHit {
                 file_id,
                 path: hit.path.clone(),
                 score: base_score * boost,
                 snippet: hit.snippet.clone(),
                 match_sources,
+                page: hit.page,
             })
         })
         .collect();
@@ -435,5 +449,32 @@ mod tests {
 
         let hits = hybrid_search(&conn, Some(&embedder), None, "budget quarterly", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/budget_report.txt"));
+    }
+
+    #[test]
+    fn the_best_chunks_source_and_page_reach_the_hit() {
+        let hit = |id: i64, source: &str, page| FileHit {
+            file_id: id,
+            path: PathBuf::from(format!("/r/{id}")),
+            file_name: format!("f{id}"),
+            mtime_ns: 0,
+            snippet: "s".into(),
+            page,
+            source: Some(source.into()),
+        };
+        let hits = rank_and_boost(
+            "zzz",
+            &[hit(1, "ocr", None), hit(2, "body", Some(3))],
+            &[hit(3, "qr", None)],
+            &[],
+            10,
+        );
+        let by_id = |id| hits.iter().find(|h| h.file_id == id).unwrap();
+        assert_eq!(by_id(1).match_sources, vec!["keyword", "ocr"]);
+        assert_eq!(
+            (by_id(2).match_sources.clone(), by_id(2).page),
+            (vec!["keyword"], Some(3))
+        );
+        assert_eq!(by_id(3).match_sources, vec!["semantic", "qr"]);
     }
 }

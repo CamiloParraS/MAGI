@@ -33,7 +33,7 @@ pub fn search_vector_text(
             WHERE embedding MATCH vec_f32(?1) AND k = ?2
          )
          SELECT f.id, f.path, f.file_name, f.mtime_ns, substr(c.text, 1, 200),
-                knn_matches.distance, knn_matches.chunk_id
+                knn_matches.distance, knn_matches.chunk_id, c.page, c.source
          FROM knn_matches
          JOIN chunks c ON c.id = knn_matches.chunk_id
          JOIN files f ON f.id = c.file_id
@@ -59,6 +59,8 @@ pub fn search_vector_text(
                         file_name: row.get(2)?,
                         mtime_ns: row.get(3)?,
                         snippet: row.get(4)?,
+                        page: row.get(7)?,
+                        source: Some(row.get(8)?),
                     },
                     row.get::<_, f64>(5)?,
                     row.get::<_, i64>(6)?,
@@ -120,6 +122,8 @@ pub fn search_vector_image(
                     snippet: file_name.clone(),
                     file_name,
                     mtime_ns: row.get(3)?,
+                    page: None,
+                    source: None,
                 },
                 row.get::<_, f64>(4)?,
             ))

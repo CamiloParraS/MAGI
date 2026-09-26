@@ -117,8 +117,47 @@ impl From<Root> for RootStatus {
     }
 }
 
+/// A snippet plus the ranges of its matched terms, in UTF-16 code units as
+/// JavaScript indexes strings (`text.slice(start, end)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Snippet {
+    pub text: String,
+    pub highlights: Vec<[u32; 2]>,
+}
+
+impl Snippet {
+    /// Strips the `search::fts` highlight markers, recording where they were.
+    /// An unclosed highlight ends with the text.
+    pub fn from_marked(marked: &str) -> Self {
+        use crate::search::fts::{HIGHLIGHT_END, HIGHLIGHT_START};
+        let mut text = String::with_capacity(marked.len());
+        let mut highlights = Vec::new();
+        let (mut units, mut open) = (0u32, None);
+        for c in marked.chars() {
+            match c {
+                HIGHLIGHT_START => open = Some(units),
+                HIGHLIGHT_END => {
+                    if let Some(start) = open.take() {
+                        highlights.push([start, units]);
+                    }
+                }
+                c => {
+                    text.push(c);
+                    units += c.len_utf16() as u32;
+                }
+            }
+        }
+        if let Some(start) = open {
+            highlights.push([start, units]);
+        }
+        Self { text, highlights }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::db::roots::Health;
 
     #[test]
@@ -134,5 +173,18 @@ mod tests {
                 serde_json::json!(health.as_str())
             );
         }
+    }
+
+    #[test]
+    fn snippet_highlights_are_utf16_ranges_and_brackets_stay_text() {
+        let s = Snippet::from_marked("😀 [draft] \u{E000}invoice\u{E001} total");
+        assert_eq!(s.text, "😀 [draft] invoice total");
+        // "😀 [draft] " is 11 UTF-16 units: the emoji takes two.
+        assert_eq!(s.highlights, vec![[11, 18]]);
+        // An unclosed highlight ends with the text.
+        assert_eq!(
+            Snippet::from_marked("\u{E000}open").highlights,
+            vec![[0, 4]]
+        );
     }
 }
