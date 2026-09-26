@@ -9,6 +9,7 @@ pub mod embed;
 pub mod engine;
 pub mod error;
 pub mod extract;
+pub mod features;
 pub mod index;
 pub mod ocr;
 mod onnx;

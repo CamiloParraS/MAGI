@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::discovery::Kind;
 use crate::error::{Error, Result};
+use crate::features::Feature;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RootConfig {
@@ -85,6 +86,67 @@ impl Default for ModelsConfig {
     }
 }
 
+/// Which optional search features the user wants (ADR-0010). Desired state
+/// only: whether each one is downloaded is on disk, see `features`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeaturesConfig {
+    pub meaning: bool,
+    pub image_text: bool,
+    pub image_visual: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            meaning: true,
+            image_text: true,
+            image_visual: false,
+        }
+    }
+}
+
+impl FeaturesConfig {
+    pub fn enabled(&self, feature: Feature) -> bool {
+        match feature {
+            Feature::Meaning => self.meaning,
+            Feature::ImageText => self.image_text,
+            Feature::ImageVisual => self.image_visual,
+        }
+    }
+
+    pub fn set(&mut self, feature: Feature, on: bool) {
+        *match feature {
+            Feature::Meaning => &mut self.meaning,
+            Feature::ImageText => &mut self.image_text,
+            Feature::ImageVisual => &mut self.image_visual,
+        } = on;
+    }
+}
+
+/// `system` resolves any `es-*` OS locale to Spanish, everything else to
+/// English (resolution happens in the UI; the core only stores the choice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    System,
+    En,
+    Es,
+}
+
+/// Search-window transparency (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransparencyMode {
+    MatchSystem,
+    Always,
+    Never,
+}
+
+/// Allowed `ui.transparency_intensity`: below it text over a busy wallpaper
+/// stops being readable; above it the effect is invisible.
+pub const TRANSPARENCY_INTENSITY: std::ops::RangeInclusive<f32> = 0.40..=0.95;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -92,6 +154,10 @@ pub struct UiConfig {
     pub theme: String,
     pub max_results: u32,
     pub launch_at_login: bool,
+    pub language: Language,
+    pub transparency_mode: TransparencyMode,
+    /// Alpha of the tint drawn over the native effect.
+    pub transparency_intensity: f32,
 }
 
 impl Default for UiConfig {
@@ -101,6 +167,9 @@ impl Default for UiConfig {
             theme: "system".into(),
             max_results: 30,
             launch_at_login: false,
+            language: Language::System,
+            transparency_mode: TransparencyMode::MatchSystem,
+            transparency_intensity: 0.75,
         }
     }
 }
@@ -112,6 +181,7 @@ pub struct Config {
     pub roots: Vec<RootConfig>,
     pub indexing: IndexingConfig,
     pub models: ModelsConfig,
+    pub features: FeaturesConfig,
     pub ui: UiConfig,
 }
 
@@ -122,14 +192,24 @@ impl Default for Config {
             roots: Vec::new(),
             indexing: IndexingConfig::default(),
             models: ModelsConfig::default(),
+            features: FeaturesConfig::default(),
             ui: UiConfig::default(),
         }
     }
 }
 
 impl Config {
-    /// Rejects bad exclude globs and roots that don't exist on disk.
+    /// Rejects out-of-range UI settings, bad exclude globs and roots that don't exist on disk.
     pub fn validate(&self) -> Result<()> {
+        if !TRANSPARENCY_INTENSITY.contains(&self.ui.transparency_intensity) {
+            return Err(Error::InvalidSetting {
+                field: "ui.transparency_intensity",
+                reason: format!(
+                    "{} is outside {:?}",
+                    self.ui.transparency_intensity, TRANSPARENCY_INTENSITY
+                ),
+            });
+        }
         for glob in &self.indexing.exclude_globs {
             glob::Pattern::new(glob).map_err(|e| Error::InvalidGlob {
                 glob: glob.clone(),
@@ -160,7 +240,7 @@ pub fn save(config: &Config) -> Result<()> {
     save_to(&config_path(), config)
 }
 
-fn load_from(path: &Path) -> Result<Config> {
+pub(crate) fn load_from(path: &Path) -> Result<Config> {
     match fs::read_to_string(path) {
         Ok(raw) => {
             let config: Config = toml::from_str(&raw)?;
@@ -179,7 +259,7 @@ fn load_from(path: &Path) -> Result<Config> {
     }
 }
 
-fn save_to(path: &Path, config: &Config) -> Result<()> {
+pub(crate) fn save_to(path: &Path, config: &Config) -> Result<()> {
     config.validate()?;
     let dir = path.parent().expect("config path always has a parent");
     fs::create_dir_all(dir).map_err(|source| Error::Io {
@@ -278,5 +358,78 @@ file_types = [\"text\", \"pdfs\"]
 
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded.ui.max_results, 42);
+    }
+    #[test]
+    fn feature_and_ui_defaults_match_adr_0010() {
+        let c = Config::default();
+        assert!(c.features.meaning && c.features.image_text && !c.features.image_visual);
+        assert_eq!(c.ui.language, Language::System);
+        assert_eq!(c.ui.transparency_mode, TransparencyMode::MatchSystem);
+        assert_eq!(c.ui.transparency_intensity, 0.75);
+    }
+
+    #[test]
+    fn features_and_ui_fields_round_trip_with_their_wire_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[features]
+image_visual = true
+image_text = false
+             [ui]
+language = \"es\"
+transparency_mode = \"never\"
+transparency_intensity = 0.4
+",
+        )
+        .unwrap();
+        let c = load_from(&path).unwrap();
+        assert!(c.features.meaning, "missing keys keep their default");
+        assert!(!c.features.image_text && c.features.image_visual);
+        assert_eq!(c.ui.language, Language::Es);
+        assert_eq!(c.ui.transparency_mode, TransparencyMode::Never);
+        save_to(&path, &c).unwrap();
+        assert_eq!(load_from(&path).unwrap(), c);
+    }
+
+    #[test]
+    fn transparency_intensity_outside_its_range_is_rejected() {
+        for bad in [0.39_f32, 0.96, f32::NAN] {
+            let mut c = Config::default();
+            c.ui.transparency_intensity = bad;
+            assert!(
+                matches!(
+                    c.validate(),
+                    Err(Error::InvalidSetting {
+                        field: "ui.transparency_intensity",
+                        ..
+                    })
+                ),
+                "{bad} accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_is_rejected_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[ui]
+language = \"fr\"
+",
+        )
+        .unwrap();
+        assert!(matches!(load_from(&path), Err(Error::ConfigParse(_))));
+    }
+
+    #[test]
+    fn features_config_reads_and_writes_each_feature() {
+        let mut f = FeaturesConfig::default();
+        f.set(Feature::ImageVisual, true);
+        f.set(Feature::Meaning, false);
+        assert!(f.enabled(Feature::ImageVisual) && !f.enabled(Feature::Meaning));
     }
 }

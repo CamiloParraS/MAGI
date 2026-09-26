@@ -73,6 +73,12 @@ pub enum Error {
 
     #[error("engine error: {0}")]
     Engine(String),
+
+    #[error("unknown search feature {0:?} (expected meaning, image_text or image_visual)")]
+    UnknownFeature(String),
+
+    #[error("invalid setting {field}: {reason}")]
+    InvalidSetting { field: &'static str, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
