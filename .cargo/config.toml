@@ -1,0 +1,6 @@
+[env]
+# ts-rs writes every `#[ts(export)]` type here when `cargo test` runs.
+TS_RS_EXPORT_DIR = { value = "apps/desktop/src/bindings", relative = true }
+# serde_json sends u64/i64 as JSON numbers, so TypeScript must say `number`,
+# not `bigint`. Ids, counts and byte sizes stay far below 2^53.
+TS_RS_LARGE_INT = "number"

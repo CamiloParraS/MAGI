@@ -965,7 +965,7 @@ fn status_counts_the_queue_and_events_follow_changes() {
     );
     assert_eq!(status.current_file, None);
     assert_eq!(status.roots.len(), 1);
-    assert_eq!(status.roots[0].status, "ok");
+    assert_eq!(status.roots[0].status, magi_core::db::roots::Health::Ok);
 }
 
 /// Item 3b: a text model id that differs from the one stored at the last

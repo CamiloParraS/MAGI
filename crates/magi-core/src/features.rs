@@ -22,8 +22,9 @@ use crate::error::{Error, Result};
 use crate::ocr::OcrEngine;
 use crate::ocr::paddle::PaddleOcr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum Feature {
     /// Search by meaning: e5 text embeddings.
     Meaning,

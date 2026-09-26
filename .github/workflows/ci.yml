@@ -63,6 +63,10 @@ jobs:
         env:
           MAGI_FAKE_EMBEDDER: "1"
 
+      - name: bindings are up to date
+        shell: bash
+        run: test -z "$(git status --porcelain -- apps/desktop/src/bindings)" || { git status --porcelain -- apps/desktop/src/bindings; exit 1; }
+
       - name: pnpm lint
         working-directory: apps/desktop
         run: pnpm lint

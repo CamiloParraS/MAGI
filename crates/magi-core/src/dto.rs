@@ -2,17 +2,18 @@
 //!
 //! Types here derive `Serialize`, `Deserialize`, and `ts_rs::TS`, and are
 //! exported to `apps/desktop/src/bindings/`. Populated as IPC commands land
-//! (see SPEC.md §5.7). The `ts_rs::TS` derive arrives with M6's bindings.
+//! (see SPEC.md §5.7).
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::roots::Root;
+use crate::db::roots::{Health, Root};
 use crate::features::Feature;
 
 /// Whether a feature's download is on disk (ADR-0010). Independent of
 /// `FeatureStatus::enabled`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export)]
 pub enum Install {
     NotInstalled,
     Downloading { bytes: u64, total: u64 },
@@ -20,14 +21,16 @@ pub enum Install {
     Failed { code: DownloadError },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Backfill {
     pub done: u64,
     pub total: u64,
 }
 
 /// One search feature at a glance (`features_status`, `engine://features`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FeatureStatus {
     pub feature: Feature,
     /// What the user wants (config).
@@ -40,7 +43,8 @@ pub struct FeatureStatus {
 }
 
 /// Why a download failed: a stable code, localized by the UI (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub enum DownloadError {
     DownloadNetworkError,
     ChecksumMismatch,
@@ -67,8 +71,9 @@ impl DownloadError {
 }
 
 /// What the engine is doing (`get_status`, `engine://status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum IndexState {
     Idle,
     /// Walking the roots (a startup, periodic or requested reconciliation).
@@ -78,7 +83,8 @@ pub enum IndexState {
     Paused,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct IndexStatus {
     pub state: IndexState,
     /// Files `pending` or `indexing`.
@@ -91,13 +97,13 @@ pub struct IndexStatus {
     pub roots: Vec<RootStatus>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RootStatus {
     pub id: i64,
     pub path: String,
     pub enabled: bool,
-    /// `ok`, `missing`, `permission_denied` or `watch_failed`.
-    pub status: String,
+    pub status: Health,
 }
 
 impl From<Root> for RootStatus {
@@ -106,7 +112,27 @@ impl From<Root> for RootStatus {
             id: root.id,
             path: root.path.to_string_lossy().into_owned(),
             enabled: root.enabled,
-            status: root.status.as_str().to_string(),
+            status: root.status,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::roots::Health;
+
+    #[test]
+    fn root_health_crosses_ipc_as_its_database_name() {
+        for health in [
+            Health::Ok,
+            Health::PermissionDenied,
+            Health::Missing,
+            Health::WatchFailed,
+        ] {
+            assert_eq!(
+                serde_json::to_value(health).unwrap(),
+                serde_json::json!(health.as_str())
+            );
         }
     }
 }

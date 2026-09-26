@@ -34,7 +34,9 @@ impl Root {
 }
 
 /// What a root's last probe or watch attempt found (`roots.status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum Health {
     Ok,
     PermissionDenied,

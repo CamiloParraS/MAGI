@@ -10,14 +10,17 @@ use crate::discovery::Kind;
 use crate::error::{Error, Result};
 use crate::features::Feature;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RootConfig {
+    #[ts(type = "string")]
     pub path: PathBuf,
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export)]
 pub struct IndexingConfig {
     pub exclude_globs: Vec<String>,
     pub include_hidden: bool,
@@ -72,8 +75,9 @@ impl Default for IndexingConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export)]
 pub struct ModelsConfig {
     pub idle_unload_minutes: u32,
 }
@@ -88,8 +92,9 @@ impl Default for ModelsConfig {
 
 /// Which optional search features the user wants (ADR-0010). Desired state
 /// only: whether each one is downloaded is on disk, see `features`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export)]
 pub struct FeaturesConfig {
     pub meaning: bool,
     pub image_text: bool,
@@ -126,8 +131,9 @@ impl FeaturesConfig {
 
 /// `system` resolves any `es-*` OS locale to Spanish, everything else to
 /// English (resolution happens in the UI; the core only stores the choice).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum Language {
     System,
     En,
@@ -135,8 +141,9 @@ pub enum Language {
 }
 
 /// Search-window transparency (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum TransparencyMode {
     MatchSystem,
     Always,
@@ -147,8 +154,9 @@ pub enum TransparencyMode {
 /// stops being readable; above it the effect is invisible.
 pub const TRANSPARENCY_INTENSITY: std::ops::RangeInclusive<f32> = 0.40..=0.95;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export)]
 pub struct UiConfig {
     pub hotkey: String,
     pub theme: String,
@@ -174,8 +182,9 @@ impl Default for UiConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export)]
 pub struct Config {
     pub schema_version: u32,
     pub roots: Vec<RootConfig>,

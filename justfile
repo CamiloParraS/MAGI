@@ -45,9 +45,10 @@ test-rust:
 test-frontend:
     pnpm test
 
-# Regenerate ts-rs bindings and verify no unexpected git diff exists
+# Regenerate ts-rs bindings (they are written by `cargo test`) and fail if they changed
 bindings:
-    @echo "no ts-rs bindings yet: dto.rs exports nothing until the IPC contract lands in M6"
+    cargo test -p magi-core export_bindings
+    git diff --exit-code -- apps/desktop/src/bindings
 
 # Download required models into the dev data directory
 models:
