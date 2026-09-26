@@ -10,6 +10,7 @@ pub mod engine;
 pub mod error;
 pub mod extract;
 pub mod features;
+pub mod host;
 pub mod index;
 pub mod ocr;
 mod onnx;
