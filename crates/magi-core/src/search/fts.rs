@@ -164,11 +164,7 @@ mod tests {
         let s = crate::dto::Snippet::from_marked(&hits[0].snippet);
         assert!(s.text.contains("[draft]"));
         let [start, end] = s.highlights[0];
-        let units: Vec<u16> = s.text.encode_utf16().collect();
-        assert_eq!(
-            String::from_utf16(&units[start as usize..end as usize]).unwrap(),
-            "invoice"
-        );
+        assert_eq!(&s.text[start as usize..end as usize], "invoice");
         assert_eq!(hits[0].source.as_deref(), Some("body"));
     }
 

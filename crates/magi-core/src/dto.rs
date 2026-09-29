@@ -109,8 +109,8 @@ impl From<Root> for RootStatus {
     }
 }
 
-/// A snippet plus the ranges of its matched terms, in UTF-16 code units as
-/// JavaScript indexes strings (`text.slice(start, end)`).
+/// A snippet plus the byte ranges of its matched terms in `text`
+/// (`&text[start..end]`), always on char boundaries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snippet {
     pub text: String,
@@ -124,23 +124,23 @@ impl Snippet {
         use crate::search::fts::{HIGHLIGHT_END, HIGHLIGHT_START};
         let mut text = String::with_capacity(marked.len());
         let mut highlights = Vec::new();
-        let (mut units, mut open) = (0u32, None);
+        let (mut offset, mut open) = (0u32, None);
         for c in marked.chars() {
             match c {
-                HIGHLIGHT_START => open = Some(units),
+                HIGHLIGHT_START => open = Some(offset),
                 HIGHLIGHT_END => {
                     if let Some(start) = open.take() {
-                        highlights.push([start, units]);
+                        highlights.push([start, offset]);
                     }
                 }
                 c => {
                     text.push(c);
-                    units += c.len_utf16() as u32;
+                    offset += c.len_utf8() as u32;
                 }
             }
         }
         if let Some(start) = open {
-            highlights.push([start, units]);
+            highlights.push([start, offset]);
         }
         Self { text, highlights }
     }
@@ -400,11 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn snippet_highlights_are_utf16_ranges_and_brackets_stay_text() {
+    fn snippet_highlights_are_byte_ranges_and_brackets_stay_text() {
         let s = Snippet::from_marked("😀 [draft] \u{E000}invoice\u{E001} total");
         assert_eq!(s.text, "😀 [draft] invoice total");
-        // "😀 [draft] " is 11 UTF-16 units: the emoji takes two.
-        assert_eq!(s.highlights, vec![[11, 18]]);
+        // "😀 [draft] " is 13 bytes: the emoji takes four.
+        assert_eq!(s.highlights, vec![[13, 20]]);
+        assert_eq!(&s.text[13..20], "invoice");
         // An unclosed highlight ends with the text.
         assert_eq!(
             Snippet::from_marked("\u{E000}open").highlights,
