@@ -2223,7 +2223,22 @@ Tasks 1-7 are committed: byte-range highlights, backdrop, `SearchState`, app she
 
 ### Windows verification (Task 8, step 4)
 
-Not run: needs an interactive session with a release build and real models. All items in the plan (first frame < 150 ms, results < 400 ms, tray, hotkey/`--toggle`, Mica, IME, open/reveal, idle RSS, GPU-less VM) are open.
+Run 2026-09-29 on Windows 11 (AMD Radeon 740M), release build, real models (`meaning`, `image_text` installed), from a shell with no one at the screen. Only what a script can observe was run.
+
+- ✅ **First frame < 150 ms:** `search window first frame elapsed=` 50.7 ms (cold start), then 16.4, 15.9, 17.3 ms via `magi --toggle`. 4 samples, max 50.7 ms, not the 10 the plan asks for and not triggered by the hotkey.
+- ✅ **`magi --toggle`** shows the window in the running instance (the log line above); the second launch exits. A plain second launch was not tried.
+- ✅ GPU path: Direct3D 11.1 on the AMD GPU, Segoe UI.
+Manual results from the user, same day:
+
+- ✅ `Esc` closes the window.
+- ❌ **Idle RSS ~380 MB** against NFR-1 ≤ 150 MB. Not a controlled measurement (unknown whether models had unloaded, index state unknown); needs the plan's procedure, and probably a real fix.
+- ⚠️ **Search speed:** the first search takes "some seconds" (model load), later ones feel instant. Not measured; the < 400 ms target needs a log line or timer, and the cold first search is a likely miss unless models are warm.
+- ❌ **Mica:** the window has a solid background on Windows 11 (build 26200). Not yet known whether "Transparency effects" was on, or whether `ui.transparency_mode` resolves to solid; needs investigation.
+  - Investigated 2026-09-29 (debug build, `transparency_intensity = 0.4`, screenshots sampled per pixel). Root cause: gpui-component's root plugin paints `theme.tokens.background` (opaque white) over the whole window, hiding any backdrop; fixed by giving `Root` a transparent background (Root's own style applies after plugins). With that fixed, Mica rendered as DWM's flat fallback (`#202020`) on the frameless popup, and as faintly tinted real Mica only after `DwmExtendFrameIntoClientArea` — indistinguishable from solid. GPUI's `Blurred` shows the windows behind, needs no Win32 code, and was adopted (SPEC 1.2.1, ADR-0011 amended).
+- ⚠️ **Deleted file, Reveal:** `magi.log` shows `Revealing path ...\VW_beetle.jpg in explorer: file not found (0x80070002)` and the window closes. The plan expected a logged warning with the window kept. `Host::file_path` succeeds from the stale index row, so only the OS call fails, and `act` closes the window regardless. Reveal on an existing file and Open were not tried.
+- The log also has repeated `ERROR : window not found` lines at window close (source not yet found), and indexing toggles `low_memory=true` pause.
+- Hotkey default is `CmdOrCtrl+Shift+Space` (`ui.hotkey`); not yet tried.
+- Not run: typing→results < 400 ms measurement, tray, IME/dead keys, GPU-less VM, WSLg.
 
 ### Open for other OSes / CI
 
