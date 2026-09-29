@@ -7,10 +7,12 @@ use std::time::Instant;
 
 use gpui_kit::*;
 use magi_core::config::UiConfig;
+use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::search::view::SearchView;
 use crate::theme;
+use crate::tray::{Tray, TrayAction};
 
 pub enum AppEvent {
     /// Open the search window, or bring it forward.
@@ -18,6 +20,7 @@ pub enum AppEvent {
     /// Close the search window if it is open, else open it.
     Toggle,
     Host(HostEvent),
+    Tray(TrayAction),
 }
 
 pub type Events = async_channel::Sender<AppEvent>;
@@ -41,10 +44,27 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         SearchView::bind_keys(cx);
         // The app lives in the tray; closing the search window never quits.
         cx.set_quit_mode(QuitMode::Explicit);
+        let hotkey_tx = tx.clone();
+        let hotkey = crate::hotkey::register(&ui.hotkey, move || {
+            let _ = hotkey_tx.send_blocking(AppEvent::Toggle);
+        })
+        .inspect_err(|error| {
+            tracing::warn!(%error, hotkey = %ui.hotkey, "hotkey not registered; `magi --toggle` still works")
+        })
+        .ok();
+        let tray_tx = tx.clone();
+        let tray = Tray::new(move |action| {
+            let _ = tray_tx.send_blocking(AppEvent::Tray(action));
+        })
+        .inspect_err(|error| tracing::warn!(%error, "no tray icon; use the hotkey or `magi --toggle`"))
+        .ok();
         let mut shell = Shell {
             host,
             ui,
             window: None,
+            _hotkey: hotkey,
+            tray,
+            paused: false,
         };
         cx.spawn(async move |cx| {
             while let Ok(event) = rx.recv().await {
@@ -62,6 +82,10 @@ struct Shell {
     host: Host,
     ui: UiConfig,
     window: Option<AnyWindowHandle>,
+    /// Dropping the manager unregisters the hotkey.
+    _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
+    tray: Option<Tray>,
+    paused: bool,
 }
 
 impl Shell {
@@ -77,7 +101,39 @@ impl Shell {
                     self.open_window(cx);
                 }
             }
-            AppEvent::Host(_) => {}
+            AppEvent::Host(HostEvent::Status(status)) => {
+                self.paused = status.state == IndexState::Paused;
+                if let Some(tray) = &self.tray {
+                    tray.show_status(&status);
+                }
+            }
+            AppEvent::Host(HostEvent::Features(_)) => {}
+            AppEvent::Tray(TrayAction::OpenSearch) => {
+                if !self.activate_window(cx) {
+                    self.open_window(cx);
+                }
+            }
+            AppEvent::Tray(TrayAction::TogglePause) => {
+                let (host, paused) = (self.host.clone(), self.paused);
+                cx.background_executor()
+                    .spawn(async move {
+                        let done = host
+                            .engine()
+                            .and_then(|e| if paused { e.resume() } else { e.pause() });
+                        if let Err(error) = done {
+                            tracing::warn!(%error, "pause/resume failed");
+                        }
+                    })
+                    .detach();
+            }
+            AppEvent::Tray(TrayAction::Quit) => {
+                self.close_window(cx);
+                // Blocks until the engine stops; quitting during the startup
+                // walk waits for it (M6 Plan 2 known gap).
+                self.host.shutdown();
+                cx.quit();
+                return ControlFlow::Break(());
+            }
         }
         ControlFlow::Continue(())
     }
