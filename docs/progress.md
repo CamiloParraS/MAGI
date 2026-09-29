@@ -2216,3 +2216,15 @@ search latency with indexing paused. Verified on battery (`PowerLineStatus:
 Offline`): `MAGI_FAKE_EMBEDDER=1 cargo test -p magi-core --test host`, 10
 passed. Confirmed on AC (`Online`): the unfixed `host.rs` passes 10/10 there
 too, so power state alone decided the outcome.
+
+## M6 — Plan 3 (GPUI walking skeleton)
+
+Tasks 1-7 are committed: byte-range highlights, backdrop, `SearchState`, app shell and logging, search window, single instance with `--toggle`, global hotkey, tray. Unit and headless tests pass; `cargo clippy --workspace --all-targets --all-features -D warnings` is clean.
+
+### Windows verification (Task 8, step 4)
+
+Not run: needs an interactive session with a release build and real models. All items in the plan (first frame < 150 ms, results < 400 ms, tray, hotkey/`--toggle`, Mica, IME, open/reveal, idle RSS, GPU-less VM) are open.
+
+### Open for other OSes / CI
+
+- Linux package list in `ci.yml` and SPEC §4.3 came from a summary of Zed's `script/linux` at `1a28cff` and has not run on CI. macOS and Linux runs are unverified.

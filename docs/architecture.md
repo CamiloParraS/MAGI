@@ -625,3 +625,7 @@ Known gap (carried from the Tauri shell): if `Host::start` fails at startup, the
 must not panic with no window, dialog or log — release builds set
 `windows_subsystem = "windows"` and the desktop crate has no `tracing`
 subscriber wired up yet. Deferred to Plan 5.
+
+### Desktop app (M6 Plan 3)
+
+`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. Logs go to the file set up in `logging.rs`.

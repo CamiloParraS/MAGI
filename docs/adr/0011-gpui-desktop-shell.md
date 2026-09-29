@@ -55,7 +55,7 @@ skeleton), and SPEC.md is amended if that slice finds something.
 
 ## Decision
 
-**The desktop app is a single Rust binary using GPUI through `gpui-component`.**
+**The desktop app is a single Rust binary using GPUI through the `gpui-kit` crate (`gpui-component`).**
 All windows (search, settings, onboarding) are GPUI; there is no webview.
 
 - **Host API instead of IPC.** The UI calls `host::Host` directly. SPEC.md
@@ -94,6 +94,7 @@ All windows (search, settings, onboarding) are GPUI; there is no webview.
 
 ## Consequences
 
+- GPUI cannot hide a window on Windows (`cx.hide()` is a no-op), so the search window closes on blur and is recreated on show; the < 150 ms hotkey target therefore includes creating it.
 - Node.js, pnpm and the WebView2/WebKitGTK prerequisites leave SPEC.md §4.
   The workspace member `apps/desktop/src-tauri` becomes `apps/desktop`.
 - Dependency on a pre-1.0 UI framework: GPUI upgrades arrive only when

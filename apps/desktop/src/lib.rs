@@ -16,6 +16,13 @@ use app::AppEvent;
 pub fn run(args: Vec<String>) -> ExitCode {
     logging::init();
     let toggle = args.iter().any(|a| a == "--toggle");
+    let event = |toggle| {
+        if toggle {
+            AppEvent::Toggle
+        } else {
+            AppEvent::Show
+        }
+    };
     let name = instance::socket_name();
     let (tx, rx) = async_channel::unbounded();
     match instance::claim(&name) {
@@ -32,20 +39,10 @@ pub fn run(args: Vec<String>) -> ExitCode {
         Ok(instance::Claim::Primary(listener)) => {
             let tx = tx.clone();
             instance::serve(listener, move |message| {
-                let event = if message == "toggle" {
-                    AppEvent::Toggle
-                } else {
-                    AppEvent::Show
-                };
-                let _ = tx.send_blocking(event);
+                let _ = tx.send_blocking(event(message == "toggle"));
             });
         }
         Err(error) => tracing::warn!(%error, "running without single-instance"),
     }
-    let first = if toggle {
-        AppEvent::Toggle
-    } else {
-        AppEvent::Show
-    };
-    app::run(first, (tx, rx))
+    app::run(event(toggle), (tx, rx))
 }
