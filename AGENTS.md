@@ -1,6 +1,6 @@
 # Agents: read this first
 
-Read [`SPEC.md`](SPEC.md) §0 ("How to use this document") before writing any
+Read [`SPEC.md`](docs/SPEC.md) §0 ("How to use this document") before writing any
 code. It is the source of truth for this project; if code and spec disagree,
 the spec wins until the spec is updated.
 
@@ -8,11 +8,10 @@ the spec wins until the spec is updated.
 
 | Command         | Does |
 | ---------------- | ---- |
-| `just setup`     | Install frontend deps, fetch PDFium binaries |
-| `just dev`       | Run the Tauri app in dev mode |
-| `just check`     | fmt, clippy, `cargo test`, frontend lint/typecheck/test — run before committing |
-| `just test`      | Rust + frontend tests only (no network, fake embedder) |
-| `just bindings`  | No-op until M6 (`dto.rs` exports no IPC types yet)  |
+| `just setup`     | Fetch PDFium and ONNX Runtime binaries |
+| `just dev`       | Run the GPUI desktop app (from M6 Plan 3) |
+| `just check`     | fmt, clippy, `cargo test` — run before committing |
+| `just test`      | `cargo test --workspace` (no network, fake embedder) |
 | `just models`    | Download ML models into the dev data directory |
 | `just eval`      | Run search-quality evaluation against `eval/queries.jsonl` |
 | `just build`     | Production build of the desktop app |

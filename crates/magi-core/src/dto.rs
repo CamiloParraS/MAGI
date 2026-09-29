@@ -1,8 +1,7 @@
-//! Serializable DTOs shared with the UI.
+//! Types the UI sees through `host::Host` (SPEC.md §5.7, the Host API).
 //!
-//! Types here derive `Serialize`, `Deserialize`, and `ts_rs::TS`, and are
-//! exported to `apps/desktop/src/bindings/`. Populated as IPC commands land
-//! (see SPEC.md §5.7).
+//! They keep their `serde` derives: config and the stable wire names the
+//! tests below pin rely on them.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,9 +10,8 @@ use crate::features::Feature;
 
 /// Whether a feature's download is on disk (ADR-0010). Independent of
 /// `FeatureStatus::enabled`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
-#[ts(export)]
 pub enum Install {
     NotInstalled,
     Downloading { bytes: u64, total: u64 },
@@ -21,16 +19,14 @@ pub enum Install {
     Failed { code: DownloadError },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Backfill {
     pub done: u64,
     pub total: u64,
 }
 
 /// One search feature at a glance (`features_status`, `engine://features`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeatureStatus {
     pub feature: Feature,
     /// What the user wants (config).
@@ -43,8 +39,7 @@ pub struct FeatureStatus {
 }
 
 /// Why a download failed: a stable code, localized by the UI (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DownloadError {
     DownloadNetworkError,
     ChecksumMismatch,
@@ -71,9 +66,8 @@ impl DownloadError {
 }
 
 /// What the engine is doing (`get_status`, `engine://status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[ts(export)]
 pub enum IndexState {
     Idle,
     /// Walking the roots (a startup, periodic or requested reconciliation).
@@ -83,8 +77,7 @@ pub enum IndexState {
     Paused,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexStatus {
     pub state: IndexState,
     /// Files `pending` or `indexing`.
@@ -97,8 +90,7 @@ pub struct IndexStatus {
     pub roots: Vec<RootStatus>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootStatus {
     pub id: i64,
     pub path: String,
@@ -119,8 +111,7 @@ impl From<Root> for RootStatus {
 
 /// A snippet plus the ranges of its matched terms, in UTF-16 code units as
 /// JavaScript indexes strings (`text.slice(start, end)`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snippet {
     pub text: String,
     pub highlights: Vec<[u32; 2]>,
@@ -157,9 +148,8 @@ impl Snippet {
 
 /// Why a file failed (`files.error_code`, `list_errors`): a stable code the
 /// UI localizes. `files.error` keeps the diagnostic text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum FileErrorCode {
     PermissionDenied,
     /// Another program holds it open; retried, never given up on.
@@ -251,8 +241,7 @@ impl rusqlite::types::FromSql for FileErrorCode {
 
 /// A file in `error` (`list_errors`). The UI shows `code`, localized;
 /// `detail` is diagnostic text for logs and "copy details".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileError {
     pub file_id: i64,
     pub path: String,
@@ -262,8 +251,7 @@ pub struct FileError {
 }
 
 /// A search query (`search`, SPEC.md §5.7).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
     /// `ui.max_results` when `null`.
@@ -271,9 +259,8 @@ pub struct SearchRequest {
 }
 
 /// Why a result matched (SPEC.md §5.6): the UI shows a badge per source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum MatchSource {
     Keyword,
     Semantic,
@@ -299,8 +286,7 @@ impl MatchSource {
 }
 
 /// One search result with what the UI needs to render it (`search`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResult {
     pub file_id: i64,
     pub path: String,
@@ -317,8 +303,7 @@ pub struct SearchResult {
     pub match_sources: Vec<MatchSource>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub took_ms: u64,
@@ -326,9 +311,8 @@ pub struct SearchResponse {
 
 /// A failed command as a stable code plus parameters (SPEC.md §5.7 locale
 /// neutrality). The UI localizes it; `Internal.detail` is for logs only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "code")]
-#[ts(export)]
 pub enum ErrorCode {
     RootNotFound {
         path: String,

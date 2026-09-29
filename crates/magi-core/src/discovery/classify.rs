@@ -6,9 +6,8 @@ use std::path::Path;
 
 /// Matches the `files.kind` column in `migrations/0001_init.sql`; the serde
 /// names are the same strings, used by `indexing.file_types`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[ts(export)]
 pub enum Kind {
     Text,
     Code,

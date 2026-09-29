@@ -5,10 +5,6 @@ target/
 **/mutants.out*/
 rustc-ice-*.txt
 
-# Node / frontend
-node_modules/
-dist/
-
 # App data
 vendor/
 models/cache/
