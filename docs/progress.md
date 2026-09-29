@@ -2196,3 +2196,10 @@ baseline. Decisions, go/no-go criteria and next steps:
 `docs/superpowers/specs/2026-09-28-gpui-shell-evaluation-design.md`. The
 pre-evaluation spec is frozen at `docs/SPEC-v1.1-tauri.md`; the Tauri work stays
 on `feat/User_Interface`.
+
+**2026-09-29: committed to GPUI** without a spike (ADR-0011, SPEC v1.2). The
+Tauri shell, React frontend and `ts-rs` bindings were removed from
+`feat/gpui-shell`; the Tauri implementation stays on `feat/User_Interface`.
+Plan 2's seven manual in-app console checks are void (they tested the
+webview's capabilities). Plan 2's `Host`-level tests all still apply. Next:
+M6 Plan 3, starting with the walking skeleton.

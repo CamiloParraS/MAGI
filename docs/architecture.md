@@ -1,35 +1,33 @@
 # Architecture
 
 Stub. Update this document whenever a public contract changes (DB schema,
-IPC commands, config format) — see SPEC.md §0.
+Host API, config format) — see SPEC.md §0.
 
 ## Process model
 
-A single process: the Tauri app hosts `magi-core::Engine`. The engine runs
-on its own threads; Tauri commands talk to it through an `EngineHandle`. The
+A single process: the GPUI desktop app hosts `magi-core::Engine` through
+`host::Host` (ADR-0011). The engine runs on its own threads; the UI calls
+`Host` directly, running its blocking methods on GPUI's background executor. The
 CLI (`magi-cli daemon`) hosts the same engine headless. See SPEC.md §5.3 for
 the full thread/data-flow diagram.
 
 ## Crates
 
-- `magi-core` — all business logic, no Tauri dependency.
+- `magi-core` — all business logic, no UI dependency.
 - `magi-cli` — dev/test CLI over `magi-core`.
-- `apps/desktop/src-tauri` — the Tauri shell; thin command wrappers only.
+- `apps/desktop` — the GPUI app (M6 Plan 3 onward); thin views over `Host` only.
 - `xtask` — cross-platform dev tasks (fetch PDFium, fetch models, ...).
 
-## IPC contract
+## Host API
 
-DTOs live in `crates/magi-core/src/dto.rs` and are exported to
-`apps/desktop/src/bindings/` via `ts-rs`. See SPEC.md §5.7 for the full
-command table (populated as commands land, starting M1).
-
-Every DTO derives `ts_rs::TS` (M6 Plan 2) and is exported to
-`apps/desktop/src/bindings/` by `just bindings`; the frontend never
-hand-writes an IPC type. `IndexStatus { state: idle|scanning|indexing|paused,
+The UI calls `host::Host` directly; there is no IPC layer, serialization or
+generated bindings (ADR-0011, SPEC.md §5.7). The types it sees live in
+`crates/magi-core/src/dto.rs`: `IndexStatus { state: idle|scanning|indexing|paused,
 queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` and
 `RootStatus { id, path, enabled, status }`. Paths are strings (lossy for
 non-UTF-8 names). See "Control surface" below for the `EngineHandle` methods
-behind them.
+behind them. The DTOs keep their `serde` derives (config, the CLI's output and
+the wire-name tests use them); the `ts-rs` derives are gone.
 
 M6 Plan 1 adds `FeatureStatus { feature, enabled, download_size, install,
 backfill? }`, `Install` (`NotInstalled | Downloading { bytes, total } |
@@ -294,10 +292,7 @@ runs under `index::isolate::run` (timeout, panic containment, stuck-thread cap).
 
 **Thumbnails** are 256 px JPEGs at `<cache_dir>/thumbs/<first two hex>/<key>.jpg`
 (`thumbs::store`), keyed by content hash, for images and PDF first pages.
-The desktop app enables Tauri's asset protocol with an empty static scope and
-grants exactly `thumbs::thumbs_dir()` at startup, so the webview can read
-thumbnails and nothing else. It is granted at runtime because the cache lives
-under the magi data directory, which the Tauri identifier cannot name.
+The desktop app renders them straight from `thumb_path` with GPUI's `img()`.
 
 **Model manifest.** Two slots were added: `ocr` (`det.onnx`, `rec.onnx`,
 `rec.yml`) and `image` (`vision_model.onnx`, `text_model.onnx`,
@@ -578,8 +573,8 @@ virtual size.
 
 ## Desktop host (M6 Plan 2)
 
-`crates/magi-core/src/host.rs`'s `Host` is what the Tauri app (and, later,
-any other shell) manages instead of an `Engine` directly: one clone-able
+`crates/magi-core/src/host.rs`'s `Host` is what the desktop app (and any
+other shell) manages instead of an `Engine` directly: one clone-able
 handle backed by a supervisor thread that owns the engine's lifecycle, plus
 its own read-only DB connection for search.
 
@@ -606,40 +601,27 @@ its own read-only DB connection for search.
   the same priority lock the embed worker checks before each batch (SPEC.md
   §5.3) — indexing pauses between batches rather than making a search wait
   behind one. This is what NFR-8 (docs/benchmarks.md, "M6 — NFR-8") measures.
-- **Commands** (`apps/desktop/src-tauri/src/commands.rs`, one per line):
-  `search`, `get_status`, `list_roots`, `add_root`, `remove_root`,
-  `set_root_enabled`, `pause_indexing`, `resume_indexing`, `rescan_all`,
-  `open_file`, `reveal_file`, `get_settings`, `update_settings`,
-  `list_errors`, `retry_errors`, `features_status`, `set_feature_enabled`,
-  `download_feature`, `cancel_download`, `remove_download`, `clear_index`.
-  Each wraps a blocking `Host`/`EngineHandle` call in
-  `tauri::async_runtime::spawn_blocking` (`commands::run`), so the UI thread
-  never waits on the database or a model. `open_file`/`reveal_file` resolve
-  the path from the DB (`Host::file_path`) and hand it to
-  `tauri_plugin_opener`; the frontend never sends a raw path (the plugin's
-  JS link handler is off). `list_roots` also reads the DB
-  (`Host::list_roots`), so it answers while the engine restarts, and
-  `search` clamps its `limit` to 1..=500. The supervisor coalesces what
-  queues up while the engine starts or stops: the newest feature state
-  only, and one control (Stop > Clear > Restart).
-- **Events**: `engine://status` (`IndexStatus`) and `engine://features`
-  (`FeatureStatus[]`, always complete), emitted from `Host::start`'s
-  callback in `apps/desktop/src-tauri/src/lib.rs`.
+- **Host API methods**: `search`, `get_status`, `list_roots`, `add_root`,
+  `remove_root`, `set_root_enabled`, `pause_indexing`, `resume_indexing`,
+  `rescan_all`, `open_file`, `reveal_file`, `get_settings`,
+  `update_settings`, `list_errors`, `retry_errors`, `features_status`,
+  `set_feature_enabled`, `download_feature`, `cancel_download`,
+  `remove_download`, `clear_index` (on `Host` or its `EngineHandle`). All
+  block, so the desktop app runs them on GPUI's background executor and the
+  UI thread never waits on the database or a model. `open_file`/`reveal_file`
+  resolve the path from the DB (`Host::file_path`); the UI never builds a
+  path. `list_roots` also reads the DB (`Host::list_roots`), so it answers
+  while the engine restarts, and `search` clamps its `limit` to 1..=500. The
+  supervisor coalesces what queues up while the engine starts or stops: the
+  newest feature state only, and one control (Stop > Clear > Restart).
+- **Events**: `HostEvent::Status` (`IndexStatus`) and `HostEvent::Features`
+  (`FeatureStatus[]`, always complete), delivered through `Host::start`'s
+  callback.
 - **`ErrorCode`** (`dto.rs`): every command's `Result` error side, `{ code,
   ...params }` (`#[serde(tag = "code")]`), built from `crate::Error` by
-  `commands::run`/`ErrorCode::from`. Locale-neutral by construction — see
+  `ErrorCode::from`. Locale-neutral by construction — see
   SPEC.md §5.7 "Errors" for the variant list.
-- **`just bindings`** runs `cargo test -p magi-core export_bindings` (the
-  `ts-rs` test harness), regenerating every `apps/desktop/src/bindings/*.ts`
-  file from `dto.rs`; nothing there is hand-edited.
-- **Capabilities.** `apps/desktop/src-tauri/capabilities/default.json` grants
-  the `main` window exactly the 21 commands above plus `ping` (22 commands),
-  and `core:event:default` for `listen()`, and nothing else: no filesystem or shell-opener permission
-  reaches the webview directly. The asset protocol's static scope is empty;
-  only the thumbnail cache directory is granted at runtime (see "Images"
-  above). Plan 5 splits this capability file per window.
-
-Known gap: if `Host::start` fails inside Tauri's `setup` hook, the app
-panics with no window, dialog or log — release builds set
+Known gap (carried from the Tauri shell): if `Host::start` fails at startup, the app
+must not panic with no window, dialog or log — release builds set
 `windows_subsystem = "windows"` and the desktop crate has no `tracing`
 subscriber wired up yet. Deferred to Plan 5.

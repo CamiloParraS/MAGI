@@ -1,6 +1,6 @@
 # ADR-0010: Optional search features, locale-neutral core, window transparency
 
-- **Status:** Accepted; to be implemented in M6
+- **Status:** Accepted; to be implemented in M6. Window transparency amended by ADR-0011 (GPUI: no Acrylic on Windows 10).
 - **Milestone:** M6
 
 ## Context

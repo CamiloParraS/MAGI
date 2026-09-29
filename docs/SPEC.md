@@ -1,10 +1,11 @@
 # SPEC.md — magi: Local Semantic File Search
 
 > **Codename:** `magi` (placeholder; see Open Questions). Replace globally once a final name is chosen.
-> **Spec version:** 1.1 · **Status:** Approved for implementation · **Audience:** AI coding agents and human contributors
+> **Spec version:** 1.2 · **Status:** Approved for implementation · **Audience:** AI coding agents and human contributors
 >
 > **Changelog**
 >
+> - 1.2 (2026-09-29): **Desktop shell moved from Tauri + React to GPUI** (ADR-0011). No webview, no TypeScript: the UI is Rust and calls `host::Host` directly (§5.7 is now the Host API, `ts-rs` removed). GPU row added to the reference machine. Tray, hotkey, single-instance and autostart via dedicated crates. Windows 10 search window is solid (no Acrylic). Localization via ICU4X. Packaging tool is open (Q9). M0–M5 text is historical and still mentions Tauri where it described what was built then. The v1.1 text is frozen in `docs/SPEC-v1.1-tauri.md`.
 > - 1.1 (2026-09-10): Frontend confirmed as React + TypeScript. **HEIC/HEIF support moved into v1** (M4). **Reference machine set to an 8 GB RAM laptop**: memory budgets, quantized models, and memory-aware concurrency added.
 > - 1.0: Initial spec.
 
@@ -37,7 +38,7 @@ Read this entire file before writing code. It is the source of truth; if code an
 - Errors: `thiserror` in library crates, `anyhow` in binaries. Logging via `tracing` only (no `println!` outside the CLI's user-facing output).
 - Platform-specific code lives behind `#[cfg(target_os = "...")]` inside `platform/` modules. Business logic MUST NOT contain `cfg` branches.
 - New dependencies: justify in the commit message. Prefer pure-Rust crates. New C/C++ native dependencies require an ADR.
-- Pin exact versions via `Cargo.lock` / `pnpm-lock.yaml`. Centralize Rust versions in `[workspace.dependencies]`.
+- Pin exact versions via `Cargo.lock`. Centralize Rust versions in `[workspace.dependencies]`.
 - Update `docs/architecture.md` whenever a public contract changes (DB schema, IPC commands, config format).
 
 ---
@@ -70,7 +71,7 @@ Read this entire file before writing code. It is the source of truth; if code an
 | RAM       | **8 GB total** (assume ~3 GB free for us while the user works)                           |
 | CPU       | 4 cores / 8 threads, ~2019 laptop class (e.g. Intel i5-8250U / Ryzen 5 3500U / Apple M1) |
 | Storage   | SSD                                                                                      |
-| GPU       | None assumed (CPU inference only)                                                        |
+| GPU       | Integrated graphics with Direct3D 11 (Windows), Metal (macOS) or Vulkan 1.3 / GL (Linux), for UI rendering only (ADR-0011). ML inference stays CPU-only. |
 
 **Non-goals (v1):** audio/video indexing, cloud sync, network-drive watching (polling only), Mac App Store / Microsoft Store distribution, sandboxed packages (Flatpak/Snap), mobile, multi-user/shared indexes, editing or organizing files.
 
@@ -119,10 +120,10 @@ Read this entire file before writing code. It is the source of truth; if code an
 
 | Layer                      | Choice                                                                                                                                              | Rationale / notes                                                                                                                                                                                                                                                                                                |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop shell              | **Tauri 2.x**                                                                                                                                       | Small bundles, low idle RAM, Rust backend in-process. Uses system webviews (WebView2 / WKWebView / WebKitGTK); test Linux early.                                                                                                                                                                                 |
-| Frontend                   | **React + TypeScript + Vite**, Tailwind CSS                                                                                                         | Confirmed. State via React state; add Zustand only if needed. Tests: Vitest + Testing Library.                                                                                                                                                                                                                   |
+| Desktop shell              | **GPUI** via **`gpui-component`** (crates.io; re-exports its pinned GPUI snapshot) | Native Rust UI, no webview: one language, low idle RAM, GPU-rendered. Pre-1.0: upgrades arrive when `gpui-component` bumps; fallback is a git dependency pinned to a Zed commit (ADR-0011). |
+| UI                         | Rust views in `apps/desktop` on `gpui-component` widgets (input with IME, virtual list, forms, theming) | Visual direction: variant A "Pane" (`docs/screenshots/m6-variant-a/`). UI logic lives in plain functions tested with `cargo test`; `#[gpui::test]` for a few view smoke tests. |
 | Core language              | **Rust (stable)**                                                                                                                                   | Pinned in `rust-toolchain.toml`.                                                                                                                                                                                                                                                                                 |
-| Concurrency                | `std::thread` + `crossbeam-channel`                                                                                                                 | Avoid async in `magi-core`. Async only at Tauri command boundaries.                                                                                                                                                                                                                                              |
+| Concurrency                | `std::thread` + `crossbeam-channel`                                                                                                                 | Avoid async in `magi-core`. Async only in the desktop crate: blocking `Host` calls run on GPUI's background executor. |
 | Database                   | **SQLite** via `rusqlite` (`bundled` feature) + **FTS5** + **sqlite-vec** (`sqlite-vec` crate, statically registered)                               | One file, no server, no Docker. WAL mode.                                                                                                                                                                                                                                                                        |
 | File walking               | `ignore`                                                                                                                                            | Fast, glob/gitignore-style filtering.                                                                                                                                                                                                                                                                            |
 | File watching              | `notify` + `notify-debouncer-full`                                                                                                                  | ReadDirectoryChangesW / FSEvents / inotify; debouncer tracks renames.                                                                                                                                                                                                                                            |
@@ -142,11 +143,11 @@ Read this entire file before writing code. It is the source of truth; if code an
 | HEIC/HEIF                  | **`heic-rs`** (pure Rust, MIT OR Apache-2.0, no `unsafe`)                                                                                           | Chosen in the M4 HEIC spike (ADR-0003) over `libheif-rs`: same output on every fixture, 1.3–2.3× faster, and no native library to install, bundle or license. `libheif-rs` remains the documented fallback. No embedded-thumbnail API — thumbnails come from the same decode as OCR/embedding.                   |
 | HTTP (model download only) | `ureq` with rustls                                                                                                                                  | Synchronous, small. Only constructed inside the model manager.                                                                                                                                                                                                                                                   |
 | Config                     | `serde` + `toml`; paths via `directories`                                                                                                           |                                                                                                                                                                                                                                                                                                                  |
-| TS bindings                | `ts-rs`                                                                                                                                             | Generated DTO types into the frontend; never hand-write IPC types.                                                                                                                                                                                                                                               |
-| Tauri plugins              | global-shortcut, single-instance, autostart, dialog, opener, (tray via core `tray-icon` feature)                                                    |                                                                                                                                                                                                                                                                                                                  |
+| Localization               | **ICU4X** (`icu`, `compiled_data`)                                                                                                                  | Plurals, dates, numbers for `en`/`es`. UI strings are one Rust struct per language, shared by the UI and the tray. Trim data with `icu4x-datagen` only if the measured size matters. |
+| Shell integration          | `tray-icon` (tray), `global-hotkey` (hotkey), `interprocess` (single-instance + `--toggle` over a local socket), `auto-launch` (launch at login); GPUI built-ins for folder picker, open and reveal | GPUI has no tray/hotkey/single-instance/autostart. `tray-icon` runs on GPUI's main thread; fallback `gpui-tray`. Never loopback TCP (NFR-9). |
 | Task runner                | `just`                                                                                                                                              | Cross-platform command entry points.                                                                                                                                                                                                                                                                             |
 | Scripting                  | `xtask` crate                                                                                                                                       | Cross-platform dev tasks (fetch PDFium, fetch models) without bash/PowerShell duplication.                                                                                                                                                                                                                       |
-| CI/CD                      | GitHub Actions, `tauri-action` for releases                                                                                                         | Matrix: ubuntu-22.04, macos-14, windows-latest.                                                                                                                                                                                                                                                                  |
+| CI/CD                      | GitHub Actions; release packaging tool open (§9 Q9)                                                                                                 | Matrix: ubuntu-22.04, macos-14, windows-latest. |
 
 ---
 
@@ -154,13 +155,13 @@ Read this entire file before writing code. It is the source of truth; if code an
 
 ### 4.1 Repository decision
 
-Use **one repository (monorepo)** containing a Cargo workspace plus the frontend package. The core engine, CLI, and desktop app share types and must version together; multiple repos would add coordination cost with no benefit.
+Use **one repository (monorepo)** containing a Cargo workspace (core, CLI, desktop app, xtask). The core engine, CLI, and desktop app share types and must version together; multiple repos would add coordination cost with no benefit.
 
 ### 4.2 Accounts and tools
 
 - GitHub account + repository (public recommended for a portfolio project). Enable GitHub Actions.
 - No Hugging Face account needed (models are public), but model URLs and SHA-256 hashes must be verified from the official model pages.
-- Editor: VS Code with `rust-analyzer`, `Tauri`, `Even Better TOML`, `ESLint`, `Tailwind CSS IntelliSense` (recommended).
+- Editor: VS Code with `rust-analyzer` and `Even Better TOML` (recommended).
 - **Optional:** Python 3.11+ with `uv`, only for `tools/reference_embeddings.py` (generates reference vectors used in parity tests). Python is never a runtime dependency.
 
 ### 4.3 Per-OS prerequisites
@@ -168,32 +169,27 @@ Use **one repository (monorepo)** containing a Cargo workspace plus the frontend
 **All platforms**
 
 - Rust via `rustup` (stable, with `rustfmt` and `clippy`).
-- Node.js LTS + pnpm (`corepack enable`).
 - `just` (`cargo install just --locked`, or the OS package manager).
-- Tauri CLI: `pnpm add -D @tauri-apps/cli@^2` in `apps/desktop` (preferred), or `cargo install tauri-cli --version "^2" --locked`.
+- No Node.js, pnpm or Tauri CLI: the desktop app is a plain Cargo binary (ADR-0011).
 - **HEIC needs nothing installed.** ADR-0003 chose the pure-Rust `heic-rs`; the libheif install steps this section used to carry are gone. If the fallback to `libheif-rs` is ever taken, they come back — and with them Ubuntu 22.04's libheif 1.12.0, which is below that crate's 1.17.0 minimum (see ADR-0003).
 
 **Windows**
 
 - Visual Studio 2022 Build Tools with the **"Desktop development with C++"** workload (MSVC + Windows SDK).
-- WebView2 Runtime (preinstalled on Windows 11; install the Evergreen runtime on Windows 10 if missing).
+- A Direct3D 11 capable GPU driver (GPUI renders with D3D11).
 - Enable long paths for development: Group Policy "Enable Win32 long paths", or registry `LongPathsEnabled=1`.
-- `pnpm tauri build` needs the Windows SDK's `rc.exe` on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`).
+- Embedding the app icon and manifest may need the Windows SDK's `rc.exe` on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`).
 
 **macOS**
 
-- Xcode Command Line Tools: `xcode-select --install`.
+- **Full Xcode** (GPUI compiles Metal shaders; the Command Line Tools alone are not enough). Verify against Zed's current macOS build docs.
 - For universal builds: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
 
 **Linux (Debian/Ubuntu)**
 
-```bash
-sudo apt update
-sudo apt install -y build-essential curl wget file pkg-config libssl-dev \
-  libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-For Fedora, use the equivalent packages from the Tauri prerequisites page (`webkit2gtk4.1-devel`, `openssl-devel`, `libappindicator-gtk3-devel`, `librsvg2-devel`, and the "C Development Tools and Libraries" group). **Agents MUST check the current official Tauri v2 prerequisites page and update this list if it has changed.**
+- `build-essential`, `pkg-config`, and the system libraries GPUI needs for X11, Wayland, fonts and Vulkan/GL. Take the current list from Zed's `script/linux` at the Zed revision `gpui-component` pins; do not copy it from memory.
+- The tray (`tray-icon`) needs GTK 3 and AppIndicator development packages (e.g. `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libxdo-dev`). **Agents MUST check the `tray-icon` and `global-hotkey` READMEs and Zed's script, and update this list and its Fedora equivalents, the first time the Linux build runs.**
+- A Vulkan 1.3 or GL driver at runtime (Mesa is enough on Intel/AMD integrated graphics).
 
 ### 4.4 Bootstrap steps (performed in M0)
 
@@ -232,22 +228,22 @@ magi/
 ├── rust-toolchain.toml
 ├── rustfmt.toml
 ├── .editorconfig
-├── .gitignore                      # target/, node_modules/, dist/, vendor/, *.db, models/cache/
+├── .gitignore                      # target/, vendor/, *.db, models/cache/
 ├── .gitattributes                  # * text=auto eol=lf ; *.png/*.pdf/*.jpg binary
 ├── justfile
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                  # fmt, clippy, tests, frontend checks — 3-OS matrix
+│       ├── ci.yml                  # fmt, clippy, tests (incl. headless GPUI tests) — 3-OS matrix
 │       ├── eval.yml                # manual/nightly: downloads models (cached), runs eval
-│       └── release.yml             # on tag v*: tauri-action builds installers
+│       └── release.yml             # on tag v*: builds installers (packaging tool: §9 Q9)
 ├── crates/
-│   ├── magi-core/                 # ALL business logic; no Tauri dependency
+│   ├── magi-core/                 # ALL business logic; no UI dependency
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs              # pub use Engine, EngineHandle, DTOs
 │   │   │   ├── error.rs
 │   │   │   ├── engine.rs           # Engine: owns threads, channels, lifecycle
-│   │   │   ├── dto.rs              # serializable types shared with UI (ts-rs derives)
+│   │   │   ├── dto.rs              # types the UI sees through host::Host (plain Rust)
 │   │   │   ├── config/             # load/save/validate config.toml, defaults per OS
 │   │   │   ├── paths.rs            # data/config/cache dirs, path canonicalization
 │   │   │   ├── db/
@@ -288,39 +284,20 @@ magi/
 │   └── magi-cli/                  # dev/test CLI: doctor, roots, index, daemon, search, eval
 │       └── src/main.rs
 ├── apps/
-│   └── desktop/
-│       ├── package.json
-│       ├── pnpm-lock.yaml
-│       ├── vite.config.ts
-│       ├── tsconfig.json
-│       ├── tailwind.config.ts
-│       ├── index.html
-│       ├── src/
-│       │   ├── main.tsx
-│       │   ├── bindings/           # GENERATED by ts-rs — do not edit
-│       │   ├── lib/ipc.ts          # typed wrappers around invoke()/listen()
-│       │   ├── windows/
-│       │   │   ├── SearchWindow.tsx
-│       │   │   ├── SettingsWindow.tsx
-│       │   │   └── Onboarding.tsx
-│       │   ├── components/         # ResultItem, Snippet, RootList, StatusBadge, ...
-│       │   └── styles/
-│       └── src-tauri/
-│           ├── Cargo.toml
-│           ├── tauri.conf.json
-│           ├── Info.plist          # macOS usage-description strings (merged by Tauri)
-│           ├── capabilities/
-│           │   ├── search.json     # least-privilege permissions per window
-│           │   └── settings.json
-│           ├── icons/
-│           └── src/
-│               ├── main.rs
-│               ├── state.rs        # AppState { engine: EngineHandle }
-│               ├── commands.rs     # #[tauri::command] thin wrappers over magi-core
-│               ├── events.rs       # forwards engine events to the frontend
-│               ├── tray.rs
-│               ├── hotkey.rs
-│               └── windows.rs      # create/show/hide search & settings windows
+│   └── desktop/                    # GPUI app, one binary; thin views over host::Host, no business logic
+│       ├── Cargo.toml
+│       ├── Info.plist              # macOS usage-description strings
+│       ├── assets/                 # icons and self-hosted fonts
+│       └── src/
+│           ├── main.rs             # startup, single-instance, --toggle forwarding
+│           ├── app.rs              # owns the Host; runs its blocking calls on the background executor
+│           ├── i18n/               # string table (one struct per language) + ICU4X formatting
+│           ├── search/             # search window view + pure logic (keyboard nav, highlights)
+│           ├── settings/           # settings window view + validation
+│           ├── onboarding.rs
+│           ├── tray.rs             # tray-icon
+│           ├── hotkey.rs           # global-hotkey
+│           └── theme.rs            # light/dark, window background resolution
 ├── models/
 │   └── manifest.toml               # model ids, file URLs, sha256, dims, licenses
 ├── fixtures/
@@ -334,7 +311,7 @@ magi/
 ├── tools/
 │   └── reference_embeddings.py     # dev-only (uv run)
 ├── xtask/
-│   └── src/main.rs                 # fetch-pdfium, fetch-models, gen-bindings, bench-corpus
+│   └── src/main.rs                 # fetch-pdfium, fetch-models, bench-corpus
 ├── vendor/                         # git-ignored: pdfium and ONNX Runtime binaries per target
 └── docs/
     ├── architecture.md
@@ -357,7 +334,7 @@ magi/
 ```toml
 [workspace]
 resolver = "2"
-members = ["crates/magi-core", "crates/magi-cli", "apps/desktop/src-tauri", "xtask"]
+members = ["crates/magi-core", "crates/magi-cli", "apps/desktop", "xtask"]
 
 [workspace.package]
 edition = "2021"          # or 2024 if the pinned toolchain supports it and all deps build
@@ -388,14 +365,13 @@ components = ["rustfmt", "clippy"]
 
 | Recipe          | Does                                                                                                  |
 | --------------- | ----------------------------------------------------------------------------------------------------- |
-| `just setup`    | `pnpm install` in `apps/desktop`, `cargo xtask fetch-pdfium`                                          |
-| `just dev`      | `pnpm tauri dev`                                                                                      |
-| `just check`    | fmt --check, clippy -D warnings, `cargo test --workspace`, `pnpm lint`, `pnpm typecheck`, `pnpm test` |
-| `just test`     | Rust + frontend tests (fake embedder, no model downloads)                                             |
-| `just bindings` | Regenerate ts-rs bindings and fail if the git diff is non-empty (in CI)                               |
+| `just setup`    | `cargo xtask fetch-pdfium`, `cargo xtask fetch-onnxruntime`                                           |
+| `just dev`      | `cargo run -p magi-desktop`                                                                           |
+| `just check`    | fmt --check, clippy -D warnings, `cargo test --workspace` (includes the desktop crate's tests)        |
+| `just test`     | `cargo test --workspace` (fake embedder, no model downloads)                                          |
 | `just models`   | `cargo xtask fetch-models` into the dev data dir                                                      |
 | `just eval`     | `cargo run -p magi-cli --release -- eval eval/queries.jsonl --corpus fixtures/corpus`                 |
-| `just build`    | `pnpm tauri build`                                                                                    |
+| `just build`    | `cargo build -p magi-desktop --release`; installers per §9 Q9                                         |
 
 **User config file** — `<config_dir>/magi/config.toml` (created with defaults on first run)
 
@@ -478,7 +454,7 @@ Agents MUST fill URLs and hashes by downloading from the official source and com
 
 ### 5.3 Runtime architecture
 
-**Process model.** A single process: the Tauri app hosts `magi-core::Engine`. The engine runs on its own threads; Tauri commands talk to it through an `EngineHandle` (channels plus a read-only DB connection pool for search). The CLI hosts the same engine headless (`magi-cli daemon`).
+**Process model.** A single process: the GPUI desktop app hosts `magi-core::Engine` through `host::Host`. The engine runs on its own threads; the UI talks to it through the Host API (§5.7), whose blocking calls run on GPUI's background executor so the UI thread never waits on the engine. The CLI hosts the same engine headless (`magi-cli daemon`).
 
 **Threads**
 
@@ -662,9 +638,9 @@ Rules:
 6. **Snippet:** use the best-matching chunk. For BM25 hits, use FTS5 `snippet()` with highlight markers. For vector-only hits, show the chunk's first ~200 characters. OCR snippets are labeled "Text in image"; QR snippets "QR code".
 7. Return the top `max_results` files.
 
-### 5.7 IPC contract (Tauri commands → `magi-core`)
+### 5.7 Host API (UI → `magi-core`)
 
-All DTOs live in `magi-core/src/dto.rs`, derive `Serialize`, `Deserialize`, and `ts_rs::TS`, and are exported to `apps/desktop/src/bindings/`.
+The desktop app calls `magi-core::host::Host` directly; there is no IPC layer or serialization. The types the UI sees live in `magi-core/src/dto.rs`. Each command below is a blocking `Host` method (run on GPUI's background executor); each event is delivered on a channel the UI subscribes to.
 
 | Command                                                                               | Request → Response                                                                                                                |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -672,22 +648,22 @@ All DTOs live in `magi-core/src/dto.rs`, derive `Serialize`, `Deserialize`, and 
 | `get_status`                                                                          | → `IndexStatus { state: idle\|scanning\|indexing\|paused, queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` |
 | `list_roots` / `add_root(path)` / `remove_root(id)` / `set_root_enabled(id, enabled)` | Root management. `add_root` runs the permission probe and returns its result.                                                     |
 | `pause_indexing` / `resume_indexing` / `rescan_all`                                   | Indexing control                                                                                                                  |
-| `open_file(file_id)` / `reveal_file(file_id)`                                         | Use the opener plugin, resolving the path from the DB. The frontend never sends raw paths.                                        |
+| `open_file(file_id)` / `reveal_file(file_id)`                                         | `Host` resolves the path from the DB; the UI opens or reveals it with GPUI's `open_with_system` / `reveal_path`. The UI never builds a path itself.                                        |
 | `get_settings` / `update_settings(patch)`                                             | Config read/write with validation                                                                                                 |
 | `get_permissions_report` (M7)                                                        | → `PermissionIssue[]` with per-OS guidance and a settings deep link                                                               |
 | `list_errors(limit)` / `retry_errors`                                                 | Error management. `list_errors` → `FileError { file_id, path, code: FileErrorCode, detail, attempts }`.                          |
 | `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, download_size, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied\|WriteFailed`. Cancel returns to `NotInstalled`. |
 | `clear_index`                                                                         | Empties the index (files, chunks, vectors, thumbnails, backfill counters), keeps the DB file, roots, config and models, then restarts indexing |
 
-`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_path?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`. `thumb_path` is a path inside the thumbnail cache, not a URL; the frontend builds the asset URL. `modified_at` is unix milliseconds.
+`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] }, page?, thumb_path?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`. `thumb_path` is a path inside the thumbnail cache; the UI renders it with GPUI's `img()`. `modified_at` is unix milliseconds.
 
-**Errors:** every command rejects with `ErrorCode`, a stable code plus parameters (`{ code, ...params }`): `RootNotFound{path}`, `NestedRoot{path,conflicts_with}`, `RootAlreadyExists{path}`, `RootIdNotFound{id}`, `FileIdNotFound{file_id}`, `UnknownFeature{name}`, `DownloadInProgress{feature}`, `InvalidSetting{field}`, `InvalidGlob{glob}`, `EngineStarting` (the engine is starting or restarting; retry shortly), `Internal{detail}` (detail is for logs only).
+**Errors:** every command fails with `ErrorCode`, a stable code plus parameters (`{ code, ...params }`): `RootNotFound{path}`, `NestedRoot{path,conflicts_with}`, `RootAlreadyExists{path}`, `RootIdNotFound{id}`, `FileIdNotFound{file_id}`, `UnknownFeature{name}`, `DownloadInProgress{feature}`, `InvalidSetting{field}`, `InvalidGlob{glob}`, `EngineStarting` (the engine is starting or restarting; retry shortly), `Internal{detail}` (detail is for logs only).
 
-**Events:** `engine://status` carries `IndexStatus` (state, progress counts, per-root health), covering progress and roots. `engine://permissions` (M7). `engine://features` (always the complete `FeatureStatus[]`, never a delta).
+**Events:** `status` carries `IndexStatus` (state, progress counts, per-root health), covering progress and roots. `permissions` (M7). `features` (always the complete `FeatureStatus[]`, never a delta).
 
-**Locale neutrality:** user-facing text originating in Rust (errors, permission guidance, failure codes) crosses IPC as a stable code plus parameters (`ts-rs` enums) and is localized by the frontend. Localized text is never a machine-readable contract. Changing `ui.language` changes presentation only, never indexed or search data.
+**Locale neutrality:** user-facing text originating in Rust (errors, permission guidance, failure codes) reaches the UI as a stable code plus parameters (Rust enums) and is localized by the UI's string table. Localized text is never a machine-readable contract. Changing `ui.language` changes presentation only, never indexed or search data.
 
-**Security:** Tauri capabilities grant each window only the commands it needs. The frontend has **no** direct filesystem permissions. The asset protocol scope is limited to the thumbnail cache directory; full-size user files are never exposed to the webview. A strict CSP is set in `tauri.conf.json`.
+**Security:** there is no webview, so no capabilities, CSP or asset scope (ADR-0011). The rule that remains: the UI opens and reveals files only by `file_id` through `Host`, never by a path it built, which keeps every file access the UI can trigger auditable in one place.
 
 ---
 
@@ -735,9 +711,9 @@ The `platform/` module implements these traits for each OS:
 | Permissions     | Standard Unix permissions. Unreadable subtrees → skip with a log. Unreadable root → `permission_denied`.                                                                                                                                     |
 | inotify limits  | One watch per directory. On `ENOSPC` / "too many watches", mark the root `watch_failed`, fall back to polling, and show guidance: `sysctl fs.inotify.max_user_watches` (and how to persist it). Show the current limit in `magi-cli doctor`. |
 | Wayland hotkeys | Global shortcuts may not work under Wayland. Detect `XDG_SESSION_TYPE=wayland`. If registration fails, show instructions to bind a desktop-environment shortcut to `magi --toggle`.                                                          |
-| `--toggle`      | Implemented via the single-instance plugin: the second process forwards args to the running instance and exits. Works on all OSes.                                                                                                           |
+| `--toggle`      | The first instance listens on a local socket (named pipe on Windows, Unix domain socket elsewhere, via `interprocess`); a second process forwards its args there and exits. Never loopback TCP (NFR-9). Works on all OSes.                                                                                                           |
 | Tray            | Requires AppIndicator support. GNOME may need the AppIndicator extension. The app MUST remain fully usable without a tray (launcher opens settings; hotkey or `--toggle` opens search).                                                      |
-| Autostart       | `.desktop` file in `~/.config/autostart` (autostart plugin).                                                                                                                                                                                 |
+| Autostart       | `.desktop` file in `~/.config/autostart` (`auto-launch`).                                                                                                                                                                                 |
 | Priority        | `nice(10)`; optionally `ioprio` idle class.                                                                                                                                                                                                  |
 
 ### 6.4 Cross-platform background policy
@@ -955,7 +931,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 
 **Deliverables**
 
-- The engine hosted in Tauri managed state and started on app launch. Commands and events per §5.7, with generated ts-rs bindings (`just bindings` clean in CI).
+- **Walking skeleton first (ADR-0011):** a GPUI app (`gpui-component`) that starts `host::Host` on launch and wires the Host API (§5.7), a search window calling `Host::search`, tray (`tray-icon`), global hotkey (`global-hotkey`), single-instance with `--toggle` (`interprocess`), and the Windows 11 Mica backdrop. It proves every risky integration before the rest of the UI is built; if it finds something that contradicts this spec, the spec is amended first. Fallbacks: `gpui-tray` if `tray-icon` conflicts with GPUI's main thread; a solid background if a backdrop fails.
 - **Search window:**
   - frameless, centered, always-on-top; hides on blur or `Esc`
   - input with 150 ms debounce; results with thumbnail/icon, name, path, highlighted snippet, page, date, and match-source chips
@@ -963,18 +939,18 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - empty, loading, and error states, plus an "indexing in progress (N queued)" hint
 - **Tray menu:** status line, Open search, Pause/Resume, Settings, Quit.
 - **Global hotkey** (configurable, with conflict detection), single-instance, and `--toggle`.
-- **Optional search features (core, first deliverable; ADR-0010):** `meaning` / `image_text` / `image_visual` each optional; pipeline and search skip a missing feature; `.tmp` + SHA-256 downloads with stable failure codes; enabling backfills only files missing that feature's output; disabling keeps derived data; "Remove download" deletes only the asset; `engine://features` carries the complete state; `magi-cli features list|enable|disable [--delete-download]`, `doctor` reports features. Tests first.
+- **Optional search features (core, first deliverable; ADR-0010):** `meaning` / `image_text` / `image_visual` each optional; pipeline and search skip a missing feature; `.tmp` + SHA-256 downloads with stable failure codes; enabling backfills only files missing that feature's output; disabling keeps derived data; "Remove download" deletes only the asset; the `features` event carries the complete state; `magi-cli features list|enable|disable [--delete-download]`, `doctor` reports features. Tests first.
 - **Settings window:** roots list with status badges and fix actions, add/remove/enable, exclusions editor, file types, max size, hotkey recorder, battery pause, launch at login, search features (status, size, backfill progress, remove download), language, window background, index stats, error list with retry, clear index (with confirmation).
 - **Onboarding flow** per FR-10, including the feature-download consent screen that states exact sizes and that no other network access occurs, and "Keep Magi available in the background ☑ Start with your computer".
 - **Search hint:** when fewer than 3 results return and a feature that could help is off, a dismissible hint offers to turn it on (or reports its backfill progress).
-- **Localization:** complete English and Spanish UI. Typed dictionaries (`es` must satisfy the `en` type), `Intl` for plurals/dates/numbers, `ui.language = system|en|es`, live switch without restart; the Rust tray uses its own string table.
-- **Theme and window background:** light/dark following the OS. Search window uses native transparency via `window-vibrancy` (Mica on Windows 11, Acrylic on Windows 10, vibrancy on macOS, solid on Linux or failure), resolved from `ui.transparency_mode` and the OS reduce-transparency preference; `ui.transparency_intensity` slider ("More solid" ↔ "More transparent") is disabled when the effective state is solid. Other windows stay solid.
-- **Visual direction** chosen via a throwaway prototype (2–3 directions, fake data) before the UI is built.
-- Least-privilege capabilities per window, CSP, asset scope limited to the thumbnail cache.
+- **Localization:** complete English and Spanish UI. One Rust string struct per language (the compiler checks that `es` covers every `en` string), ICU4X for plurals/dates/numbers, `ui.language = system|en|es`, live switch without restart; the tray uses the same string table.
+- **Theme and window background:** light/dark following the OS. Search window uses GPUI's window background (Mica on Windows 11, solid on Windows 10, Blurred on macOS if it proves to be real vibrancy, solid on Linux or failure; ADR-0011), resolved from `ui.transparency_mode` and the OS reduce-transparency preference; `ui.transparency_intensity` slider ("More solid" ↔ "More transparent") is disabled when the effective state is solid; it is removed from config and settings if it visibly changes nothing on a GPUI backdrop. Other windows stay solid.
+- **Visual direction:** variant A "Pane", chosen from a throwaway prototype (screenshots in `docs/screenshots/m6-variant-a/`; source on the `prototype/m6-visual` branch).
+- The UI opens and reveals files only by `file_id` through `Host` (§5.7 Security).
 
 **Verification**
 
-- [ ] Vitest tests: result rendering (snippet highlights), keyboard navigation reducer, settings form validation, transparency resolution, language resolution, and a type check that the `es` dictionary covers every `en` key.
+- [ ] `cargo test` on the desktop crate's pure logic: snippet highlight ranges, keyboard navigation, settings validation, transparency resolution, language resolution; `#[gpui::test]` smoke tests for the search window. (`es` covering `en` is a compile-time guarantee.)
 - [ ] Core tests: search and indexing work with no features installed (keyword + filename); enabling a feature backfills only files missing its output; disabling keeps derived data; a failed or cancelled download never leaves an `Installed` asset.
 - [ ] `docs/qa-checklist.md` completed on all three OSes, including:
   - hotkey toggle
@@ -984,7 +960,10 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - window hides on blur
   - app works with the tray unavailable (Linux GNOME without the extension)
 - [ ] With warm models, the search window is visible < 150 ms after the hotkey and the first results appear < 400 ms after typing stops.
-- [ ] The frontend cannot call any filesystem API directly (verify the capability files; attempt a forbidden call in a test build and confirm it's denied).
+- [ ] Idle footprint with the window hidden meets NFR-1 (RSS ≤ 150 MB); record the number in `docs/benchmarks.md`.
+- [ ] The app renders on a GPU-less Windows VM and Linux VM (software rendering), or the GPU requirement (§1) is documented as the reason it does not.
+- [ ] Text input with an IME and with dead keys (Spanish accents) works in the search window on every OS.
+- [ ] CI builds the desktop app and runs its headless tests on all three OSes.
 
 ### M7 — Permissions and background-behavior hardening
 
@@ -1030,7 +1009,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - Linux: AppImage + `.deb` (optionally `.rpm`)
 - PDFium and ONNX Runtime correctly bundled and located at runtime. Use `@rpath` on macOS, next to the executable on Windows, and inside the AppImage on Linux. (HEIC needs no bundling — ADR-0003.)
 - `THIRD_PARTY_LICENSES.md` generated with `cargo-about`, plus manual entries for bundled native libraries. An ADR decides static linking vs. dynamic loading for `ort`, verified on clean machines.
-- `release.yml`: on tag `v*`, build all bundles with `tauri-action`, attach SHA-256 checksums, create a draft GitHub Release.
+- `release.yml`: on tag `v*`, build all bundles with the packaging tool chosen in §9 Q9, attach SHA-256 checksums, create a draft GitHub Release.
 - README "Install" section for **unsigned builds**:
   - Windows SmartScreen: "More info → Run anyway"
   - macOS: "System Settings → Privacy & Security → Open Anyway"
@@ -1067,7 +1046,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 | Model parity                      | reference vectors; requires model files                             | `eval.yml` (manual/nightly, cached models)        |
 | Retrieval quality                 | `magi-cli eval` → `docs/eval.md`                                    | `eval.yml` + before merging ranking/model changes |
 | Performance                       | `xtask bench-corpus` (synthetic 100k chunks) → `docs/benchmarks.md` | manual, per milestone                             |
-| Frontend                          | Vitest + Testing Library                                            | CI                                                |
+| UI (desktop crate)                | `cargo test` on plain UI-logic functions; `#[gpui::test]` view smoke tests (headless) | CI, all OSes                                      |
 | End-to-end / OS behavior          | `docs/qa-checklist.md`, `docs/permissions.md`                       | manual, per OS, per milestone M6+                 |
 
 Rules:
@@ -1083,12 +1062,13 @@ Rules:
 | #      | Question                                                                                                                                                       | Blocks | Default if unanswered                                                                      |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------ |
 | Q1     | Final product name (replaces `magi`)                                                                                                                           | M8     | Keep `magi`                                                                                |
-| ~~Q2~~ | Frontend framework                                                                                                                                             | —      | **Answered 2026-09-10:** React + TypeScript                                                |
+| ~~Q2~~ | Frontend framework                                                                                                                                             | —      | **Answered 2026-09-10:** React + TypeScript; **superseded 2026-09-29:** GPUI, no web frontend (ADR-0011)                                                |
 | ~~Q3~~ | HEIC/HEIF (phone photos) in v1?                                                                                                                                | —      | **Answered 2026-09-10:** Yes, required (M4)                                                |
 | ~~Q4~~ | Minimum target hardware                                                                                                                                        | —      | **Answered 2026-09-10:** 8 GB RAM laptop (§1 reference machine)                            |
 | Q5     | Is macOS Intel (x86_64) support required?                                                                                                                      | M8     | Best-effort                                                                                |
 | Q6     | License for the repository (MIT assumed)                                                                                                                       | M0     | MIT                                                                                        |
 | ~~Q7~~ | Should launch-at-login default to on after onboarding? | — | **Answered 2026-09-25:** Offered in onboarding, checked by default (ADR-0010) |
 | ~~Q8~~ | If ADR-0003 must fall back to native HEIC decoders and Windows lacks the HEVC extension, is "HEIC not supported on this PC, install the extension" acceptable? | —      | **Moot 2026-09-19:** ADR-0003 chose `heic-rs`, which decodes in-process on every platform. |
+| Q9     | Packaging tool for the GPUI app: `cargo-packager` vs. per-OS scripts (as Zed does) — produces the NSIS, `.dmg`, AppImage and `.deb` bundles M8 lists (ADR-0011) | M8 | Decide at the start of M8 |
 
 Record answers here (with date) and update affected sections.
