@@ -1,10 +1,11 @@
 # SPEC.md — magi: Local Semantic File Search
 
 > **Codename:** `magi` (placeholder; see Open Questions). Replace globally once a final name is chosen.
-> **Spec version:** 1.2 · **Status:** Approved for implementation · **Audience:** AI coding agents and human contributors
+> **Spec version:** 1.2.1 · **Status:** Approved for implementation · **Audience:** AI coding agents and human contributors
 >
 > **Changelog**
 >
+> - 1.2.1 (2026-09-29): Windows 11 search window uses GPUI's **Blurred** background instead of Mica (ADR-0011 amendment): Mica was indistinguishable from solid in testing.
 > - 1.2 (2026-09-29): **Desktop shell moved from Tauri + React to GPUI** (ADR-0011). No webview, no TypeScript: the UI is Rust and calls `host::Host` directly (§5.7 is now the Host API, `ts-rs` removed). GPU row added to the reference machine. Tray, hotkey, single-instance and autostart via dedicated crates. Windows 10 search window is solid (no Acrylic). Localization via ICU4X. Packaging tool is open (Q9). M0–M5 text is historical and still mentions Tauri where it described what was built then. The v1.1 text is frozen in `docs/SPEC-v1.1-tauri.md`.
 > - 1.1 (2026-09-10): Frontend confirmed as React + TypeScript. **HEIC/HEIF support moved into v1** (M4). **Reference machine set to an 8 GB RAM laptop**: memory budgets, quantized models, and memory-aware concurrency added.
 > - 1.0: Initial spec.
@@ -931,7 +932,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 
 **Deliverables**
 
-- **Walking skeleton first (ADR-0011):** a GPUI app (`gpui-component`) that starts `host::Host` on launch and wires the Host API (§5.7), a search window calling `Host::search`, tray (`tray-icon`), global hotkey (`global-hotkey`), single-instance with `--toggle` (`interprocess`), and the Windows 11 Mica backdrop. It proves every risky integration before the rest of the UI is built; if it finds something that contradicts this spec, the spec is amended first. Fallbacks: `gpui-tray` if `tray-icon` conflicts with GPUI's main thread; a solid background if a backdrop fails.
+- **Walking skeleton first (ADR-0011):** a GPUI app (`gpui-component`) that starts `host::Host` on launch and wires the Host API (§5.7), a search window calling `Host::search`, tray (`tray-icon`), global hotkey (`global-hotkey`), single-instance with `--toggle` (`interprocess`), and the Windows 11 blurred backdrop. It proves every risky integration before the rest of the UI is built; if it finds something that contradicts this spec, the spec is amended first. Fallbacks: `gpui-tray` if `tray-icon` conflicts with GPUI's main thread; a solid background if a backdrop fails.
 - **Search window:**
   - frameless, centered, always-on-top; hides on blur or `Esc`
   - input with 150 ms debounce; results with thumbnail/icon, name, path, highlighted snippet, page, date, and match-source chips
@@ -944,7 +945,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
 - **Onboarding flow** per FR-10, including the feature-download consent screen that states exact sizes and that no other network access occurs, and "Keep Magi available in the background ☑ Start with your computer".
 - **Search hint:** when fewer than 3 results return and a feature that could help is off, a dismissible hint offers to turn it on (or reports its backfill progress).
 - **Localization:** complete English and Spanish UI. One Rust string struct per language (the compiler checks that `es` covers every `en` string), ICU4X for plurals/dates/numbers, `ui.language = system|en|es`, live switch without restart; the tray uses the same string table.
-- **Theme and window background:** light/dark following the OS. Search window uses GPUI's window background (Mica on Windows 11, solid on Windows 10, Blurred on macOS if it proves to be real vibrancy, solid on Linux or failure; ADR-0011), resolved from `ui.transparency_mode` and the OS reduce-transparency preference; `ui.transparency_intensity` slider ("More solid" ↔ "More transparent") is disabled when the effective state is solid; it is removed from config and settings if it visibly changes nothing on a GPUI backdrop. Other windows stay solid.
+- **Theme and window background:** light/dark following the OS. Search window uses GPUI's window background (Blurred on Windows 11, solid on Windows 10, Blurred on macOS if it proves to be real vibrancy, solid on Linux or failure; ADR-0011), resolved from `ui.transparency_mode` and the OS reduce-transparency preference; `ui.transparency_intensity` slider ("More solid" ↔ "More transparent") is disabled when the effective state is solid; it is removed from config and settings if it visibly changes nothing on a GPUI backdrop. Other windows stay solid.
 - **Visual direction:** variant A "Pane", chosen from a throwaway prototype (screenshots in `docs/screenshots/m6-variant-a/`; source on the `prototype/m6-visual` branch).
 - The UI opens and reveals files only by `file_id` through `Host` (§5.7 Security).
 

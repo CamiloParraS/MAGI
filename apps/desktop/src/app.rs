@@ -175,7 +175,21 @@ impl Shell {
         match gpui_kit::open_window(options, cx, move |window, cx| {
             cx.new(|cx| SearchView::new(host, backdrop, opened_at, window, cx))
         }) {
-            Ok((handle, _)) => self.window = Some(handle),
+            Ok((handle, _)) => {
+                // gpui-component paints the theme background (opaque) on the
+                // root, hiding the backdrop; Root's own style is applied last.
+                if matches!(backdrop, theme::Backdrop::Blurred { .. }) {
+                    let _ = handle.update(cx, |root, _, cx| {
+                        if let Ok(root) = root.downcast::<base::Root>() {
+                            root.update(cx, |root, cx| {
+                                root.style().background = Some(transparent_black().into());
+                                cx.notify();
+                            });
+                        }
+                    });
+                }
+                self.window = Some(handle)
+            }
             Err(error) => tracing::error!(%error, "could not open the search window"),
         }
     }

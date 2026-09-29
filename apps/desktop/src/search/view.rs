@@ -157,7 +157,7 @@ impl Render for SearchView {
             tracing::info!(elapsed = ?opened_at.elapsed(), "search window first frame");
         }
         let alpha = match self.backdrop {
-            Backdrop::Mica { tint_alpha } => tint_alpha,
+            Backdrop::Blurred { tint_alpha } => tint_alpha,
             Backdrop::Solid => 1.0,
         };
         let selected = self.state.selected_index();

@@ -74,7 +74,9 @@ All windows (search, settings, onboarding) are GPUI; there is no webview.
   in a privileged context. The one rule kept: the UI opens and reveals files
   only by `file_id` through `Host`, never by a path it builds.
 - **Window background** (amends ADR-0010):
-  - Windows 11: Mica
+  - Windows 11: Blurred (amended 2026-09-29: Mica tested as near-opaque — it
+    samples only the wallpaper, and on a dark theme reads as solid grey —
+    while Blurred shows the windows behind; see `docs/progress.md`)
   - Windows 10: **solid**
   - macOS: Blurred, if it proves to be real vibrancy, otherwise solid
   - Linux: solid

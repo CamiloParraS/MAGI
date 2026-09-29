@@ -7,8 +7,8 @@ use magi_core::platform::BackdropSupport;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Backdrop {
     /// `tint_alpha` is `ui.transparency_intensity`: the alpha of the colour
-    /// the window paints over the Mica backdrop.
-    Mica {
+    /// the window paints over the blurred backdrop.
+    Blurred {
         tint_alpha: f32,
     },
     Solid,
@@ -21,7 +21,7 @@ pub fn backdrop(mode: TransparencyMode, intensity: f32, support: BackdropSupport
         TransparencyMode::MatchSystem => !support.reduce_transparency,
     };
     if wanted && support.mica {
-        Backdrop::Mica {
+        Backdrop::Blurred {
             tint_alpha: intensity,
         }
     } else {
@@ -31,7 +31,7 @@ pub fn backdrop(mode: TransparencyMode, intensity: f32, support: BackdropSupport
 
 pub fn window_background(backdrop: Backdrop) -> WindowBackgroundAppearance {
     match backdrop {
-        Backdrop::Mica { .. } => WindowBackgroundAppearance::MicaBackdrop,
+        Backdrop::Blurred { .. } => WindowBackgroundAppearance::Blurred,
         Backdrop::Solid => WindowBackgroundAppearance::Opaque,
     }
 }
@@ -51,11 +51,11 @@ mod tests {
         assert_eq!(backdrop(Never, 0.75, MICA), Backdrop::Solid);
         assert_eq!(
             backdrop(Always, 0.75, MICA),
-            Backdrop::Mica { tint_alpha: 0.75 }
+            Backdrop::Blurred { tint_alpha: 0.75 }
         );
         assert_eq!(
             backdrop(MatchSystem, 0.6, MICA),
-            Backdrop::Mica { tint_alpha: 0.6 }
+            Backdrop::Blurred { tint_alpha: 0.6 }
         );
         let reduced = BackdropSupport {
             reduce_transparency: true,
@@ -64,7 +64,7 @@ mod tests {
         assert_eq!(backdrop(MatchSystem, 0.75, reduced), Backdrop::Solid);
         assert_eq!(
             backdrop(Always, 0.75, reduced),
-            Backdrop::Mica { tint_alpha: 0.75 }
+            Backdrop::Blurred { tint_alpha: 0.75 }
         );
     }
 
