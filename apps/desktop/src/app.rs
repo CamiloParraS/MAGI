@@ -9,7 +9,8 @@ use gpui_kit::*;
 use magi_core::config::UiConfig;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
-use crate::theme::{self, Backdrop};
+use crate::search::view::SearchView;
+use crate::theme;
 
 pub enum AppEvent {
     /// Open the search window, or bring it forward.
@@ -37,6 +38,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
     let _ = tx.send_blocking(first);
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        SearchView::bind_keys(cx);
         // The app lives in the tray; closing the search window never quits.
         cx.set_quit_mode(QuitMode::Explicit);
         let mut shell = Shell {
@@ -57,7 +59,6 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
 }
 
 struct Shell {
-    #[expect(dead_code, reason = "the search window takes it in Task 5")]
     host: Host,
     ui: UiConfig,
     window: Option<AnyWindowHandle>,
@@ -114,34 +115,12 @@ impl Shell {
             window_background: theme::window_background(backdrop),
             ..Default::default()
         };
-        match gpui_kit::open_window(options, cx, move |_, cx| {
-            cx.new(|_| Placeholder {
-                backdrop,
-                opened_at,
-            })
+        let host = self.host.clone();
+        match gpui_kit::open_window(options, cx, move |window, cx| {
+            cx.new(|cx| SearchView::new(host, backdrop, opened_at, window, cx))
         }) {
             Ok((handle, _)) => self.window = Some(handle),
             Err(error) => tracing::error!(%error, "could not open the search window"),
         }
-    }
-}
-
-/// Stands in for the search window until Task 5.
-struct Placeholder {
-    backdrop: Backdrop,
-    opened_at: Instant,
-}
-
-impl Render for Placeholder {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        tracing::info!(elapsed = ?self.opened_at.elapsed(), "search window frame");
-        let alpha = match self.backdrop {
-            Backdrop::Mica { tint_alpha } => tint_alpha,
-            Backdrop::Solid => 1.0,
-        };
-        div()
-            .size_full()
-            .bg(hsla(0., 0., 0.97, alpha))
-            .child("magi")
     }
 }

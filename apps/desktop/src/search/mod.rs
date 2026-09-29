@@ -2,3 +2,4 @@
 
 pub mod highlight;
 pub mod state;
+pub mod view;
