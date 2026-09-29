@@ -2182,3 +2182,17 @@ plan. Recorded as a gap for whichever plan takes on memory budget work.
 **Windows build note:** `pnpm tauri build` needed the Windows SDK's `rc.exe`
 on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`);
 recorded in SPEC.md §4.3.
+
+## M6 — Plan 3 visual direction and GPUI shell evaluation (2026-09-28)
+
+**Visual direction chosen: variant A ("Pane")** from the throwaway prototype
+(commit `ee0dc90`, `apps/desktop/src/prototype/VariantA.tsx`): one translucent
+column, the snippet only under the selected row, settings as a sidebar plus
+grouped rows.
+
+**Paused for a shell evaluation:** moving from Tauri + React to GPUI is being
+evaluated on `feat/gpui-shell` with a Windows spike measured against a Tauri
+baseline. Decisions, go/no-go criteria and next steps:
+`docs/superpowers/specs/2026-09-28-gpui-shell-evaluation-design.md`. The
+pre-evaluation spec is frozen at `docs/SPEC-v1.1-tauri.md`; the Tauri work stays
+on `feat/User_Interface`.
