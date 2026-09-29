@@ -609,8 +609,8 @@ its own read-only DB connection for search.
   `remove_download`, `clear_index` (on `Host` or its `EngineHandle`). All
   block, so the desktop app runs them on GPUI's background executor and the
   UI thread never waits on the database or a model. `open_file`/`reveal_file`
-  resolve the path from the DB (`Host::file_path`); the UI never builds a
-  path. `list_roots` also reads the DB (`Host::list_roots`), so it answers
+  resolve the path from the DB (`Host::file_path`, which also errors when
+  the file no longer exists); the UI never builds a path. `list_roots` also reads the DB (`Host::list_roots`), so it answers
   while the engine restarts, and `search` clamps its `limit` to 1..=500. The
   supervisor coalesces what queues up while the engine starts or stops: the
   newest feature state only, and one control (Stop > Clear > Restart).

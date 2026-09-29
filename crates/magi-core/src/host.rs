@@ -207,8 +207,16 @@ impl Host {
         })
     }
 
+    /// Errors with `FileIdNotFound` too when the row is stale (the file is
+    /// gone but the watcher has not caught up). Metadata only, so a cloud
+    /// placeholder is not downloaded.
     pub fn file_path(&self, file_id: i64) -> Result<PathBuf> {
-        files::path_of(&lock(&self.inner.reader), file_id)
+        let path = files::path_of(&lock(&self.inner.reader), file_id)?;
+        if path.try_exists().unwrap_or(false) {
+            Ok(path)
+        } else {
+            Err(crate::error::Error::FileIdNotFound(file_id))
+        }
     }
 
     /// From the database, so it answers while the engine (re)starts.

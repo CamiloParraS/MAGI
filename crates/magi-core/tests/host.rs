@@ -175,6 +175,12 @@ fn search_returns_metadata_highlights_and_sources() {
             .unwrap()
             .join("invoice.txt")
     );
+    // A stale row (deleted before the watcher caught up) must not resolve.
+    std::fs::remove_file(env.root().join("invoice.txt")).unwrap();
+    assert!(matches!(
+        env.host.file_path(hit.file_id),
+        Err(magi_core::Error::FileIdNotFound(_))
+    ));
 }
 
 #[test]
