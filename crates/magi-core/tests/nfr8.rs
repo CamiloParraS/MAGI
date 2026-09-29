@@ -32,6 +32,8 @@ fn search_latency_while_indexing() {
     };
     let mut config = Config::default();
     config.features.image_visual = true;
+    // On battery the engine pauses and there would be no indexing to measure against.
+    config.indexing.pause_on_battery = false;
     std::fs::write(&paths.config, toml::to_string(&config).unwrap()).unwrap();
     let host = Host::start(paths, |_| {}).unwrap();
     let engine = loop {

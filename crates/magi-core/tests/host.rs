@@ -56,10 +56,12 @@ impl Env {
             db: dir.path().join("magi.db"),
             config: dir.path().join("config.toml"),
         };
-        let config = Config {
+        let mut config = Config {
             features,
             ..Config::default()
         };
+        // A laptop running the tests on battery must not pause them.
+        config.indexing.pause_on_battery = false;
         std::fs::write(&paths.config, toml::to_string(&config).unwrap()).unwrap();
         let (tx, events) = crossbeam_channel::unbounded();
         let host = Host::start(paths, move |e| {

@@ -2203,3 +2203,16 @@ Tauri shell, React frontend and `ts-rs` bindings were removed from
 Plan 2's seven manual in-app console checks are void (they tested the
 webview's capabilities). Plan 2's `Host`-level tests all still apply. Next:
 M6 Plan 3, starting with the walking skeleton.
+
+**2026-09-29: `tests/host.rs` fixed on battery.** Six of its ten tests (every
+one that waits for a file to be indexed) timed out on Windows. Not the
+`Engine::start` known gap, not the shared `MAGI_DATA_DIR` (the tests fail run
+alone) and not the temp-dir roots: the laptop was on battery, and
+`Config::default()` has `indexing.pause_on_battery = true`, so the engine
+never indexed. The Plan 2 run was on AC power. `tests/host.rs` now sets
+`pause_on_battery = false`, as `incremental.rs`, `features.rs` and the
+`daemon` test already did; `nfr8.rs` too, since on battery it would measure
+search latency with indexing paused. Verified on battery (`PowerLineStatus:
+Offline`): `MAGI_FAKE_EMBEDDER=1 cargo test -p magi-core --test host`, 10
+passed. Confirmed on AC (`Online`): the unfixed `host.rs` passes 10/10 there
+too, so power state alone decided the outcome.
