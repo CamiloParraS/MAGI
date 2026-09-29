@@ -1,0 +1,25 @@
+[package]
+name = "magi-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "magi desktop app (GPUI, ADR-0011)"
+
+[[bin]]
+name = "magi"
+path = "src/main.rs"
+
+[dependencies]
+magi-core = { path = "../../crates/magi-core" }
+gpui-kit = { workspace = true }
+tray-icon = { workspace = true }
+global-hotkey = { workspace = true }
+interprocess = { workspace = true }
+async-channel = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }

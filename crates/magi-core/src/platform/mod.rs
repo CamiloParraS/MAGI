@@ -292,9 +292,44 @@ pub fn onnxruntime_library_filename() -> &'static str {
     }
 }
 
+/// What the OS offers the search window's background (ADR-0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BackdropSupport {
+    /// Windows 11 22H2+: GPUI sets `DWMWA_SYSTEMBACKDROP_TYPE`, which older builds ignore.
+    pub mica: bool,
+    /// The user turned transparency effects off in the OS.
+    pub reduce_transparency: bool,
+}
+
+/// GPUI's Windows backend applies Mica only from build 22621 (gpui-pre 0.3.7).
+pub fn mica_supported_on_build(build: u32) -> bool {
+    build >= 22621
+}
+
+/// This machine's [`BackdropSupport`]. Only Windows offers Mica for now; macOS
+/// vibrancy is decided in M6 Plan 4 (ADR-0011).
+pub fn backdrop_support() -> BackdropSupport {
+    #[cfg(target_os = "windows")]
+    {
+        windows::backdrop_support()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        BackdropSupport::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mica_needs_windows_11_22h2() {
+        assert!(!mica_supported_on_build(19045)); // Windows 10 22H2
+        assert!(!mica_supported_on_build(22000)); // Windows 11 21H2
+        assert!(mica_supported_on_build(22621));
+        assert!(mica_supported_on_build(26100));
+    }
 
     #[test]
     fn probe_tells_a_folder_from_a_missing_one() {

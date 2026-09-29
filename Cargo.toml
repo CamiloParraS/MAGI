@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/magi-core", "crates/magi-cli", "xtask"]
+members = ["crates/magi-core", "crates/magi-cli", "apps/desktop", "xtask"]
 
 [workspace.package]
 edition = "2024"
@@ -33,7 +33,7 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system"] 
 ctrlc = "3.5.2"
 # Thin OS bindings for platform/ (thread priority, power status, drive type). No native library.
 libc = "0.2.189"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Power", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Power", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
 clap = { version = "4.6.6", features = ["derive"] }
 infer = "0.22.0"
 ignore = "0.4.33"
@@ -81,6 +81,16 @@ ureq = "3.4.2"
 # `xtask/src/main.rs` and ADR-0001).
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-27"] }
 ndarray = "0.17"
+# Desktop UI (ADR-0011): gpui-component 0.7 plus its pinned GPUI (gpui-pre =0.3.7) in one crate.
+gpui-kit = "0.7"
+# Tray icon and menu; GPUI has none (ADR-0011). Runs on GPUI's main thread.
+tray-icon = "0.25.1"
+# System-wide hotkey; GPUI has none (ADR-0011).
+global-hotkey = "0.8.0"
+# Single-instance + `--toggle` over a named pipe / Unix socket, never TCP (SPEC section 6.3, NFR-9).
+interprocess = "2.4.4"
+# Carries tray/hotkey/host/instance events from their threads to GPUI's main thread.
+async-channel = "2.5.0"
 
 [profile.release]
 lto = "thin"

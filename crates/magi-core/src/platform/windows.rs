@@ -76,10 +76,99 @@ pub fn lower_current_thread() {
     }
 }
 
+use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+};
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain([0]).collect()
+}
+
+fn registry_dword(root: HKEY, key: &str, value: &str) -> Option<u32> {
+    let (key, value) = (wide(key), wide(value));
+    let mut data = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: `key`/`value` are NUL-terminated and outlive the call; `data`
+    // is `size` writable bytes.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut data as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    (status == ERROR_SUCCESS).then_some(data)
+}
+
+fn registry_string(root: HKEY, key: &str, value: &str) -> Option<String> {
+    let (key, value) = (wide(key), wide(value));
+    let mut buf = [0u16; 128];
+    let mut size = std::mem::size_of_val(&buf) as u32;
+    // SAFETY: as above; `buf` is `size` writable bytes.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    // `size` counts bytes including the terminating NUL.
+    let len = (size as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
+/// The OS build number from the registry (`GetVersionEx` lies without a
+/// compatibility manifest), and the "Transparency effects" setting.
+pub fn backdrop_support() -> super::BackdropSupport {
+    let build = registry_string(
+        HKEY_LOCAL_MACHINE,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        "CurrentBuildNumber",
+    )
+    .and_then(|b| b.trim().parse().ok())
+    .unwrap_or(0);
+    let transparency = registry_dword(
+        HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        "EnableTransparency",
+    );
+    super::BackdropSupport {
+        mica: super::mica_supported_on_build(build),
+        reduce_transparency: transparency == Some(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::{CloudPlaceholder, Os};
+
+    #[test]
+    fn every_windows_install_has_a_build_number() {
+        let build = registry_string(
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            "CurrentBuildNumber",
+        );
+        assert!(
+            build
+                .and_then(|b| b.parse::<u32>().ok())
+                .is_some_and(|b| b >= 10240)
+        );
+    }
+
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_OFFLINE, SetFileAttributesW};
 
