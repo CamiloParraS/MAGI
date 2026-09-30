@@ -5,6 +5,7 @@ pub mod view;
 
 use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
+use magi_core::discovery::Kind;
 use magi_core::dto::{ErrorCode, RootStatus};
 use magi_core::platform::BackdropSupport;
 
@@ -37,8 +38,50 @@ pub fn error_text(error: &ErrorCode, s: &Strings) -> String {
             .replace("{path}", path)
             .replace("{other}", conflicts_with),
         ErrorCode::EngineStarting => s.engine_starting.into(),
+        ErrorCode::InvalidGlob { glob } => s.invalid_glob.replace("{glob}", glob),
+        ErrorCode::InvalidSetting { field } if field == MAX_SIZE_FIELD => s.invalid_size.into(),
         _ => s.change_failed.into(),
     }
+}
+
+/// The kinds that can have their content read, in the order they are shown.
+pub const FILE_TYPES: [Kind; 5] = [Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image];
+
+/// The field a bad max-size entry is reported under.
+pub const MAX_SIZE_FIELD: &str = "indexing.max_file_size_mb";
+
+pub fn kind_label(kind: Kind, s: &Strings) -> &'static str {
+    match kind {
+        Kind::Text => s.kind_text,
+        Kind::Code => s.kind_code,
+        Kind::Pdf => s.kind_pdf,
+        Kind::Office => s.kind_office,
+        Kind::Image | Kind::Other => s.kind_image,
+    }
+}
+
+/// `types` with `kind` switched on or off, in [`FILE_TYPES`] order.
+pub fn toggle_kind(types: &[Kind], kind: Kind, on: bool) -> Vec<Kind> {
+    FILE_TYPES
+        .into_iter()
+        .filter(|&k| if k == kind { on } else { types.contains(&k) })
+        .collect()
+}
+
+/// The largest file to read, from what the user typed: whole megabytes, 1
+/// or more.
+pub fn max_size_from_text(text: &str) -> Option<u64> {
+    text.trim().parse().ok().filter(|&mb| mb >= 1)
+}
+
+/// Exclusion patterns, one per line; blank lines and surrounding spaces
+/// are dropped.
+pub fn globs_from_text(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// "Same as system (English)": the `system` choice names what it resolves to.
@@ -163,6 +206,68 @@ mod tests {
             "Couldn't save the change.",
             "internal details are for the log only"
         );
+    }
+
+    #[test]
+    fn index_setting_errors_say_what_to_fix() {
+        let s = Lang::En.strings();
+        assert_eq!(
+            error_text(
+                &ErrorCode::InvalidGlob {
+                    glob: "**/[bad".into()
+                },
+                s
+            ),
+            "“**/[bad” isn't a valid pattern."
+        );
+        assert_eq!(
+            error_text(
+                &ErrorCode::InvalidSetting {
+                    field: MAX_SIZE_FIELD.into()
+                },
+                s
+            ),
+            "Enter a whole number of megabytes, 1 or more."
+        );
+    }
+
+    #[test]
+    fn toggling_a_kind_keeps_the_display_order() {
+        use Kind::*;
+        assert_eq!(
+            toggle_kind(&[Image, Text], Pdf, true),
+            vec![Text, Pdf, Image]
+        );
+        assert_eq!(toggle_kind(&[Text, Pdf], Pdf, false), vec![Text]);
+        assert_eq!(
+            toggle_kind(&[Text], Text, true),
+            vec![Text],
+            "no duplicates"
+        );
+        assert_eq!(toggle_kind(&[Text], Code, false), vec![Text]);
+        assert_eq!(
+            toggle_kind(&[Text, Other], Code, true),
+            vec![Text, Code],
+            "kinds the window doesn't show are dropped"
+        );
+    }
+
+    #[test]
+    fn the_max_size_is_whole_megabytes() {
+        assert_eq!(max_size_from_text(" 100 "), Some(100));
+        assert_eq!(max_size_from_text("1"), Some(1));
+        for bad in ["0", "", "-5", "1.5", "ten", "99999999999999999999999"] {
+            assert_eq!(max_size_from_text(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn globs_are_one_per_line() {
+        assert_eq!(
+            globs_from_text("**/node_modules/**\r\n\n  **/*.tmp  \n\n"),
+            vec!["**/node_modules/**", "**/*.tmp"]
+        );
+        assert!(globs_from_text("  \n").is_empty());
     }
 
     #[test]

@@ -4,18 +4,24 @@
 //! the first one (the engine sends none during its startup walk); every
 //! change goes through the engine, and the next status shows it.
 //!
+//! What to index: file types, largest file, exclusions. Each save restarts
+//! the engine, which re-walks every root, so a value is saved only when it
+//! changed, and text fields save on Enter, blur or Save, never per keystroke.
+//!
 //! Appearance: language and the search window's background. A saved change
 //! goes to the shell as [`AppEvent::Ui`], which applies it live.
 
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::searchable_list::SearchableListItem;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::config::{Language, TransparencyMode, UiConfig};
+use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
 use magi_core::dto::{ErrorCode, RootStatus};
 use magi_core::engine::EngineHandle;
 use magi_core::host::Host;
@@ -23,8 +29,9 @@ use magi_core::platform::BackdropSupport;
 use serde_json::json;
 
 use super::{
-    background_label, error_text, intensity_from_slider, root_line, see_through_adjustable,
-    slider_from_intensity, system_language,
+    FILE_TYPES, MAX_SIZE_FIELD, background_label, error_text, globs_from_text,
+    intensity_from_slider, kind_label, max_size_from_text, root_line, see_through_adjustable,
+    slider_from_intensity, system_language, toggle_kind,
 };
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
@@ -36,15 +43,17 @@ pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Folders,
+    WhatToIndex,
     Appearance,
 }
 
-const SECTIONS: [Section; 2] = [Section::Folders, Section::Appearance];
+const SECTIONS: [Section; 3] = [Section::Folders, Section::WhatToIndex, Section::Appearance];
 
 impl Section {
     fn title(self, s: &Strings) -> &'static str {
         match self {
             Self::Folders => s.folders,
+            Self::WhatToIndex => s.what_to_index,
             Self::Appearance => s.appearance,
         }
     }
@@ -108,6 +117,10 @@ pub struct SettingsView {
     section: Section,
     /// The saved `ui` settings; the Appearance controls show these.
     ui: UiConfig,
+    /// The saved `indexing` settings.
+    indexing: IndexingConfig,
+    max_size: Entity<InputState>,
+    excludes: Entity<TextareaState>,
     /// The language the dropdown labels are in.
     lang: Lang,
     language: Dropdown<Language>,
@@ -135,11 +148,21 @@ impl SettingsView {
         // ponytail: this and `list_roots` below are small reads on the main
         // thread; move them to the background executor if they ever show up
         // in a frame trace.
-        let ui = host
+        let config = host
             .settings()
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
-            .map(|c| c.ui)
             .unwrap_or_default();
+        let (ui, indexing) = (config.ui, config.indexing);
+        let max_size = cx.new(|cx| {
+            let mut input = InputState::new(window, cx);
+            input.set_value(indexing.max_file_size_mb.to_string(), window, cx);
+            input
+        });
+        let excludes = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx).rows(6);
+            input.set_value(indexing.exclude_globs.join("\n"), window, cx);
+            input
+        });
         let see_through = cx.new(|_| {
             SliderState::new()
                 .min(0.)
@@ -189,6 +212,16 @@ impl SettingsView {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &max_size,
+                window,
+                |this, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                        let text = input.read(cx).value();
+                        this.save_max_size(&text, window, cx);
+                    }
+                },
+            ),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
             }),
@@ -203,6 +236,9 @@ impl SettingsView {
             events,
             section: Section::Folders,
             ui,
+            indexing,
+            max_size,
+            excludes,
             lang,
             language,
             background,
@@ -285,6 +321,7 @@ impl SettingsView {
                 match saved {
                     Ok(config) => {
                         view.error = None;
+                        view.indexing = config.indexing;
                         view.ui = config.ui.clone();
                         let _ = view.events.try_send(AppEvent::Ui(config.ui));
                     }
@@ -300,6 +337,34 @@ impl SettingsView {
             });
         })
         .detach();
+    }
+
+    fn save_max_size(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match max_size_from_text(text) {
+            Some(mb) if mb == self.indexing.max_file_size_mb => {}
+            Some(mb) => self.save(
+                json!({ "indexing": { "max_file_size_mb": mb } }),
+                window,
+                cx,
+            ),
+            None => {
+                self.error = Some(ErrorCode::InvalidSetting {
+                    field: MAX_SIZE_FIELD.into(),
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    fn save_excludes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let globs = globs_from_text(&self.excludes.read(cx).value());
+        if globs != self.indexing.exclude_globs {
+            self.save(
+                json!({ "indexing": { "exclude_globs": globs } }),
+                window,
+                cx,
+            );
+        }
     }
 
     fn save_intensity(&mut self, see_through: f32, window: &mut Window, cx: &mut Context<Self>) {
@@ -442,6 +507,61 @@ impl SettingsView {
         )
     }
 
+    fn what_to_index(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let s = self.live.read(cx).lang.strings();
+        let labelled = |label: &'static str, note: &'static str| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(label)
+                .child(div().mt(px(2.)).text_xs().text_color(p.mute).child(note))
+        };
+        let kinds = FILE_TYPES.into_iter().map(|kind| {
+            let on = self.indexing.file_types.contains(&kind);
+            Checkbox::new(("kind", kind as usize))
+                .label(kind_label(kind, s))
+                .checked(on)
+                .on_click(cx.listener(move |this, &on: &bool, window, cx| {
+                    let types = toggle_kind(&this.indexing.file_types, kind, on);
+                    this.save(json!({ "indexing": { "file_types": types } }), window, cx);
+                }))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .mb_3()
+            .child(
+                row(p)
+                    .flex_col()
+                    .items_start()
+                    .gap_3()
+                    .child(labelled(s.file_types, s.file_types_note))
+                    .child(div().flex().flex_wrap().gap_4().children(kinds)),
+            )
+            .child(
+                row(p).child(labelled(s.max_size, s.max_size_note)).child(
+                    div().flex_none().w(px(140.)).child(
+                        Input::new(&self.max_size).suffix(div().text_color(p.mute).child("MB")),
+                    ),
+                ),
+            )
+            .child(
+                row(p)
+                    .flex_col()
+                    .items_stretch()
+                    .gap_3()
+                    .child(labelled(s.excludes, s.excludes_note))
+                    .child(Textarea::new(&self.excludes))
+                    .child(
+                        div().child(Button::new("save-excludes").label(s.save).on_click(
+                            cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
+                        )),
+                    ),
+            )
+            .children(self.error_line(s, p))
+    }
+
     fn appearance(&self, p: &Palette, window: &Window, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         let adjustable = see_through_adjustable(self.ui.transparency_mode, self.support);
@@ -548,6 +668,7 @@ impl Render for SettingsView {
             }));
         let body = match self.section {
             Section::Folders => self.folders(&p, cx),
+            Section::WhatToIndex => self.what_to_index(&p, cx),
             Section::Appearance => self.appearance(&p, window, cx),
         };
         div()

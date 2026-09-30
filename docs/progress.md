@@ -2317,9 +2317,15 @@ Second slice, Appearance (2026-09-30):
 - Tests: `settings::tests` (system-language label, when the amount is adjustable, slider ↔ `ui.transparency_intensity` staying inside its allowed range), `tests/settings.rs` (headless: a save writes `config.toml` and sends `AppEvent::Ui`).
 - Checked by one screenshot (dark, Spanish): the section renders; the sidebar labels were centered, fixed after (left-aligned via a filling child), not re-screenshotted. The live switch, the tray relabel and the slider keys were not tried by hand.
 
+Third slice, What to index (2026-09-30):
+
+- File types (a checkbox per kind; other files are found by name only), largest file to read (whole MB, saved on Enter or blur), and exclusion patterns (one per line, saved with Save). Every indexing save restarts the engine, which re-walks every root, so nothing is saved per keystroke and an unchanged value is not saved. A bad size is caught in the window; a bad pattern comes back from the core as `InvalidGlob` and is named in the message, and the text stays so it can be fixed.
+- Tests: `settings::tests` (kind toggling keeps order and drops kinds the window doesn't show, whole-MB parsing, one pattern per line, the two error texts).
+- Not looked at on screen yet, and the variant A mockup the user mentioned (`mockup/`) was empty when checked.
+
 Open:
 
-- Other sections (search features, what to index, shortcut and startup, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- Other sections (search features, shortcut and startup, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
 - In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
