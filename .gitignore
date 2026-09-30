@@ -37,3 +37,6 @@ fixtures/golden/ocr/personal.md
 
 # Python bytecode
 __pycache__/
+
+# Local-only UI mockup
+mockup/

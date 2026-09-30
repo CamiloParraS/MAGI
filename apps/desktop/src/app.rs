@@ -45,7 +45,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
     let ui = host.settings().map(|c| c.ui).unwrap_or_default();
     let _ = tx.send_blocking(first);
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .run(move |cx| {
         gpui_kit::init(cx);
         SearchView::bind_keys(cx);
@@ -245,9 +245,9 @@ impl Shell {
             window_background: theme::window_background(backdrop),
             ..Default::default()
         };
-        let (host, live) = (self.host.clone(), self.live.clone());
+        let (host, live, events) = (self.host.clone(), self.live.clone(), self.events.clone());
         match gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| SearchView::new(host, live, backdrop, opened_at, window, cx))
+            cx.new(|cx| SearchView::new(host, live, events, backdrop, opened_at, window, cx))
         }) {
             Ok((handle, _)) => {
                 if matches!(backdrop, theme::Backdrop::Blurred { .. }) {
@@ -261,6 +261,29 @@ impl Shell {
             }
             Err(error) => tracing::error!(%error, "could not open the search window"),
         }
+    }
+}
+
+// The default bundle embeds only the component icons; these are the
+// settings sidebar's and rows' extras.
+gpui_kit::assets::icon_assets!(ExtraIcons, [Sparkles, ChartColumn, Keyboard, Trash]);
+
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match ExtraIcons.load(path)? {
+            Some(bytes) => Ok(Some(bytes)),
+            None => gpui_kit::assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit::assets::Assets.list(path)?;
+        paths.extend(ExtraIcons.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 }
 

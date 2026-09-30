@@ -1,60 +1,93 @@
-//! The settings window: a sidebar and its sections (FR-9).
+//! The settings window: a sidebar and its sections (FR-9), laid out as the
+//! variant A mockup (`mockup/index.html`).
 //!
 //! Folders (FR-1, FR-11): roots come from the latest status in [`Live`], or from the database until
 //! the first one (the engine sends none during its startup walk); every
-//! change goes through the engine, and the next status shows it.
+//! change goes through the engine, and the next status shows it. Below them,
+//! what to index: file types, largest file, battery, exclusions. Each of
+//! those saves restarts the engine, which re-walks every root, so a value is
+//! saved only when it changed, and text fields save on Enter, blur or Save,
+//! never per keystroke.
 //!
-//! What to index: file types, largest file, exclusions. Each save restarts
-//! the engine, which re-walks every root, so a value is saved only when it
-//! changed, and text fields save on Enter, blur or Save, never per keystroke.
+//! Search features (ADR-0010): each feature's switch, download and backfill,
+//! from [`Live::features`].
 //!
-//! Appearance: language and the search window's background. A saved change
-//! goes to the shell as [`AppEvent::Ui`], which applies it live.
+//! General and Appearance: `ui` settings. A saved change goes to the shell
+//! as [`AppEvent::Ui`], which applies it live.
+//!
+//! Index: counts from the status, the files that could not be read, and
+//! clearing the index.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::Selectable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::searchable_list::SearchableListItem;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
-use magi_core::dto::{ErrorCode, RootStatus};
-use magi_core::engine::EngineHandle;
+use magi_core::dto::{ErrorCode, FeatureStatus, FileError, Install, RootStatus};
+use magi_core::features::Feature;
 use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
 use serde_json::json;
 
 use super::{
-    FILE_TYPES, MAX_SIZE_FIELD, background_label, error_text, globs_from_text,
-    intensity_from_slider, kind_label, max_size_from_text, root_line, see_through_adjustable,
+    FILE_TYPES, FeatureAction, MAX_SIZE_FIELD, background_label, download_error_label, error_text,
+    feature_action, file_error_label, globs_from_text, hotkey_keystroke, intensity_from_slider,
+    kind_label, max_size_from_text, result_counts, root_state, see_through_adjustable,
     slider_from_intensity, system_language, toggle_kind,
 };
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
-use crate::search::view::Live;
-use crate::theme::{self, Backdrop, Palette};
+use crate::search::view::{Live, turn_on};
+use crate::theme::{self, Backdrop, Palette, Tone};
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Folders,
-    WhatToIndex,
+    Features,
+    General,
     Appearance,
+    Index,
 }
 
-const SECTIONS: [Section; 3] = [Section::Folders, Section::WhatToIndex, Section::Appearance];
+const SECTIONS: [Section; 5] = [
+    Section::Folders,
+    Section::Features,
+    Section::General,
+    Section::Appearance,
+    Section::Index,
+];
 
 impl Section {
     fn title(self, s: &Strings) -> &'static str {
         match self {
             Self::Folders => s.folders,
-            Self::WhatToIndex => s.what_to_index,
+            Self::Features => s.search_features,
+            Self::General => s.general,
             Self::Appearance => s.appearance,
+            Self::Index => s.index,
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::Folders => IconName::Folder,
+            Self::Features => IconName::Sparkles,
+            Self::General => IconName::Settings,
+            Self::Appearance => IconName::Palette,
+            Self::Index => IconName::ChartColumn,
         }
     }
 }
@@ -65,6 +98,10 @@ const BACKGROUNDS: [TransparencyMode; 3] = [
     TransparencyMode::Always,
     TransparencyMode::Never,
 ];
+/// `ui.theme` values; anything else follows the OS like `system`.
+const THEMES: [&str; 3] = ["system", "light", "dark"];
+/// How many unreadable files the Index section lists.
+const ERRORS_SHOWN: u32 = 50;
 
 /// A dropdown entry: the label shown and the setting it stands for.
 #[derive(Clone)]
@@ -110,6 +147,27 @@ fn background_choices(s: &Strings) -> Vec<Choice<TransparencyMode>> {
         .collect()
 }
 
+fn theme_choices(s: &Strings) -> Vec<Choice<&'static str>> {
+    THEMES
+        .iter()
+        .zip([s.background_match_system, s.theme_light, s.theme_dark])
+        .map(|(&value, label)| Choice {
+            label: label.into(),
+            value,
+        })
+        .collect()
+}
+
+fn count_choices(lang: Lang, current: u32) -> Vec<Choice<u32>> {
+    result_counts(current)
+        .into_iter()
+        .map(|n| Choice {
+            label: lang.number(n.into()).into(),
+            value: n,
+        })
+        .collect()
+}
+
 /// Where a failed change is shown: inside the box it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -117,10 +175,16 @@ pub enum Field {
     Root(i64),
     FileTypes,
     MaxSize,
+    Battery,
     Excludes,
+    Feature(Feature),
     Language,
+    Results,
+    Theme,
     Background,
     SeeThrough,
+    Unreadable,
+    Clear,
 }
 
 pub struct SettingsView {
@@ -128,7 +192,8 @@ pub struct SettingsView {
     live: Entity<Live>,
     events: Events,
     section: Section,
-    /// The saved `ui` settings; the Appearance controls show these.
+    /// The saved `ui` settings; the General and Appearance controls show
+    /// these.
     ui: UiConfig,
     /// The saved `indexing` settings.
     indexing: IndexingConfig,
@@ -136,7 +201,11 @@ pub struct SettingsView {
     excludes: Entity<TextareaState>,
     /// The language the dropdown labels are in.
     lang: Lang,
+    /// The `ui.theme` the window is drawn in.
+    theme: String,
     language: Dropdown<Language>,
+    results: Dropdown<u32>,
+    theme_choice: Dropdown<&'static str>,
     background: Dropdown<TransparencyMode>,
     support: BackdropSupport,
     see_through: Entity<SliderState>,
@@ -145,6 +214,8 @@ pub struct SettingsView {
     dark: bool,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
+    /// Read when the Index section opens and after its actions.
+    unreadable: Option<Vec<FileError>>,
     /// The last change that failed and where, until the next change or a
     /// section switch.
     error: Option<(Field, ErrorCode)>,
@@ -185,46 +256,52 @@ impl SettingsView {
                 .default_value(slider_from_intensity(ui.transparency_intensity))
         });
         let lang = live.read(cx).lang;
-        let language =
-            cx.new(|cx| SelectState::new(language_choices(lang.strings()), None, window, cx));
-        let background =
-            cx.new(|cx| SelectState::new(background_choices(lang.strings()), None, window, cx));
+        let s = lang.strings();
+        let language = cx.new(|cx| SelectState::new(language_choices(s), None, window, cx));
+        let results =
+            cx.new(|cx| SelectState::new(count_choices(lang, ui.max_results), None, window, cx));
+        let theme_choice = cx.new(|cx| SelectState::new(theme_choices(s), None, window, cx));
+        let background = cx.new(|cx| SelectState::new(background_choices(s), None, window, cx));
         let subscriptions = vec![
-            // Status events notify too; only a language switch relabels.
+            // Status events notify too; only a language or theme switch
+            // redraws more than the window.
             cx.observe_in(&live, window, |this, live, window, cx| {
-                let lang = live.read(cx).lang;
+                let (lang, theme) = (live.read(cx).lang, live.read(cx).theme.clone());
                 if lang != this.lang {
                     this.relabel(lang, window, cx);
                 }
+                if theme != this.theme {
+                    this.sync_appearance(window, cx);
+                }
                 cx.notify();
             }),
-            cx.subscribe_in(
+            Self::save_on_confirm(
                 &language,
+                Field::Language,
+                |v| json!({ "ui": { "language": v } }),
                 window,
-                |this, _, event: &SelectEvent<Vec<Choice<Language>>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(language)) = event {
-                        this.save(
-                            Field::Language,
-                            json!({ "ui": { "language": language } }),
-                            window,
-                            cx,
-                        );
-                    }
-                },
+                cx,
             ),
-            cx.subscribe_in(
-                &background,
+            Self::save_on_confirm(
+                &results,
+                Field::Results,
+                |v| json!({ "ui": { "max_results": v } }),
                 window,
-                |this, _, event: &SelectEvent<Vec<Choice<TransparencyMode>>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(mode)) = event {
-                        this.save(
-                            Field::Background,
-                            json!({ "ui": { "transparency_mode": mode } }),
-                            window,
-                            cx,
-                        );
-                    }
-                },
+                cx,
+            ),
+            Self::save_on_confirm(
+                &theme_choice,
+                Field::Theme,
+                |v| json!({ "ui": { "theme": v } }),
+                window,
+                cx,
+            ),
+            Self::save_on_confirm(
+                &background,
+                Field::Background,
+                |v| json!({ "ui": { "transparency_mode": v } }),
+                window,
+                cx,
             ),
             // Saved on release: dragging would write the config at every step.
             cx.subscribe_in(
@@ -264,19 +341,45 @@ impl SettingsView {
             max_size,
             excludes,
             lang,
+            theme: String::new(),
             language,
+            results,
+            theme_choice,
             background,
             support: magi_core::platform::backdrop_support(),
             see_through,
             see_through_focus: cx.focus_handle().tab_stop(true),
             dark: false,
             opening_roots,
+            unreadable: None,
             error: None,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
         view.sync_controls(window, cx);
         view
+    }
+
+    /// Saves `patch(choice)` when a dropdown confirms a choice.
+    fn save_on_confirm<T>(
+        dropdown: &Dropdown<T>,
+        field: Field,
+        patch: fn(&T) -> serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription
+    where
+        T: Clone + PartialEq + 'static,
+    {
+        cx.subscribe_in(
+            dropdown,
+            window,
+            move |this, _, event: &SelectEvent<Vec<Choice<T>>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    this.save(field, patch(value), window, cx);
+                }
+            },
+        )
     }
 
     /// The window's background, from the saved settings (like the search
@@ -289,14 +392,29 @@ impl SettingsView {
         )
     }
 
-    /// Makes the Appearance controls and the window background show the
-    /// saved settings.
+    /// Makes the General and Appearance controls and the window background
+    /// show the saved settings.
     fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_background_appearance(theme::window_background(self.backdrop()));
-        let (language, mode) = (self.ui.language, self.ui.transparency_mode);
+        let (language, mode, count) = (
+            self.ui.language,
+            self.ui.transparency_mode,
+            self.ui.max_results,
+        );
+        let theme = THEMES
+            .into_iter()
+            .find(|&t| t == self.ui.theme)
+            .unwrap_or(THEMES[0]);
         let see_through = slider_from_intensity(self.ui.transparency_intensity);
+        let lang = self.lang;
         self.language
             .update(cx, |d, cx| d.set_selected_value(&language, window, cx));
+        self.results.update(cx, |d, cx| {
+            d.set_items(count_choices(lang, count), window, cx);
+            d.set_selected_value(&count, window, cx);
+        });
+        self.theme_choice
+            .update(cx, |d, cx| d.set_selected_value(&theme, window, cx));
         self.background
             .update(cx, |d, cx| d.set_selected_value(&mode, window, cx));
         self.see_through
@@ -310,35 +428,60 @@ impl SettingsView {
         window.set_window_title(s.settings);
         self.language
             .update(cx, |d, cx| d.set_items(language_choices(s), window, cx));
+        self.theme_choice
+            .update(cx, |d, cx| d.set_items(theme_choices(s), window, cx));
         self.background
             .update(cx, |d, cx| d.set_items(background_choices(s), window, cx));
         self.sync_controls(window, cx);
     }
 
     fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = self.live.read(cx).theme.clone();
-        self.dark = theme::sync(&theme, window, cx);
+        self.theme = self.live.read(cx).theme.clone();
+        self.dark = theme::sync(&self.theme, window, cx);
         cx.notify();
     }
 
-    /// Runs a root change on the background executor and keeps its error.
-    fn change_root(
+    /// Runs a change on the background executor and keeps its error.
+    fn run(
         &mut self,
         field: Field,
-        change: impl FnOnce(EngineHandle) -> magi_core::Result<()> + Send + 'static,
+        job: impl FnOnce(&Host) -> magi_core::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
         let host = self.host.clone();
         cx.spawn(async move |this, cx| {
             let done = cx
                 .background_executor()
-                .spawn(async move { host.engine().and_then(change) })
+                .spawn(async move { job(&host) })
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.error = done.err().map(|error| {
-                    tracing::warn!(%error, "a folder change failed");
+                    tracing::warn!(%error, ?field, "a change failed");
                     (field, ErrorCode::from(&error))
                 });
+                if view.section == Section::Index {
+                    view.load_unreadable(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// ponytail: refreshed only when the section opens or acts; poll it if a
+    /// stale list ever confuses anyone. A failed read leaves `None`, which
+    /// shows no list rather than "every file was read".
+    fn load_unreadable(&mut self, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let listed = cx
+                .background_executor()
+                .spawn(async move { host.list_errors(ERRORS_SHOWN) })
+                .await
+                .inspect_err(|error| tracing::warn!(%error, "could not list the unreadable files"))
+                .ok();
+            let _ = this.update(cx, |view, cx| {
+                view.unreadable = listed;
                 cx.notify();
             });
         })
@@ -457,9 +600,9 @@ impl SettingsView {
             Ok(Ok(Some(mut paths))) => {
                 if let Some(path) = paths.pop() {
                     let _ = this.update(cx, |view, cx| {
-                        view.change_root(
+                        view.run(
                             Field::AddFolder,
-                            move |engine| engine.add_root(&path).map(drop),
+                            move |host| host.engine()?.add_root(&path).map(drop),
                             cx,
                         );
                     });
@@ -469,6 +612,31 @@ impl SettingsView {
             _ => {}
         })
         .detach();
+    }
+
+    /// Asks first: clearing forgets every indexed file.
+    fn confirm_clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let live = self.live.read(cx);
+        let (lang, s) = (live.lang, live.lang.strings());
+        let indexed = live.status.as_ref().map_or(0, |st| st.indexed);
+        let body: SharedString = lang.plural(&s.clear_confirm_body, indexed).into();
+        let view = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .title(s.clear_confirm_title)
+                .description(body.clone())
+                .ok_text(s.clear_index)
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text(s.cancel)
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        view.run(Field::Clear, |host| host.clear_index(), cx);
+                    });
+                    true
+                })
+        });
     }
 
     /// The box showing a failed change, if any.
@@ -485,13 +653,7 @@ impl SettingsView {
         self.error
             .as_ref()
             .filter(|(f, _)| *f == field)
-            .map(|(_, error)| {
-                div()
-                    .mt(px(2.))
-                    .text_xs()
-                    .text_color(p.warn)
-                    .child(error_text(error, s))
-            })
+            .map(|(_, error)| note(p).text_color(p.warn).child(error_text(error, s)))
     }
 
     /// A settings box; a failed change in it gives it a warning border.
@@ -503,7 +665,7 @@ impl SettingsView {
     fn labelled(
         &self,
         label: &'static str,
-        note: Option<&'static str>,
+        note_text: Option<&'static str>,
         field: Field,
         s: &Strings,
         p: &Palette,
@@ -512,8 +674,27 @@ impl SettingsView {
             .flex_1()
             .min_w_0()
             .child(label)
-            .children(note.map(|note| div().mt(px(2.)).text_xs().text_color(p.mute).child(note)))
+            .children(note_text.map(|text| note(p).child(text)))
             .children(self.problem(field, s, p))
+    }
+
+    /// One setting in its box: an optional icon, its name and note, and
+    /// its control.
+    #[allow(clippy::too_many_arguments)]
+    fn setting(
+        &self,
+        field: Field,
+        icon: Option<IconName>,
+        label: &'static str,
+        note_text: Option<&'static str>,
+        control: impl IntoElement,
+        s: &Strings,
+        p: &Palette,
+    ) -> Div {
+        self.card(field, p)
+            .children(icon.map(|i| Icon::new(i).size(px(16.)).text_color(p.mute)))
+            .child(self.labelled(label, note_text, field, s, p))
+            .child(div().flex_none().child(control))
     }
 
     fn folders(&self, p: &Palette, cx: &Context<Self>) -> Div {
@@ -537,23 +718,40 @@ impl SettingsView {
                 .child(div().flex_1().min_w_0().child(problem))
         });
         div()
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap(STACK_GAP)
-            .child(div().w_full().children(list))
-            .children(add_problem.map(|d| div().w_full().child(d)))
             .child(
-                Button::new("add-folder")
-                    .label(s.add_folder)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                div()
+                    .flex()
+                    .items_center()
+                    .mb(px(8.))
+                    .child(div().flex_1().child(subheading(s.searched_folders, p)))
+                    .child(
+                        Button::new("add-folder")
+                            .primary()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label(s.add_folder)
+                            .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                    ),
             )
+            .child(stack().children(list).children(add_problem))
+            .child(
+                div()
+                    .mt(px(22.))
+                    .mb(px(8.))
+                    .child(subheading(s.what_to_index, p)),
+            )
+            .child(self.what_to_index(s, p, cx))
     }
 
     fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let (line, problem) = root_line(root, s);
+        let (badge, tone, line) = root_state(root, s);
         let id = root.id;
+        let icon = match tone {
+            Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
+            _ => Icon::new(IconName::Folder).text_color(p.mute),
+        };
         self.card(Field::Root(id), p)
+            .child(icon.size(px(16.)))
             .child(
                 div()
                     .flex_1()
@@ -565,41 +763,41 @@ impl SettingsView {
                             .text_ellipsis_middle()
                             .child(root.path.clone()),
                     )
-                    .child(
-                        div()
-                            .mt(px(2.))
-                            .text_xs()
-                            .text_color(if problem { p.warn } else { p.mute })
-                            .child(line),
-                    )
+                    .children(line.map(|line| note(p).child(line)))
                     .children(self.problem(Field::Root(id), s, p)),
             )
+            .child(p.badge(badge, tone))
             .child(
                 Switch::new(("root-enabled", id as u64))
                     .checked(root.enabled)
                     .color(p.accent)
                     .accessibility_label(root.path.clone())
-                    .on_click(cx.listener(move |this, on: &bool, _, cx| {
-                        let on = *on;
-                        this.change_root(
+                    .on_click(cx.listener(move |this, &on: &bool, _, cx| {
+                        this.run(
                             Field::Root(id),
-                            move |engine| engine.set_root_enabled(id, on),
+                            move |host| host.engine()?.set_root_enabled(id, on),
                             cx,
                         );
                     })),
             )
             .child(
                 Button::new(("remove-root", id as u64))
-                    .label(s.remove)
+                    .ghost()
+                    .small()
+                    .icon(IconName::Trash)
+                    .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.change_root(Field::Root(id), move |engine| engine.remove_root(id), cx);
+                        this.run(
+                            Field::Root(id),
+                            move |host| host.engine()?.remove_root(id),
+                            cx,
+                        );
                     })),
             )
     }
 
-    fn what_to_index(&self, p: &Palette, cx: &Context<Self>) -> Div {
-        let s = self.live.read(cx).lang.strings();
+    fn what_to_index(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let kinds = FILE_TYPES.into_iter().map(|kind| {
             let on = self.indexing.file_types.contains(&kind);
             Checkbox::new(("kind", kind as usize))
@@ -615,6 +813,7 @@ impl SettingsView {
                     );
                 }))
         });
+        let battery = self.indexing.pause_on_battery;
         stack()
             .child(
                 self.card(Field::FileTypes, p)
@@ -631,15 +830,41 @@ impl SettingsView {
                     .child(div().flex().flex_wrap().gap_4().children(kinds)),
             )
             .child(
-                self.card(Field::MaxSize, p)
-                    .child(self.labelled(s.max_size, Some(s.max_size_note), Field::MaxSize, s, p))
-                    .child(
-                        div().flex_none().w(px(140.)).child(
-                            Input::new(&self.max_size)
-                                .bg(p.solid)
-                                .suffix(div().text_color(p.mute).child("MB")),
-                        ),
+                self.setting(
+                    Field::MaxSize,
+                    None,
+                    s.max_size,
+                    Some(s.max_size_note),
+                    div().w(px(140.)).child(
+                        Input::new(&self.max_size)
+                            .bg(p.solid)
+                            .suffix(div().text_color(p.mute).child("MB")),
                     ),
+                    s,
+                    p,
+                ),
+            )
+            .child(
+                self.setting(
+                    Field::Battery,
+                    None,
+                    s.pause_on_battery,
+                    Some(s.pause_on_battery_note),
+                    Switch::new("battery")
+                        .checked(battery)
+                        .color(p.accent)
+                        .accessibility_label(s.pause_on_battery)
+                        .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                            this.save(
+                                Field::Battery,
+                                json!({ "indexing": { "pause_on_battery": on } }),
+                                window,
+                                cx,
+                            );
+                        })),
+                    s,
+                    p,
+                ),
             )
             .child(
                 self.card(Field::Excludes, p)
@@ -657,72 +882,371 @@ impl SettingsView {
             )
     }
 
+    fn features(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        let s = live.lang.strings();
+        div()
+            .child(note(p).mt_0().mb(px(14.)).child(s.features_note))
+            .child(
+                stack().children(
+                    live.features
+                        .iter()
+                        .map(|f| self.feature_row(f, live.lang, p, cx)),
+                ),
+            )
+            .child(note(p).mt(px(10.)).child(s.features_footnote))
+    }
+
+    fn feature_row(&self, f: &FeatureStatus, lang: Lang, p: &Palette, cx: &Context<Self>) -> Div {
+        let s = lang.strings();
+        let (feature, field) = (f.feature, Field::Feature(f.feature));
+        let text = s.feature(feature);
+        let progress = |id: &'static str, done: u64, total: u64, label: String| {
+            div()
+                .mt(px(6.))
+                .child(
+                    Progress::new((id, feature as usize))
+                        .color(p.accent)
+                        .value(done as f32 * 100. / total.max(1) as f32),
+                )
+                .child(note(p).child(label))
+        };
+        let state = match &f.install {
+            Install::Installed { size_bytes } => note(p)
+                .text_color(p.ok)
+                .child(s.installed.replace("{size}", &lang.size(*size_bytes)))
+                .into_any_element(),
+            Install::NotInstalled => note(p)
+                .child(
+                    s.not_downloaded
+                        .replace("{size}", &lang.size(f.download_size)),
+                )
+                .into_any_element(),
+            Install::Downloading { bytes, total } => progress(
+                "download",
+                *bytes,
+                *total,
+                s.feature_downloading
+                    .replace("{done}", &lang.size(*bytes))
+                    .replace("{total}", &lang.size(*total)),
+            )
+            .into_any_element(),
+            Install::Failed { code } => div()
+                .mt(px(4.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(p.badge(s.download_failed, Tone::Err))
+                .child(note(p).mt_0().child(download_error_label(*code, s)))
+                .into_any_element(),
+        };
+        let backfill = f.backfill.filter(|b| b.total > b.done).map(|b| {
+            progress(
+                "backfill",
+                b.done,
+                b.total,
+                lang.plural(&s.feature_updating, b.total - b.done),
+            )
+        });
+        let action = feature_action(f);
+        let button = match action {
+            FeatureAction::TurnOn => Some(
+                Button::new(("turn-on", feature as usize))
+                    .primary()
+                    .small()
+                    .label(s.turn_on.replace("{size}", &lang.size(f.download_size))),
+            ),
+            FeatureAction::Retry => Some(
+                Button::new(("retry", feature as usize))
+                    .small()
+                    .label(s.try_again),
+            ),
+            FeatureAction::Remove => Some(
+                Button::new(("remove", feature as usize))
+                    .danger()
+                    .small()
+                    .label(s.remove_download),
+            ),
+            FeatureAction::Nothing => None,
+        }
+        .map(|b| {
+            b.on_click(cx.listener(move |this, _, _, cx| {
+                this.run(
+                    field,
+                    move |host| match action {
+                        FeatureAction::Remove => host.features().remove_download(feature),
+                        _ => turn_on(host, feature),
+                    },
+                    cx,
+                );
+            }))
+        });
+        // Without a download a switch could only turn it off: shown once it
+        // is wanted (a cancelled download), hidden before.
+        let switch = (action != FeatureAction::TurnOn || f.enabled).then(|| {
+            Switch::new(("feature", feature as usize))
+                .checked(f.enabled)
+                .color(p.accent)
+                .accessibility_label(text.name)
+                .on_click(cx.listener(move |this, &on: &bool, _, cx| {
+                    this.run(field, move |host| host.set_feature_enabled(feature, on), cx);
+                }))
+        });
+        self.card(field, p)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().font_weight(FontWeight::MEDIUM).child(text.name))
+                    .child(note(p).child(text.pitch))
+                    .child(state)
+                    .children(backfill)
+                    .children(self.problem(field, s, p)),
+            )
+            .children(button)
+            .children(switch)
+    }
+
+    fn general(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let s = self.live.read(cx).lang.strings();
+        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.ui.hotkey))
+            .ok()
+            .map(Kbd::new);
+        stack()
+            .child(
+                card(p)
+                    .child(
+                        Icon::new(IconName::Keyboard)
+                            .size(px(16.))
+                            .text_color(p.mute),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(s.shortcut)
+                            .child(note(p).child(s.shortcut_note)),
+                    )
+                    .children(hotkey),
+            )
+            .child(
+                self.setting(
+                    Field::Language,
+                    Some(IconName::Globe),
+                    s.language,
+                    None,
+                    div().w(px(260.)).child(
+                        Select::new(&self.language)
+                            .bg(p.solid)
+                            .accessibility_label(s.language),
+                    ),
+                    s,
+                    p,
+                ),
+            )
+            .child(
+                self.setting(
+                    Field::Results,
+                    Some(IconName::Search),
+                    s.results_shown,
+                    Some(s.results_shown_note),
+                    div().w(px(120.)).child(
+                        Select::new(&self.results)
+                            .bg(p.solid)
+                            .accessibility_label(s.results_shown),
+                    ),
+                    s,
+                    p,
+                ),
+            )
+    }
+
     fn appearance(&self, p: &Palette, window: &Window, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         let adjustable = see_through_adjustable(self.ui.transparency_mode, self.support);
-        let choice = |label: &'static str, field: Field, select: Select<_>| {
-            self.card(field, p)
-                .child(self.labelled(label, None, field, s, p))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(260.))
-                        .child(select.accessibility_label(label)),
-                )
-        };
         stack()
-            .child(choice(
-                s.language,
-                Field::Language,
-                Select::new(&self.language).bg(p.solid),
-            ))
             .child(
-                self.card(Field::Background, p)
-                    .child(self.labelled(s.window_background, None, Field::Background, s, p))
-                    .child(
-                        div().flex_none().w(px(260.)).child(
-                            Select::new(&self.background)
-                                .bg(p.solid)
-                                .accessibility_label(s.window_background),
-                        ),
+                self.setting(
+                    Field::Theme,
+                    None,
+                    s.theme,
+                    None,
+                    div().w(px(260.)).child(
+                        Select::new(&self.theme_choice)
+                            .bg(p.solid)
+                            .accessibility_label(s.theme),
                     ),
+                    s,
+                    p,
+                ),
             )
             .child(
-                self.card(Field::SeeThrough, p)
+                self.setting(
+                    Field::Background,
+                    None,
+                    s.window_background,
+                    None,
+                    div().w(px(260.)).child(
+                        Select::new(&self.background)
+                            .bg(p.solid)
+                            .accessibility_label(s.window_background),
+                    ),
+                    s,
+                    p,
+                ),
+            )
+            .child(
+                self.setting(
+                    Field::SeeThrough,
+                    None,
+                    s.see_through_amount,
+                    (!adjustable).then_some(s.see_through_off),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .text_xs()
+                        .text_color(p.mute)
+                        .child(s.more_solid)
+                        .child(
+                            div()
+                                .id("see-through")
+                                .track_focus(&self.see_through_focus)
+                                .on_key_down(cx.listener(Self::nudge_see_through))
+                                .w(px(172.))
+                                .px(px(6.))
+                                .py_1()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(if self.see_through_focus.is_focused(window) {
+                                    p.accent
+                                } else {
+                                    transparent_black()
+                                })
+                                .child(Slider::new(&self.see_through).disabled(!adjustable)),
+                        )
+                        .child(s.more_transparent),
+                    s,
+                    p,
+                ),
+            )
+    }
+
+    fn index(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        let (lang, s) = (live.lang, live.lang.strings());
+        let stats = live.status.as_ref().map(|st| {
+            let stat = |value: u64, label: &'static str, tone: Option<Tone>| {
+                card(p)
+                    .flex_1()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(22.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .when_some(tone, |d, t| d.text_color(p.tone(t)))
+                            .child(lang.number(value)),
+                    )
+                    .child(div().text_xs().text_color(p.mute).child(label))
+            };
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(stat(st.indexed, s.stat_indexed, None))
+                .child(stat(st.queued, s.stat_waiting, None))
+                .child(stat(st.skipped, s.stat_skipped, None))
+                .child(stat(
+                    st.errors,
+                    s.stat_errors,
+                    (st.errors > 0).then_some(Tone::Err),
+                ))
+        });
+        let unreadable = self.unreadable.as_deref().unwrap_or_default();
+        let files = match self.unreadable.as_deref() {
+            None => stack(),
+            Some([]) => stack().child(card(p).text_color(p.mute).child(s.all_read)),
+            Some(unreadable) => stack().children(unreadable.iter().map(|e| {
+                let path = std::path::Path::new(&e.path);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let folder = path
+                    .parent()
+                    .map(std::path::Path::display)
+                    .map(|d| d.to_string());
+                let folder = folder.unwrap_or_default();
+                card(p)
+                    .child(
+                        Icon::new(IconName::TriangleAlert)
+                            .size(px(16.))
+                            .text_color(p.err),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().child(name.to_string()))
+                            .child(
+                                note(p)
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis_middle()
+                                    .child(format!("{} · {folder}", file_error_label(e.code, s))),
+                            ),
+                    )
+            })),
+        };
+        div()
+            .children(stats)
+            .child(
+                div()
+                    .mt(px(22.))
+                    .mb(px(8.))
+                    .child(subheading(s.unreadable, p)),
+            )
+            .child(files)
+            .children(self.problem(Field::Unreadable, s, p))
+            .when(!unreadable.is_empty(), |d| {
+                d.child(
+                    div().mt(px(8.)).child(
+                        Button::new("retry-all")
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .label(s.retry_all)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run(
+                                    Field::Unreadable,
+                                    |host| host.engine()?.retry_errors().map(drop),
+                                    cx,
+                                );
+                            })),
+                    ),
+                )
+            })
+            .child(
+                div()
+                    .mt(px(22.))
+                    .mb(px(8.))
+                    .child(subheading(s.danger_zone, p)),
+            )
+            .child(
+                self.card(Field::Clear, p)
+                    .border_color(p.err)
                     .child(self.labelled(
-                        s.see_through_amount,
-                        (!adjustable).then_some(s.see_through_off),
-                        Field::SeeThrough,
+                        s.clear_index,
+                        Some(s.clear_index_note),
+                        Field::Clear,
                         s,
                         p,
                     ))
                     .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_3()
-                            .text_xs()
-                            .text_color(p.mute)
-                            .child(s.more_solid)
-                            .child(
-                                div()
-                                    .id("see-through")
-                                    .track_focus(&self.see_through_focus)
-                                    .on_key_down(cx.listener(Self::nudge_see_through))
-                                    .w(px(172.))
-                                    .px(px(6.))
-                                    .py_1()
-                                    .rounded(px(4.))
-                                    .border_1()
-                                    .border_color(if self.see_through_focus.is_focused(window) {
-                                        p.accent
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .child(Slider::new(&self.see_through).disabled(!adjustable)),
-                            )
-                            .child(s.more_transparent),
+                        Button::new("clear-index")
+                            .danger()
+                            .small()
+                            .label(s.clear_index_button)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.confirm_clear(window, cx)),
+                            ),
                     ),
             )
     }
@@ -768,18 +1292,45 @@ impl Render for SettingsView {
                     // left. The padding is the label's, so the content row
                     // starts at the button's edge: an absolute child (the
                     // accent bar) is placed against its direct parent.
-                    .child(div().flex_1().px_3().child(section.title(s)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .px_3()
+                            .child(
+                                Icon::new(section.icon())
+                                    .size(px(15.))
+                                    .text_color(if selected { p.accent } else { p.mute }),
+                            )
+                            .child(section.title(s)),
+                    )
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;
                         this.error = None;
+                        if section == Section::Index {
+                            this.load_unreadable(cx);
+                        }
                         cx.notify();
                     }))
-            }));
+            }))
+            .child(
+                div()
+                    .mt_auto()
+                    .px_3()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(p.mute)
+                    .child(concat!("Magi ", env!("CARGO_PKG_VERSION"))),
+            );
         let body = match self.section {
             Section::Folders => self.folders(&p, cx),
-            Section::WhatToIndex => self.what_to_index(&p, cx),
+            Section::Features => self.features(&p, cx),
+            Section::General => self.general(&p, cx),
             Section::Appearance => self.appearance(&p, window, cx),
+            Section::Index => self.index(&p, cx),
         };
         div()
             .size_full()
@@ -825,10 +1376,24 @@ fn card(p: &Palette) -> Div {
         .bg(p.card)
 }
 
+/// A setting's second line.
+fn note(p: &Palette) -> Div {
+    div().mt(px(2.)).text_xs().text_color(p.mute)
+}
+
 fn heading(text: &'static str) -> Div {
     div()
         .mb(px(18.))
         .text_size(px(26.))
         .font_weight(FontWeight::SEMIBOLD)
         .child(text)
+}
+
+/// A group's name inside a section, small caps as in the mockup.
+fn subheading(text: &'static str, p: &Palette) -> Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(p.mute)
+        .child(text.to_uppercase())
 }

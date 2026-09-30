@@ -3,11 +3,21 @@
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{
-    App, Div, Hsla, Rgba, Styled as _, Window, WindowAppearance, WindowBackgroundAppearance, div,
-    px, relative, rgb, rgba,
+    App, Div, Hsla, ParentElement as _, Rgba, Styled as _, Window, WindowAppearance,
+    WindowBackgroundAppearance, div, px, relative, rgb, rgba,
 };
 use magi_core::config::TransparencyMode;
 use magi_core::platform::BackdropSupport;
+
+/// What a status dot or badge says, by color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Ok,
+    Busy,
+    Neutral,
+    Warn,
+    Err,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Backdrop {
@@ -87,6 +97,8 @@ pub struct Palette {
     /// The selected sidebar item.
     pub chip: Hsla,
     pub warn: Hsla,
+    pub ok: Hsla,
+    pub err: Hsla,
 }
 
 impl Palette {
@@ -105,6 +117,8 @@ impl Palette {
                 side: rgb(0x191919).into(),
                 chip: rgba(0xffffff14).into(),
                 warn: rgb(0xfcb452).into(),
+                ok: rgb(0x6ccb5f).into(),
+                err: rgb(0xff99a4).into(),
             }
         } else {
             Self {
@@ -120,8 +134,43 @@ impl Palette {
                 side: rgb(0xececec).into(),
                 chip: rgba(0x0000000f).into(),
                 warn: rgb(0x9d5d00).into(),
+                ok: rgb(0x0f7b0f).into(),
+                err: rgb(0xc42b1c).into(),
             }
         }
+    }
+
+    pub fn tone(&self, tone: Tone) -> Hsla {
+        match tone {
+            Tone::Ok => self.ok,
+            Tone::Busy => self.accent,
+            Tone::Neutral => self.mute,
+            Tone::Warn => self.warn,
+            Tone::Err => self.err,
+        }
+    }
+
+    /// A small colored dot, as in the tray and the search footer.
+    pub fn dot(&self, tone: Tone) -> Div {
+        div()
+            .flex_none()
+            .size(px(7.))
+            .rounded_full()
+            .bg(self.tone(tone))
+    }
+
+    /// A status pill.
+    pub fn badge(&self, text: &'static str, tone: Tone) -> Div {
+        let color = self.tone(tone);
+        div()
+            .flex_none()
+            .px_2()
+            .py(px(1.))
+            .rounded_full()
+            .text_xs()
+            .text_color(color)
+            .bg(color.opacity(0.12))
+            .child(text)
     }
 
     pub fn background(&self, backdrop: Backdrop) -> Rgba {
@@ -139,7 +188,7 @@ impl Palette {
             .absolute()
             .left_0()
             .top(relative(0.375))
-            .h(relative(0.25))
+            .h(relative(0.35))
             .w(px(3.))
             .rounded_full()
             .bg(self.accent)

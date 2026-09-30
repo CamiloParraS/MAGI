@@ -40,6 +40,7 @@ fn the_search_window_opens_empty_over_a_real_host(cx: &mut TestAppContext) {
         SearchView::new(
             host.clone(),
             live,
+            async_channel::unbounded().0,
             Backdrop::Solid,
             Instant::now(),
             window,

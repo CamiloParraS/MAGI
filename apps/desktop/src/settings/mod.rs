@@ -6,22 +6,105 @@ pub mod view;
 use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
 use magi_core::discovery::Kind;
-use magi_core::dto::{ErrorCode, RootStatus};
+use magi_core::dto::{DownloadError, ErrorCode, FeatureStatus, FileErrorCode, Install, RootStatus};
 use magi_core::platform::BackdropSupport;
 
 use crate::i18n::{Lang, Strings};
-use crate::theme::{self, Backdrop};
+use crate::theme::{self, Backdrop, Tone};
 
-/// A root's second line, and whether it is a problem to fix (FR-11).
-pub fn root_line(root: &RootStatus, s: &Strings) -> (&'static str, bool) {
+/// A root's badge, and a line explaining anything but plain watching
+/// (FR-11).
+pub fn root_state(root: &RootStatus, s: &Strings) -> (&'static str, Tone, Option<&'static str>) {
     if !root.enabled {
-        return (s.root_disabled, false);
+        return (s.badge_paused, Tone::Neutral, Some(s.root_disabled));
     }
     match root.status {
-        Health::Ok => (s.root_watching, false),
-        Health::WatchFailed => (s.root_polling, false),
-        Health::Missing => (s.root_missing, true),
-        Health::PermissionDenied => (s.root_denied, true),
+        Health::Ok => (s.root_watching, Tone::Ok, None),
+        Health::WatchFailed => (s.badge_polling, Tone::Neutral, Some(s.root_polling)),
+        Health::Missing => (s.badge_missing, Tone::Warn, Some(s.root_missing)),
+        Health::PermissionDenied => (s.badge_denied, Tone::Err, Some(s.root_denied)),
+    }
+}
+
+/// The button a search feature's box offers besides its switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureAction {
+    /// Enable and download at once (the stated size is the consent,
+    /// ADR-0010); replaces the switch, which could not work yet.
+    TurnOn,
+    /// Frees the disk space of a switched-off feature.
+    Remove,
+    Retry,
+    Nothing,
+}
+
+pub fn feature_action(f: &FeatureStatus) -> FeatureAction {
+    match f.install {
+        Install::NotInstalled => FeatureAction::TurnOn,
+        Install::Installed { .. } if !f.enabled => FeatureAction::Remove,
+        Install::Failed { .. } => FeatureAction::Retry,
+        _ => FeatureAction::Nothing,
+    }
+}
+
+/// `ui.hotkey` (global-hotkey's `CmdOrCtrl+Shift+Space`) as a GPUI
+/// keystroke, which [`Kbd`](gpui_kit::component::kbd::Kbd) shows the
+/// platform's way.
+pub fn hotkey_keystroke(hotkey: &str) -> String {
+    hotkey
+        .split('+')
+        .map(|key| {
+            let key = key.to_lowercase();
+            match key.as_str() {
+                "cmdorctrl" | "cmdorcontrol" | "commandorctrl" | "commandorcontrol" => {
+                    "secondary".into()
+                }
+                "control" => "ctrl".into(),
+                "option" => "alt".into(),
+                "command" | "super" => "cmd".into(),
+                _ => key
+                    .strip_prefix("key")
+                    .or_else(|| key.strip_prefix("digit"))
+                    .filter(|rest| rest.len() == 1)
+                    .map_or_else(|| key.clone(), String::from),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// The "Results shown" choices, with the saved one even if it is not a
+/// preset.
+pub fn result_counts(current: u32) -> Vec<u32> {
+    let mut counts = vec![10, 20, 30, 50, 100];
+    if !counts.contains(&current) {
+        counts.push(current);
+        counts.sort_unstable();
+    }
+    counts
+}
+
+pub fn file_error_label(code: FileErrorCode, s: &Strings) -> &'static str {
+    match code {
+        FileErrorCode::PermissionDenied => s.read_denied,
+        FileErrorCode::Locked => s.read_locked,
+        FileErrorCode::ReadFailed => s.read_failed,
+        FileErrorCode::ExtractFailed => s.read_damaged,
+        FileErrorCode::TimedOut => s.read_timed_out,
+        FileErrorCode::Crashed => s.read_crashed,
+        FileErrorCode::EmbedFailed => s.read_embed_failed,
+        FileErrorCode::WriteFailed => s.read_write_failed,
+        FileErrorCode::Other => s.read_other,
+    }
+}
+
+pub fn download_error_label(code: DownloadError, s: &Strings) -> &'static str {
+    match code {
+        DownloadError::DownloadNetworkError => s.dl_network,
+        DownloadError::ChecksumMismatch => s.dl_checksum,
+        DownloadError::DiskFull => s.dl_disk_full,
+        DownloadError::PermissionDenied => s.dl_denied,
+        DownloadError::WriteFailed => s.dl_write_failed,
     }
 }
 
@@ -130,6 +213,7 @@ pub fn slider_from_intensity(intensity: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::i18n::Lang;
+    use magi_core::features::Feature;
 
     fn root(enabled: bool, status: Health) -> RootStatus {
         RootStatus {
@@ -141,33 +225,116 @@ mod tests {
     }
 
     #[test]
-    fn a_root_says_whether_it_is_watched_and_flags_problems() {
+    fn a_root_has_a_badge_and_explains_anything_but_watching() {
         let s = Lang::En.strings();
-        let line = |enabled, status| root_line(&root(enabled, status), s);
-        assert_eq!(line(true, Health::Ok), ("Watching for changes", false));
+        let state = |enabled, status| root_state(&root(enabled, status), s);
         assert_eq!(
-            line(true, Health::WatchFailed),
+            state(true, Health::Ok),
+            ("Watching for changes", Tone::Ok, None)
+        );
+        assert_eq!(
+            state(true, Health::WatchFailed),
             (
-                "Can't watch for changes here; checking now and then instead",
-                false
+                "Checking now and then",
+                Tone::Neutral,
+                Some("Can't watch for changes here; checking now and then instead")
             )
         );
         assert_eq!(
-            line(true, Health::Missing),
+            state(true, Health::Missing),
             (
-                "Folder not found. Reconnect the drive; the index is kept.",
-                true
+                "Not found",
+                Tone::Warn,
+                Some("Folder not found. Reconnect the drive; the index is kept.")
             )
         );
         assert_eq!(
-            line(true, Health::PermissionDenied),
-            ("Magi isn't allowed to read this folder.", true)
+            state(true, Health::PermissionDenied),
+            (
+                "No access",
+                Tone::Err,
+                Some("Magi isn't allowed to read this folder.")
+            )
         );
         // A switched-off root is not probed, so its last status is stale.
         assert_eq!(
-            line(false, Health::Missing),
-            ("Paused, not searched", false)
+            state(false, Health::Missing),
+            ("Paused", Tone::Neutral, Some("Paused, not searched"))
         );
+    }
+
+    fn feature(enabled: bool, install: Install) -> FeatureStatus {
+        FeatureStatus {
+            feature: Feature::Meaning,
+            enabled,
+            download_size: 1,
+            install,
+            backfill: None,
+        }
+    }
+
+    #[test]
+    fn a_feature_offers_the_one_action_that_fits() {
+        use FeatureAction::*;
+        let installed = Install::Installed { size_bytes: 1 };
+        assert_eq!(
+            feature_action(&feature(false, Install::NotInstalled)),
+            TurnOn
+        );
+        assert_eq!(
+            feature_action(&feature(true, Install::NotInstalled)),
+            TurnOn,
+            "wanted but never downloaded (a cancelled download)"
+        );
+        assert_eq!(feature_action(&feature(false, installed.clone())), Remove);
+        assert_eq!(feature_action(&feature(true, installed)), Nothing);
+        assert_eq!(
+            feature_action(&feature(true, Install::Downloading { bytes: 0, total: 1 })),
+            Nothing
+        );
+        assert_eq!(
+            feature_action(&feature(
+                true,
+                Install::Failed {
+                    code: DownloadError::ChecksumMismatch
+                }
+            )),
+            Retry
+        );
+    }
+
+    #[test]
+    fn the_hotkey_setting_becomes_a_gpui_keystroke() {
+        assert_eq!(
+            hotkey_keystroke("CmdOrCtrl+Shift+Space"),
+            "secondary-shift-space"
+        );
+        assert_eq!(hotkey_keystroke("Alt+K"), "alt-k");
+        assert_eq!(
+            hotkey_keystroke("Control+Option+KeyK"),
+            "ctrl-alt-k",
+            "global-hotkey's other spellings"
+        );
+        assert_eq!(hotkey_keystroke("CommandOrControl+Digit1"), "secondary-1");
+        assert_eq!(hotkey_keystroke("Command+Space"), "cmd-space");
+    }
+
+    #[test]
+    fn result_counts_keep_the_saved_one() {
+        assert_eq!(result_counts(30), vec![10, 20, 30, 50, 100]);
+        assert_eq!(result_counts(42), vec![10, 20, 30, 42, 50, 100]);
+    }
+
+    #[test]
+    fn every_read_error_has_its_own_words() {
+        let s = Lang::En.strings();
+        let mut labels: Vec<_> = FileErrorCode::ALL
+            .into_iter()
+            .map(|code| file_error_label(code, s))
+            .collect();
+        labels.sort();
+        labels.dedup();
+        assert_eq!(labels.len(), FileErrorCode::ALL.len());
     }
 
     #[test]

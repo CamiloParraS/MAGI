@@ -5,6 +5,7 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::i18n::Lang;
+use crate::theme::Tone;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -22,6 +23,16 @@ pub fn status_line(status: &IndexStatus, lang: Lang) -> String {
         IndexState::Indexing => lang.plural(&s.status_indexing, status.queued),
         IndexState::Idle if status.errors > 0 => lang.plural(&s.status_idle_errors, status.errors),
         IndexState::Idle => s.status_idle.into(),
+    }
+}
+
+/// The color of [`status_line`]'s dot.
+pub fn status_tone(status: &IndexStatus) -> Tone {
+    match status.state {
+        IndexState::Paused => Tone::Neutral,
+        IndexState::Scanning | IndexState::Indexing => Tone::Busy,
+        IndexState::Idle if status.errors > 0 => Tone::Err,
+        IndexState::Idle => Tone::Ok,
     }
 }
 

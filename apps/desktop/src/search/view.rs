@@ -22,10 +22,12 @@ use magi_core::host::Host;
 use super::highlight;
 use super::hint::{Hint, hint};
 use super::state::{Query, SearchState};
+use crate::app::{AppEvent, Events};
 use crate::i18n::Lang;
 use crate::theme::{self, Backdrop, Palette};
+use crate::tray::{status_line, status_tone};
 
-actions!(magi_search, [SelectUp, SelectDown, Close]);
+actions!(magi_search, [SelectUp, SelectDown, Close, OpenSettings]);
 
 const CONTEXT: &str = "SearchWindow";
 pub const DEBOUNCE: Duration = Duration::from_millis(150);
@@ -65,6 +67,7 @@ impl Live {
 pub struct SearchView {
     host: Host,
     live: Entity<Live>,
+    events: Events,
     input: Entity<InputState>,
     state: SearchState,
     scroll: ScrollHandle,
@@ -88,12 +91,14 @@ impl SearchView {
             KeyBinding::new("up", SelectUp, Some(CONTEXT)),
             KeyBinding::new("down", SelectDown, Some(CONTEXT)),
             KeyBinding::new("escape", Close, Some(CONTEXT)),
+            KeyBinding::new("secondary-,", OpenSettings, Some(CONTEXT)),
         ]);
     }
 
     pub fn new(
         host: Host,
         live: Entity<Live>,
+        events: Events,
         backdrop: Backdrop,
         opened_at: Instant,
         window: &mut Window,
@@ -118,6 +123,7 @@ impl SearchView {
         let mut view = Self {
             host,
             live,
+            events,
             input,
             state: SearchState::default(),
             scroll: ScrollHandle::new(),
@@ -241,29 +247,22 @@ impl SearchView {
         cx.notify();
     }
 
-    /// Records the wish, then downloads if needed (ADR-0010); the hint
-    /// reports the progress through [`Live::features`].
+    /// The hint reports the progress through [`Live::features`].
     fn turn_on(&mut self, feature: Feature, cx: &mut Context<Self>) {
         let host = self.host.clone();
         cx.background_executor()
             .spawn(async move {
-                let installed = host.features().status().is_ok_and(|all| {
-                    all.iter().any(|s| {
-                        s.feature == feature && matches!(s.install, Install::Installed { .. })
-                    })
-                });
-                let done = host.set_feature_enabled(feature, true).and_then(|()| {
-                    if installed {
-                        Ok(())
-                    } else {
-                        host.features().download(feature)
-                    }
-                });
-                if let Err(error) = done {
+                if let Err(error) = turn_on(&host, feature) {
                     tracing::warn!(%error, ?feature, "could not turn the feature on");
                 }
             })
             .detach();
+    }
+
+    /// The gear and `Ctrl/Cmd+,`; this window closes itself when settings
+    /// takes the focus.
+    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, _: &mut Context<Self>) {
+        let _ = self.events.try_send(AppEvent::Settings);
     }
 
     fn dismiss(&mut self, feature: Feature, cx: &mut Context<Self>) {
@@ -308,15 +307,24 @@ impl SearchView {
                 .status
                 .as_ref()
                 .map(|status| lang.plural(&s.intro, status.indexed));
+            let indexing = live
+                .status
+                .as_ref()
+                .filter(|st| {
+                    matches!(st.state, IndexState::Indexing | IndexState::Scanning) && st.queued > 0
+                })
+                .map(|st| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(p.dot(theme::Tone::Busy))
+                        .child(lang.plural(&s.still_indexing, st.queued))
+                });
             return Some(
                 block()
                     .children(intro)
-                    .child(keys(&[
-                        ("up", ""),
-                        ("down", s.move_selection),
-                        ("enter", s.open),
-                        ("escape", s.close),
-                    ]))
+                    .children(indexing)
                     .into_any_element(),
             );
         }
@@ -339,12 +347,19 @@ impl SearchView {
         let today = chrono::Local::now().date_naive();
         let selected = state.selected_index();
         let rows = results.iter().enumerate().map(|(ix, r)| {
-            row(ix, r, selected == Some(ix), p, lang, today).on_click(cx.listener(
-                move |this, _, window, cx| {
+            row(ix, r, selected == Some(ix), p, lang, today)
+                // Mouse move, not hover: keyboard scrolling slides rows under a
+                // still cursor and must not steal the selection.
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if this.state.selected_index() != Some(ix) {
+                        this.state.select_at(ix);
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.state.select_at(ix);
                     this.act(false, window, cx);
-                },
-            ))
+                }))
         });
         Some(
             div()
@@ -435,41 +450,69 @@ impl SearchView {
             )
     }
 
-    fn footer(&self, p: &Palette, cx: &Context<Self>) -> Option<Div> {
+    /// Always there: the settings gear, the index status (as in the tray)
+    /// and the keys that apply now.
+    fn footer(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
-        let indexing = live
-            .status
-            .as_ref()
-            .filter(|st| {
-                matches!(st.state, IndexState::Indexing | IndexState::Scanning) && st.queued > 0
-            })
-            .map(|st| lang.plural(&s.still_indexing, st.queued));
-        let has_results = !self.state.results().is_empty();
-        if !(has_results || indexing.is_some()) {
-            return None;
-        }
-        Some(
+        let status = live.status.as_ref().map(|st| {
             div()
                 .flex()
-                .justify_between()
                 .items_center()
-                .gap_3()
-                .px(px(16.))
-                .py(px(8.))
-                .text_xs()
-                .text_color(p.mute)
-                .border_t_1()
-                .border_color(p.line)
-                .child(div().flex_1().min_w_0().truncate().children(indexing))
-                .when(has_results, |d| {
-                    d.child(keys(&[
-                        ("enter", s.open),
-                        ("secondary-enter", s.reveal),
-                        ("secondary-c", s.copy_path),
-                    ]))
-                }),
-        )
+                .gap_2()
+                .min_w_0()
+                .child(p.dot(status_tone(st)))
+                .child(div().truncate().child(status_line(st, lang)))
+        });
+        let pairs: &[(&str, &'static str)] = if self.state.results().is_empty() {
+            &[("escape", s.close)]
+        } else {
+            &[
+                ("up", ""),
+                ("down", s.move_selection),
+                ("enter", s.open),
+                ("secondary-enter", s.reveal),
+                ("secondary-c", s.copy_path),
+            ]
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .pl(px(8.))
+            .pr(px(16.))
+            .py(px(6.))
+            .text_xs()
+            .text_color(p.mute)
+            .border_t_1()
+            .border_color(p.line)
+            .child(
+                Button::new("settings")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Settings)
+                    .tooltip(s.settings)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(&OpenSettings, window, cx)
+                    })),
+            )
+            .child(div().flex_1().min_w_0().children(status))
+            .child(keys(pairs))
+    }
+}
+
+/// Records the wish, then downloads if needed (ADR-0010). Blocking: run it
+/// on the background executor.
+pub fn turn_on(host: &Host, feature: Feature) -> magi_core::Result<()> {
+    let installed = host.features().status().is_ok_and(|all| {
+        all.iter()
+            .any(|s| s.feature == feature && matches!(s.install, Install::Installed { .. }))
+    });
+    host.set_feature_enabled(feature, true)?;
+    if installed {
+        Ok(())
+    } else {
+        host.features().download(feature)
     }
 }
 
@@ -501,6 +544,7 @@ impl Render for SearchView {
             .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.select(1, cx)))
             .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
             .capture_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::open_settings))
             .on_children_prepainted(fit)
             .child(
                 div()
@@ -525,7 +569,7 @@ impl Render for SearchView {
                         d.child(div().h(px(2.)).bg(p.accent).opacity(0.4))
                     })
                     .children(self.body(&p, cx))
-                    .children(self.footer(&p, cx)),
+                    .child(self.footer(&p, cx)),
             )
     }
 }

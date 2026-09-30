@@ -2333,9 +2333,20 @@ Fourth round, from the user's mockup (`mockup/index.html`, local only), 2026-09-
 - Checked by screenshot (light, English, blurred backdrop): all three sections; a bad size shows its message inside its box with a warning border.
 - The mockup groups sections differently (Folders with exclusions, file types and limits; General with shortcut, startup, language and results shown; Appearance with theme and background; icons in the sidebar, subheadings, status badges). Not adopted yet; asked the user.
 
+Fifth round, the mockup's layout adopted (user request, 2026-09-30):
+
+- Five sections with sidebar icons and the version at the bottom: Folders (searched folders with a status badge, switch and trash per root, Add folder beside the subheading; then what to index: file types, largest file, pause on battery, exclusions), Search features (per feature: installed size, download or backfill progress, failed download with its reason; Turn on (size), Try again, Remove download when off, and a switch), General (the hotkey, read-only; language; results shown), Appearance (theme, background, see-through amount) and Index (indexed / waiting / name-only / unreadable counts, the unreadable files with their reason, Retry all, Clear index behind a confirmation dialog).
+- Search window: the footer is always there, with a settings gear (also `Ctrl/Cmd+,`), the tray's status line and dot, and the keys that apply; "still indexing" moved into the empty-query intro (mockup B).
+- Four extra Lucide icons (sparkles, chart-column, keyboard, trash) come from `gpui_kit::assets::icon_assets!`; the default bundle embeds only the component icons.
+- Tests: `settings::tests` (root badge and note, the one action per feature state, hotkey → GPUI keystroke, result-count choices, a label per read error).
+- Checked on Windows 11, isolated dev instance (dark, English, fake embedder): every section by screenshot; the clear-index dialog opened and its OK cleared the dev index; the battery switch wrote `pause_on_battery = false`; `Ctrl+,` from search brought settings forward; search empty and results footers.
+- After a two-axis review: the unreadable list is read on the background executor and a failed read shows no list (not "every file was read"); the hotkey display accepts global-hotkey's other spellings (`Control`, `Option`, `Command`, `KeyK`, `Digit1`); a wanted-but-undownloaded feature keeps its switch so it can be turned off; the results footer shows Up/Down Move. Still open from it: the tray's colored state overlay and tooltip (mockup 03), `FileError.detail` is not shown, the list stops at 50 without "and N more", and "enable, then download" still lives in the desktop crate (`search::view::turn_on`) rather than `Host`.
+- Not adopted from the mockup: per-root file counts, chunk count and index size (no API yet), the hotkey recorder and Launch at login (no `auto-launch` yet), per-file Retry (the engine retries all), Retry / Open Settings on missing / denied roots. Not tried by hand: Turn on / Remove download (real downloads), Spanish, light mode.
+
 Open:
 
-- Other sections (search features, shortcut and startup, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- Onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- The Index section's unreadable list is read when the section opens and after its actions, not live.
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
 - In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
