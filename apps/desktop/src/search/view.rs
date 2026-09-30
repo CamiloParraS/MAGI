@@ -104,6 +104,8 @@ impl SearchView {
             return;
         };
         let host = self.host.clone();
+        // The last keystroke; the debounce counts toward the M6 < 400 ms.
+        let typed_at = Instant::now();
         self.pending = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
             let request = SearchRequest {
@@ -114,6 +116,7 @@ impl SearchView {
                 .background_executor()
                 .spawn(async move { host.search(&request).map_err(|e| ErrorCode::from(&e)) })
                 .await;
+            tracing::info!(elapsed = ?typed_at.elapsed(), "search results after typing stopped");
             let _ = this.update(cx, |view, cx| {
                 view.state.apply(query.generation, reply);
                 cx.notify();

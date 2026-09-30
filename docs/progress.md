@@ -2240,8 +2240,21 @@ Manual results from the user, same day:
 - ⚠️ **Deleted file, Reveal:** `magi.log` shows `Revealing path ...\VW_beetle.jpg in explorer: file not found (0x80070002)` and the window closes. The plan expected a logged warning with the window kept. `Host::file_path` succeeds from the stale index row, so only the OS call fails, and `act` closes the window regardless. Reveal on an existing file and Open were not tried.
   - Fixed 2026-09-29: `Host::file_path` now also returns `FileIdNotFound` when the indexed path no longer exists (metadata check only), so `act` logs and keeps the window, as the plan intended. Test: `tests/host.rs` `search_returns_metadata_highlights_and_sources`. ✅ Re-run by the user the same day: with a result's file deleted, both Enter and Ctrl+Enter keep the window open. On an existing file, Open and Reveal both work.
 - The log also has repeated `ERROR : window not found` lines at window close (source not yet found), and indexing toggles `low_memory=true` pause.
+  - Source found 2026-09-29 (file/line logging, temporarily): `gpui-pre-0.3.7/src/window.rs:1914`, GPUI's active-status callback. Destroying a removed window delivers one last deactivation, and GPUI's `handle.update(...).log_err()` finds the window gone. One line per close, harmless, GPUI-internal (blank target because `util::log_err` derives it from a `crates/` path). Not suppressed: an empty target cannot be filtered with `EnvFilter`.
 - Hotkey default is `CmdOrCtrl+Shift+Space` (`ui.hotkey`); not yet tried.
 - Not run: typing→results < 400 ms measurement, tray, IME/dead keys, GPU-less VM, WSLg.
+
+Second round, 2026-09-29:
+
+- ✅ **CI green on Windows, macOS and Linux** (pushed by the user), which also verifies the Linux package list from Zed's `script/linux`.
+- ✅ **First frame < 150 ms, release build:** 10 samples via `magi --toggle` (fake embedder, empty index): 57.0 ms cold, then 19.0–28.6 ms; max 57.0 ms. Debug builds log 340–530 ms, which is where the slow numbers in the user's log came from.
+- ✅ **Hotkey** toggles the window (user).
+- ✅ **Frameless, on top, centered, closes on blur and `Esc`** (user).
+- ✅ **Transparency effects off** → the window is solid (user).
+- ✅ **IME / dead keys:** `canción` typed with `'` + `o` works; `ó` and `o` both highlight `cancion` (user).
+- ⚠️ **Tray:** the icon is there and "Open search" works; Pause/Resume, the status line and Quit were not confirmed (the user saw only a search entry).
+- **Typing → results:** `search window` now logs `search results after typing stopped elapsed=` (last keystroke to reply, debounce included). Not measured yet.
+- Not run: GPU-less VM, WSLg.
 
 ### Open for other OSes / CI
 
