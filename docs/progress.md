@@ -2343,8 +2343,18 @@ Fifth round, the mockup's layout adopted (user request, 2026-09-30):
 - After a two-axis review: the unreadable list is read on the background executor and a failed read shows no list (not "every file was read"); the hotkey display accepts global-hotkey's other spellings (`Control`, `Option`, `Command`, `KeyK`, `Digit1`); a wanted-but-undownloaded feature keeps its switch so it can be turned off; the results footer shows Up/Down Move. Still open from it: the tray's colored state overlay and tooltip (mockup 03), `FileError.detail` is not shown, the list stops at 50 without "and N more", and "enable, then download" still lives in the desktop crate (`search::view::turn_on`) rather than `Host`.
 - Not adopted from the mockup: per-root file counts, chunk count and index size (no API yet), the hotkey recorder and Launch at login (no `auto-launch` yet), per-file Retry (the engine retries all), Retry / Open Settings on missing / denied roots. Not tried by hand: Turn on / Remove download (real downloads), Spanish, light mode.
 
+Sixth round, from the user's light-mode / Spanish review (2026-09-30):
+
+- The sidebar says "Búsqueda" in Spanish (the page keeps "Funciones de búsqueda"), which did not fit 210 px.
+- Light mode over a blurred backdrop: darker secondary text (#45474d) and at least 85 % tint (`theme::LIGHT_MIN_TINT`), so a dark window behind no longer washes the text out; dark mode keeps the slider's value. Test: `theme::tests::light_mode_keeps_a_readable_tint`.
+- Folder status: a colored dot and a short word (Watching / Checking / Paused / Not found / No access) instead of a pill.
+- Primary buttons, checkboxes and focus use the variant A accent instead of gpui-component's black/white. Save (exclusions) is primary and enabled only while the text differs from the saved patterns.
+- The results footer's Up/Down hint was dropped again: in Spanish it cut the status to "Indexando, f…".
+- Checked by screenshot: light + Spanish (Folders, Save before and after an edit, search window), dark + Spanish (Search features).
+
 Open:
 
+- In light mode the see-through slider does nothing below 85 %.
 - Onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
 - The Index section's unreadable list is read when the section opens and after its actions, not live.
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.

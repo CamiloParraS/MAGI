@@ -6,6 +6,7 @@ use gpui_kit::{
     App, Div, Hsla, ParentElement as _, Rgba, Styled as _, Window, WindowAppearance,
     WindowBackgroundAppearance, div, px, relative, rgb, rgba,
 };
+use gpui_kit::{black, white};
 use magi_core::config::TransparencyMode;
 use magi_core::platform::BackdropSupport;
 
@@ -74,12 +75,32 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
         ThemeMode::Light
     };
     Theme::change(mode, Some(window), cx);
+    // gpui-component's primary is black/white; the mockup's is the accent.
+    let accent = Palette::new(dark).accent;
+    let on_accent = if dark { black() } else { white() };
+    Theme::update(cx, |t| {
+        t.primary = accent;
+        t.primary_hover = accent.opacity(0.9);
+        t.primary_active = accent.opacity(0.8);
+        t.primary_foreground = on_accent;
+        t.button_primary = accent;
+        t.button_primary_hover = accent.opacity(0.9);
+        t.button_primary_active = accent.opacity(0.8);
+        t.button_primary_foreground = on_accent;
+    });
     dark
 }
+
+/// Light text colors wash out over a blurred backdrop with a dark window
+/// behind it, so light mode keeps at least this much tint.
+/// ponytail: the see-through slider does nothing below it in light mode;
+/// make the slider's range depend on the theme if anyone notices.
+pub const LIGHT_MIN_TINT: f32 = 0.85;
 
 /// Variant A "Pane" colors (M6 visual direction, `docs/screenshots/m6-variant-a/`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    pub dark: bool,
     pub ink: Hsla,
     pub mute: Hsla,
     pub line: Hsla,
@@ -105,6 +126,7 @@ impl Palette {
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
+                dark,
                 ink: rgb(0xf3f3f5).into(),
                 mute: rgb(0xa4a6ad).into(),
                 line: rgba(0xffffff14).into(),
@@ -122,8 +144,9 @@ impl Palette {
             }
         } else {
             Self {
+                dark,
                 ink: rgb(0x1b1b1f).into(),
-                mute: rgb(0x5f6168).into(),
+                mute: rgb(0x45474d).into(),
                 line: rgba(0x00000014).into(),
                 panel: rgb(0xf6f6f8),
                 accent: rgb(0x0a64d8).into(),
@@ -159,6 +182,33 @@ impl Palette {
             .bg(self.tone(tone))
     }
 
+    /// A status: a colored dot and a short word, the word colored only
+    /// for a problem.
+    pub fn status(&self, text: &'static str, tone: Tone) -> Div {
+        let color = match tone {
+            Tone::Warn | Tone::Err => self.tone(tone),
+            _ => self.mute,
+        };
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.))
+            .text_xs()
+            .text_color(color)
+            .child(self.dot(tone))
+            .child(text)
+    }
+
+    /// The alpha of the window's own colors over `backdrop`.
+    pub fn tint_alpha(&self, backdrop: Backdrop) -> f32 {
+        match backdrop {
+            Backdrop::Blurred { tint_alpha } if self.dark => tint_alpha,
+            Backdrop::Blurred { tint_alpha } => tint_alpha.max(LIGHT_MIN_TINT),
+            Backdrop::Solid => 1.0,
+        }
+    }
+
     /// A status pill.
     pub fn badge(&self, text: &'static str, tone: Tone) -> Div {
         let color = self.tone(tone);
@@ -174,11 +224,10 @@ impl Palette {
     }
 
     pub fn background(&self, backdrop: Backdrop) -> Rgba {
-        let a = match backdrop {
-            Backdrop::Blurred { tint_alpha } => tint_alpha,
-            Backdrop::Solid => 1.0,
-        };
-        Rgba { a, ..self.panel }
+        Rgba {
+            a: self.tint_alpha(backdrop),
+            ..self.panel
+        }
     }
 
     /// Marks the selected row: a quarter of its height, centered on its left
@@ -239,6 +288,20 @@ mod tests {
             backdrop(Always, 0.75, reduced),
             Backdrop::Blurred { tint_alpha: 0.75 }
         );
+    }
+
+    #[test]
+    fn light_mode_keeps_a_readable_tint() {
+        let blur = |a| Backdrop::Blurred { tint_alpha: a };
+        let (light, dark) = (Palette::new(false), Palette::new(true));
+        assert_eq!(light.tint_alpha(blur(0.5)), LIGHT_MIN_TINT);
+        assert_eq!(light.tint_alpha(blur(0.9)), 0.9);
+        assert_eq!(
+            dark.tint_alpha(blur(0.5)),
+            0.5,
+            "dark text on glass holds up"
+        );
+        assert_eq!(light.tint_alpha(Backdrop::Solid), 1.0);
     }
 
     #[test]

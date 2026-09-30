@@ -30,7 +30,7 @@ use gpui_kit::component::searchable_list::SearchableListItem;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Icon, Sizable as _};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
@@ -78,6 +78,14 @@ impl Section {
             Self::General => s.general,
             Self::Appearance => s.appearance,
             Self::Index => s.index,
+        }
+    }
+
+    /// The sidebar's label: shorter where the title does not fit.
+    fn nav_title(self, s: &Strings) -> &'static str {
+        match self {
+            Self::Features => s.search_features_nav,
+            _ => self.title(s),
         }
     }
 
@@ -323,6 +331,12 @@ impl SettingsView {
                     }
                 },
             ),
+            // Save lights up as soon as the patterns differ from the saved ones.
+            cx.subscribe(&excludes, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
             }),
@@ -766,7 +780,7 @@ impl SettingsView {
                     .children(line.map(|line| note(p).child(line)))
                     .children(self.problem(Field::Root(id), s, p)),
             )
-            .child(p.badge(badge, tone))
+            .child(p.status(badge, tone))
             .child(
                 Switch::new(("root-enabled", id as u64))
                     .checked(root.enabled)
@@ -814,6 +828,8 @@ impl SettingsView {
                 }))
         });
         let battery = self.indexing.pause_on_battery;
+        let excludes_edited =
+            globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
         stack()
             .child(
                 self.card(Field::FileTypes, p)
@@ -874,11 +890,17 @@ impl SettingsView {
                     .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p))
                     // `rows` does not size the box; a height does.
                     .child(Textarea::new(&self.excludes).h(px(150.)).bg(p.solid))
-                    .child(div().flex().justify_end().child(
-                        Button::new("save-excludes").label(s.save).on_click(
-                            cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
+                    .child(
+                        div().flex().justify_end().child(
+                            Button::new("save-excludes")
+                                .primary()
+                                .label(s.save)
+                                .disabled(!excludes_edited)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.save_excludes(window, cx)
+                                })),
                         ),
-                    )),
+                    ),
             )
     }
 
@@ -1258,10 +1280,8 @@ impl Render for SettingsView {
         let s = self.live.read(cx).lang.strings();
         // Over a blurred backdrop the window's own colors take the tint's
         // alpha, as the search window's panel does; the boxes stay opaque.
-        let tint = |color: Hsla| match self.backdrop() {
-            Backdrop::Blurred { tint_alpha } => color.opacity(tint_alpha),
-            Backdrop::Solid => color,
-        };
+        let alpha = p.tint_alpha(self.backdrop());
+        let tint = |color: Hsla| color.opacity(alpha);
         let nav = div()
             .flex()
             .flex_col()
@@ -1304,7 +1324,7 @@ impl Render for SettingsView {
                                     .size(px(15.))
                                     .text_color(if selected { p.accent } else { p.mute }),
                             )
-                            .child(section.title(s)),
+                            .child(section.nav_title(s)),
                     )
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {

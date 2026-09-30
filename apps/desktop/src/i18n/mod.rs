@@ -150,6 +150,8 @@ pub struct Strings {
     pub dl_disk_full: &'static str,
     pub dl_denied: &'static str,
     pub dl_write_failed: &'static str,
+    /// The sidebar's shorter `search_features`.
+    pub search_features_nav: &'static str,
     pub general: &'static str,
     pub shortcut: &'static str,
     pub shortcut_note: &'static str,

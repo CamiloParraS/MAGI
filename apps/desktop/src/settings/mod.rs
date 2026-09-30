@@ -228,14 +228,11 @@ mod tests {
     fn a_root_has_a_badge_and_explains_anything_but_watching() {
         let s = Lang::En.strings();
         let state = |enabled, status| root_state(&root(enabled, status), s);
-        assert_eq!(
-            state(true, Health::Ok),
-            ("Watching for changes", Tone::Ok, None)
-        );
+        assert_eq!(state(true, Health::Ok), ("Watching", Tone::Ok, None));
         assert_eq!(
             state(true, Health::WatchFailed),
             (
-                "Checking now and then",
+                "Checking",
                 Tone::Neutral,
                 Some("Can't watch for changes here; checking now and then instead")
             )

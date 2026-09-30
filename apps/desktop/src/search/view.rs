@@ -468,8 +468,6 @@ impl SearchView {
             &[("escape", s.close)]
         } else {
             &[
-                ("up", ""),
-                ("down", s.move_selection),
                 ("enter", s.open),
                 ("secondary-enter", s.reveal),
                 ("secondary-c", s.copy_path),
