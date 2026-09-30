@@ -1,0 +1,255 @@
+//! UI strings and ICU4X formatting (SPEC.md M6 Localization). One
+//! [`Strings`] value per language; a field missing from `es.rs` is a compile
+//! error, so Spanish always covers English. The tray uses the same table.
+
+mod en;
+mod es;
+
+use chrono::NaiveDate;
+use icu_calendar::{Date, Gregorian};
+use icu_datetime::FixedCalendarDateTimeFormatter;
+use icu_datetime::fieldsets::YMD;
+use icu_decimal::DecimalFormatter;
+use icu_decimal::input::Decimal;
+use icu_locale_core::{Locale, locale};
+use icu_plurals::{PluralCategory, PluralRules};
+use magi_core::config::Language;
+use magi_core::dto::MatchSource;
+use magi_core::features::Feature;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    En,
+    Es,
+}
+
+/// A count-dependent string; `{n}` is replaced by the formatted count.
+pub struct Plural {
+    pub one: &'static str,
+    pub other: &'static str,
+}
+
+/// A search feature as the user sees it (ADR-0010).
+pub struct FeatureText {
+    pub name: &'static str,
+    /// Follows "<name> is off." in the search hint.
+    pub pitch: &'static str,
+}
+
+pub struct Strings {
+    pub placeholder: &'static str,
+    /// The window with no query yet.
+    pub intro: Plural,
+    /// `{q}` is the query.
+    pub no_match: &'static str,
+    pub search_failed: &'static str,
+    pub try_again: &'static str,
+    pub still_indexing: Plural,
+    /// `{n}` is the page number.
+    pub page: &'static str,
+    pub open: &'static str,
+    pub reveal: &'static str,
+    pub copy_path: &'static str,
+    pub move_selection: &'static str,
+    pub close: &'static str,
+    pub today: &'static str,
+    pub yesterday: &'static str,
+    pub days_ago: Plural,
+    pub source_keyword: &'static str,
+    pub source_semantic: &'static str,
+    pub source_ocr: &'static str,
+    pub source_visual: &'static str,
+    pub source_qr: &'static str,
+    pub source_filename: &'static str,
+    pub meaning: FeatureText,
+    pub image_text: FeatureText,
+    pub image_visual: FeatureText,
+    /// "<name> is off."; `{name}` is the feature name.
+    pub feature_off: &'static str,
+    /// `{size}` is the download size.
+    pub turn_on: &'static str,
+    /// `{name}` is the feature name, `{done}`/`{total}` are sizes.
+    pub downloading: &'static str,
+    /// `{name}` is the feature name.
+    pub updating: Plural,
+    pub dismiss: &'static str,
+    pub tray_starting: &'static str,
+    pub tray_open: &'static str,
+    pub tray_pause: &'static str,
+    pub tray_resume: &'static str,
+    pub tray_quit: &'static str,
+    pub status_paused: &'static str,
+    pub status_scanning: &'static str,
+    pub status_indexing: Plural,
+    pub status_idle: &'static str,
+    pub status_idle_errors: Plural,
+}
+
+impl Strings {
+    pub fn source(&self, source: MatchSource) -> &'static str {
+        match source {
+            MatchSource::Keyword => self.source_keyword,
+            MatchSource::Semantic => self.source_semantic,
+            MatchSource::Ocr => self.source_ocr,
+            MatchSource::Visual => self.source_visual,
+            MatchSource::Qr => self.source_qr,
+            MatchSource::Filename => self.source_filename,
+        }
+    }
+
+    pub fn feature(&self, feature: Feature) -> &FeatureText {
+        match feature {
+            Feature::Meaning => &self.meaning,
+            Feature::ImageText => &self.image_text,
+            Feature::ImageVisual => &self.image_visual,
+        }
+    }
+}
+
+impl Lang {
+    /// `system` resolves any `es-*` locale to Spanish, everything else to
+    /// English (ADR-0010).
+    pub fn resolve(setting: Language, system: Option<&str>) -> Self {
+        match setting {
+            Language::En => Self::En,
+            Language::Es => Self::Es,
+            Language::System => match system {
+                Some(tag) if tag == "es" || tag.starts_with("es-") || tag.starts_with("es_") => {
+                    Self::Es
+                }
+                _ => Self::En,
+            },
+        }
+    }
+
+    /// Reads the OS UI language for `system`.
+    pub fn current(setting: Language) -> Self {
+        Self::resolve(setting, sys_locale::get_locale().as_deref())
+    }
+
+    pub fn strings(self) -> &'static Strings {
+        match self {
+            Self::En => &en::STRINGS,
+            Self::Es => &es::STRINGS,
+        }
+    }
+
+    fn locale(self) -> Locale {
+        match self {
+            Self::En => locale!("en"),
+            Self::Es => locale!("es"),
+        }
+    }
+
+    pub fn number(self, n: u64) -> String {
+        self.decimal(Decimal::from(n))
+    }
+
+    fn decimal(self, d: Decimal) -> String {
+        match DecimalFormatter::try_new(self.locale().into(), Default::default()) {
+            Ok(f) => f.format(&d).to_string(),
+            Err(_) => d.to_string(),
+        }
+    }
+
+    /// Picks `one` or `other` by the language's plural rules and fills `{n}`.
+    pub fn plural(self, p: &Plural, n: u64) -> String {
+        let one = PluralRules::try_new_cardinal(self.locale().into())
+            .map(|r| r.category_for(n) == PluralCategory::One)
+            .unwrap_or(n == 1);
+        (if one { p.one } else { p.other }).replace("{n}", &self.number(n))
+    }
+
+    /// "today", "yesterday", "N days ago" within a month, else the date.
+    pub fn date(self, date: NaiveDate, today: NaiveDate) -> String {
+        let s = self.strings();
+        match (today - date).num_days() {
+            0 => s.today.into(),
+            1 => s.yesterday.into(),
+            days @ 2..31 => self.plural(&s.days_ago, days as u64),
+            _ => self.absolute_date(date),
+        }
+    }
+
+    fn absolute_date(self, date: NaiveDate) -> String {
+        use chrono::Datelike as _;
+        let formatter = FixedCalendarDateTimeFormatter::<Gregorian, _>::try_new(
+            self.locale().into(),
+            YMD::medium(),
+        );
+        let icu_date = Date::try_new_gregorian(date.year(), date.month() as u8, date.day() as u8);
+        match (formatter, icu_date) {
+            (Ok(f), Ok(d)) => f.format(&d).to_string(),
+            _ => date.to_string(),
+        }
+    }
+
+    /// Download sizes: "812 MB", "1.2 GB" (decimal units, like the OS).
+    pub fn size(self, bytes: u64) -> String {
+        if bytes >= 1_000_000_000 {
+            let mut tenths = Decimal::from((bytes + 50_000_000) / 100_000_000);
+            tenths.multiply_pow10(-1);
+            format!("{} GB", self.decimal(tenths))
+        } else {
+            format!("{} MB", self.number((bytes + 500_000) / 1_000_000))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn system_resolves_any_spanish_locale_to_spanish() {
+        use Language::*;
+        for tag in ["es", "es-CO", "es-419", "es_ES.UTF-8"] {
+            assert_eq!(Lang::resolve(System, Some(tag)), Lang::Es, "{tag}");
+        }
+        for tag in [Some("en-US"), Some("pt-BR"), Some("estonian"), None] {
+            assert_eq!(Lang::resolve(System, tag), Lang::En, "{tag:?}");
+        }
+        assert_eq!(Lang::resolve(En, Some("es-CO")), Lang::En);
+        assert_eq!(Lang::resolve(Es, Some("en-US")), Lang::Es);
+    }
+
+    #[test]
+    fn numbers_and_plurals_follow_the_language() {
+        let s = Lang::En.strings();
+        assert_eq!(
+            Lang::En.plural(&s.status_indexing, 1),
+            "Indexing, 1 file to go"
+        );
+        assert_eq!(
+            Lang::En.plural(&s.status_indexing, 1284),
+            "Indexing, 1,284 files to go"
+        );
+        let s = Lang::Es.strings();
+        assert_eq!(Lang::Es.plural(&s.days_ago, 1), "hace 1 día");
+        assert_eq!(Lang::Es.number(12345), "12.345");
+    }
+
+    #[test]
+    fn dates_are_relative_within_a_month_then_absolute() {
+        let today = day(2026, 9, 29);
+        assert_eq!(Lang::En.date(today, today), "today");
+        assert_eq!(Lang::En.date(day(2026, 9, 28), today), "yesterday");
+        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "12 days ago");
+        assert_eq!(Lang::En.date(day(2026, 8, 18), today), "Aug 18, 2026");
+        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "hace 3 días");
+        assert_eq!(Lang::Es.date(day(2026, 8, 18), today), "18 ago 2026");
+        // A file dated in the future (clock skew) shows its date.
+        assert_eq!(Lang::En.date(day(2026, 10, 2), today), "Oct 2, 2026");
+    }
+
+    #[test]
+    fn sizes_are_megabytes_or_tenths_of_gigabytes() {
+        assert_eq!(Lang::En.size(812_300_000), "812 MB");
+        assert_eq!(Lang::En.size(1_240_000_000), "1.2 GB");
+        assert_eq!(Lang::Es.size(1_240_000_000), "1,2 GB");
+    }
+}

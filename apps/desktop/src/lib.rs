@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod hotkey;
+pub mod i18n;
 pub mod instance;
 mod logging;
 pub mod search;

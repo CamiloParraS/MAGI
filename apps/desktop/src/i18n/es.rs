@@ -1,0 +1,70 @@
+use super::{FeatureText, Plural, Strings};
+
+pub const STRINGS: Strings = Strings {
+    placeholder: "Busca en tus archivos",
+    intro: Plural {
+        one: "Busca en {n} archivo por nombre, palabras o de qué trata.",
+        other: "Busca en {n} archivos por nombre, palabras o de qué tratan.",
+    },
+    no_match: "Ningún archivo coincide con “{q}”.",
+    search_failed: "No se pudo buscar en el índice. Magi lo está reiniciando.",
+    try_again: "Reintentar",
+    still_indexing: Plural {
+        one: "Indexando, falta {n} archivo. Puede que falten resultados.",
+        other: "Indexando, faltan {n} archivos. Puede que falten resultados.",
+    },
+    page: "página {n}",
+    open: "Abrir",
+    reveal: "Mostrar en la carpeta",
+    copy_path: "Copiar ruta",
+    move_selection: "Moverse",
+    close: "Cerrar",
+    today: "hoy",
+    yesterday: "ayer",
+    days_ago: Plural {
+        one: "hace {n} día",
+        other: "hace {n} días",
+    },
+    source_keyword: "Palabras",
+    source_semantic: "Significado",
+    source_ocr: "Texto en imagen",
+    source_visual: "Se parece",
+    source_qr: "Código QR",
+    source_filename: "Nombre",
+    meaning: FeatureText {
+        name: "Buscar por significado",
+        pitch: "Encuentra archivos que hablan de lo que buscas aunque usen otras palabras.",
+    },
+    image_text: FeatureText {
+        name: "Leer texto en imágenes",
+        pitch: "Permite buscar las palabras de capturas, escaneos y fotos.",
+    },
+    image_visual: FeatureText {
+        name: "Encontrar imágenes por lo que muestran",
+        pitch: "Encuentra fotos a partir de una descripción.",
+    },
+    feature_off: "{name} está desactivado.",
+    turn_on: "Activar ({size})",
+    downloading: "Descargando {name}: {done} de {total}",
+    updating: Plural {
+        one: "{name} está activado. Actualizando {n} archivo…",
+        other: "{name} está activado. Actualizando {n} archivos…",
+    },
+    dismiss: "Descartar",
+    tray_starting: "Iniciando…",
+    tray_open: "Abrir búsqueda",
+    tray_pause: "Pausar indexación",
+    tray_resume: "Reanudar indexación",
+    tray_quit: "Salir",
+    status_paused: "Indexación en pausa",
+    status_scanning: "Revisando carpetas…",
+    status_indexing: Plural {
+        one: "Indexando, falta {n} archivo",
+        other: "Indexando, faltan {n} archivos",
+    },
+    status_idle: "Al día",
+    status_idle_errors: Plural {
+        one: "Al día, {n} archivo no se pudo leer",
+        other: "Al día, {n} archivos no se pudieron leer",
+    },
+};

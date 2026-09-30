@@ -1,0 +1,70 @@
+use super::{FeatureText, Plural, Strings};
+
+pub const STRINGS: Strings = Strings {
+    placeholder: "Search your files",
+    intro: Plural {
+        one: "Search {n} file by name, words, or what it's about.",
+        other: "Search {n} files by name, words, or what they're about.",
+    },
+    no_match: "No files match “{q}”.",
+    search_failed: "Couldn't search the index. Magi is restarting it.",
+    try_again: "Try again",
+    still_indexing: Plural {
+        one: "Still indexing, {n} file to go. Results may be incomplete.",
+        other: "Still indexing, {n} files to go. Results may be incomplete.",
+    },
+    page: "page {n}",
+    open: "Open",
+    reveal: "Show in folder",
+    copy_path: "Copy path",
+    move_selection: "Move",
+    close: "Close",
+    today: "today",
+    yesterday: "yesterday",
+    days_ago: Plural {
+        one: "{n} day ago",
+        other: "{n} days ago",
+    },
+    source_keyword: "Words",
+    source_semantic: "Meaning",
+    source_ocr: "Text in image",
+    source_visual: "Looks like",
+    source_qr: "QR code",
+    source_filename: "File name",
+    meaning: FeatureText {
+        name: "Search by meaning",
+        pitch: "It finds files that talk about your query even when they use other words.",
+    },
+    image_text: FeatureText {
+        name: "Read text in images",
+        pitch: "It makes the words in screenshots, scans and photos searchable.",
+    },
+    image_visual: FeatureText {
+        name: "Find images by what they show",
+        pitch: "It can find photos by describing them.",
+    },
+    feature_off: "{name} is off.",
+    turn_on: "Turn on ({size})",
+    downloading: "Downloading {name}: {done} of {total}",
+    updating: Plural {
+        one: "{name} is on. Updating {n} file…",
+        other: "{name} is on. Updating {n} files…",
+    },
+    dismiss: "Dismiss",
+    tray_starting: "Starting…",
+    tray_open: "Open search",
+    tray_pause: "Pause indexing",
+    tray_resume: "Resume indexing",
+    tray_quit: "Quit",
+    status_paused: "Indexing paused",
+    status_scanning: "Scanning folders…",
+    status_indexing: Plural {
+        one: "Indexing, {n} file to go",
+        other: "Indexing, {n} files to go",
+    },
+    status_idle: "Up to date",
+    status_idle_errors: Plural {
+        one: "Up to date, {n} file could not be read",
+        other: "Up to date, {n} files could not be read",
+    },
+};

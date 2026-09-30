@@ -91,6 +91,17 @@ global-hotkey = "0.8.0"
 interprocess = "2.4.4"
 # Carries tray/hotkey/host/instance events from their threads to GPUI's main thread.
 async-channel = "2.5.0"
+# Localization (SPEC.md section 3): ICU4X plurals, numbers and dates for en/es. The component
+# crates, not the `icu` meta-crate, so collator/segmenter code and data are not compiled in.
+icu_locale_core = "2.3.0"
+icu_plurals = "2.3.0"
+icu_decimal = "2.3.0"
+icu_datetime = "2.3.0"
+icu_calendar = "2.3.0"
+# The OS UI language for `ui.language = "system"`, on all three OSes, without per-OS code.
+sys-locale = "0.3.2"
+# The local calendar date of `modified_at`; already in the tree through gpui-component.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [profile.release]
 lto = "thin"

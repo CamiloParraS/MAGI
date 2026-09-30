@@ -16,6 +16,13 @@ tray-icon = { workspace = true }
 global-hotkey = { workspace = true }
 interprocess = { workspace = true }
 async-channel = { workspace = true }
+icu_locale_core = { workspace = true }
+icu_plurals = { workspace = true }
+icu_decimal = { workspace = true }
+icu_datetime = { workspace = true }
+icu_calendar = { workspace = true }
+sys-locale = { workspace = true }
+chrono = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

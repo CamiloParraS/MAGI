@@ -10,6 +10,7 @@ use magi_core::config::UiConfig;
 use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
+use crate::i18n::Lang;
 use crate::search::view::SearchView;
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
@@ -53,7 +54,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         })
         .ok();
         let tray_tx = tx.clone();
-        let tray = Tray::new(move |action| {
+        let tray = Tray::new(Lang::current(ui.language), move |action| {
             let _ = tray_tx.send_blocking(AppEvent::Tray(action));
         })
         .inspect_err(|error| tracing::warn!(%error, "no tray icon; use the hotkey or `magi --toggle`"))
