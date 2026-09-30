@@ -17,6 +17,7 @@ pub struct SearchState {
     results: Vec<SearchResult>,
     selected: usize,
     error: Option<ErrorCode>,
+    loading: bool,
 }
 
 impl SearchState {
@@ -34,8 +35,25 @@ impl SearchState {
             self.results.clear();
             self.error = None;
             self.selected = 0;
+            self.loading = false;
             return None;
         }
+        self.loading = true;
+        Some(Query {
+            generation: self.generation,
+            text: self.query.clone(),
+        })
+    }
+
+    /// Runs the current query again (after an error), dropping any reply
+    /// still in flight.
+    pub fn retry(&mut self) -> Option<Query> {
+        if self.query.is_empty() {
+            return None;
+        }
+        self.generation += 1;
+        self.error = None;
+        self.loading = true;
         Some(Query {
             generation: self.generation,
             text: self.query.clone(),
@@ -47,6 +65,7 @@ impl SearchState {
         if generation != self.generation {
             return;
         }
+        self.loading = false;
         match reply {
             Ok(response) => {
                 self.results = response.results;
@@ -80,6 +99,16 @@ impl SearchState {
 
     pub fn error(&self) -> Option<&ErrorCode> {
         self.error.as_ref()
+    }
+
+    /// The trimmed query the results belong to.
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// A search for the current query is pending or running.
+    pub fn is_loading(&self) -> bool {
+        self.loading
     }
 }
 
@@ -177,5 +206,39 @@ mod tests {
         assert!(s.results().is_empty());
         assert_eq!(s.error(), Some(&err));
         assert_eq!(s.selected(), None);
+    }
+
+    #[test]
+    fn loading_lasts_from_a_new_query_until_its_reply() {
+        let mut s = SearchState::default();
+        assert!(!s.is_loading());
+        let old = s.set_query("ren").unwrap();
+        assert!(s.is_loading());
+        let new = s.set_query("rent").unwrap();
+        s.apply(old.generation, reply(&[1]));
+        assert!(s.is_loading(), "a stale reply does not end loading");
+        s.apply(new.generation, reply(&[2]));
+        assert!(!s.is_loading());
+        s.set_query("");
+        assert!(!s.is_loading(), "an empty query runs nothing");
+    }
+
+    #[test]
+    fn retry_reruns_the_query_and_drops_the_failed_reply_in_flight() {
+        let mut s = SearchState::default();
+        assert_eq!(s.retry(), None, "nothing to retry without a query");
+        let q = s.set_query("rent").unwrap();
+        s.apply(
+            q.generation,
+            Err(ErrorCode::Internal {
+                detail: "db".into(),
+            }),
+        );
+        let again = s.retry().unwrap();
+        assert_eq!(again.text, "rent");
+        assert!(again.generation > q.generation);
+        assert_eq!(s.error(), None);
+        assert!(s.is_loading());
+        assert_eq!(s.query(), "rent");
     }
 }
