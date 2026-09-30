@@ -451,7 +451,7 @@ impl SearchView {
             })
             .map(|st| lang.plural(&s.still_indexing, st.queued));
         let has_results = !self.state.results().is_empty();
-        if self.state.query().is_empty() || !(has_results || indexing.is_some()) {
+        if !(has_results || indexing.is_some()) {
             return None;
         }
         Some(

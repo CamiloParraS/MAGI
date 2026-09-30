@@ -7,7 +7,7 @@ pub const STRINGS: Strings = Strings {
         other: "Search {n} files by name, words, or what they're about.",
     },
     no_match: "No files match “{q}”.",
-    search_failed: "Couldn't search the index. Magi is restarting it.",
+    search_failed: "Couldn't search the index.",
     try_again: "Try again",
     still_indexing: Plural {
         one: "Still indexing, {n} file to go. Results may be incomplete.",

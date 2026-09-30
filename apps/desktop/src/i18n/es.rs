@@ -7,7 +7,7 @@ pub const STRINGS: Strings = Strings {
         other: "Busca en {n} archivos por nombre, palabras o de qué tratan.",
     },
     no_match: "Ningún archivo coincide con “{q}”.",
-    search_failed: "No se pudo buscar en el índice. Magi lo está reiniciando.",
+    search_failed: "No se pudo buscar en el índice.",
     try_again: "Reintentar",
     still_indexing: Plural {
         one: "Indexando, falta {n} archivo. Puede que falten resultados.",

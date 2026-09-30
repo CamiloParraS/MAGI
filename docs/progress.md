@@ -2263,3 +2263,30 @@ Second round, 2026-09-29:
 ### Open for other OSes / CI
 
 - Linux package list in `ci.yml` and SPEC §4.3 came from a summary of Zed's `script/linux` at `1a28cff` and has not run on CI. macOS and Linux runs are unverified.
+
+## M6 — Plan 4 (search window, 2026-09-29)
+
+No separate plan document; scope is Plan 3's header line. Decided with the user: multi-monitor opens on the display under the cursor (Windows, macOS; Linux uses the primary display), and the hint's "Turn on (size)" enables and downloads at once (the stated size is the consent) until Plan 5's onboarding exists.
+
+Done (commits `cb1ae5d`..HEAD):
+
+- en/es string table (`apps/desktop/src/i18n/`), ICU4X numbers, plurals and dates; `ui.language = system` resolves `es-*` to Spanish; the tray uses it. Tests: `i18n::tests` (4), `tray::tests`.
+- `SearchState` loading and retry; the ADR-0010 hint rule (`search::hint`, 3 tests); snippet line flattening that keeps highlight offsets (`highlight::tests::one_line_keeps_byte_offsets`); `theme::is_dark` and the variant A palette.
+- `magi_core::platform::display_under_cursor` (Windows `MonitorFromPoint`, macOS CoreGraphics FFI).
+- The search window in variant A: glyph or thumbnail, name, page, folder, snippet and source labels on the selected row, relative/ICU dates; intro, loading, no match, error + Try again, "still indexing" footer, feature hint; `Ctrl/Cmd+C` copies the path; click opens; the window fits its content, top-anchored.
+- `cargo test --workspace` green, clippy and fmt clean.
+
+Checked by screenshot on Windows 11 (isolated dev instance: own socket name, temp data/config dirs, `fixtures/corpus` root):
+
+- ✅ Dark + Spanish (OS locale `es-*`): intro with indexed count and keys; results with a PDF thumbnail, `página 39`, snippet highlight, `Palabras, Significado`, footer "Indexando, faltan N archivos…".
+- ✅ Light + English (`ui.theme = "light"`, `ui.language = "en"`), keyword-only: "No files match “zzqxv”." with the "Search by meaning is off … Turn on (135 MB)" hint; the window grew to fit.
+- Fixed after the screenshots: snippet newlines made rows tall; the Spanish footer overflowed; the hint text did not wrap.
+
+Not run / open:
+
+- macOS `display_under_cursor` FFI compiles only on CI; multi-monitor placement not tried by hand (one monitor).
+- "Turn on" not clicked (it downloads a real model); error state and `Ctrl+C` not exercised by hand.
+- The "Turn on" button uses gpui-component's primary color, not the variant A accent.
+- Live language/theme switch without restart: `Live` carries both, but nothing changes them until the settings window (Plan 5 owns the live switch). OS light/dark changes are followed live.
+- Relative dates use the plural table ("3 days ago"), absolute dates ICU4X `YMD::medium`; ICU4X relative-time is still experimental.
+- Code review (Standards + Spec, 2026-09-29) follow-ups not done: move "enable, then download if missing" from the view into `Host`; extract the view's state/footer choice into tested functions; an enum for `ui.theme`; a single placeholder-fill helper. The false "Magi is restarting it" error text and the missing indexing hint on an empty query were fixed.
