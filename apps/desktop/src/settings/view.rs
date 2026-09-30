@@ -9,7 +9,8 @@
 
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::searchable_list::SearchableListItem;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -56,6 +57,50 @@ const BACKGROUNDS: [TransparencyMode; 3] = [
     TransparencyMode::Never,
 ];
 
+/// A dropdown entry: the label shown and the setting it stands for.
+#[derive(Clone)]
+struct Choice<T> {
+    label: SharedString,
+    value: T,
+}
+
+impl<T: Clone + PartialEq + 'static> SearchableListItem for Choice<T> {
+    type Value = T;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &T {
+        &self.value
+    }
+}
+
+type Dropdown<T> = Entity<SelectState<Vec<Choice<T>>>>;
+
+fn language_choices(s: &Strings) -> Vec<Choice<Language>> {
+    LANGUAGES
+        .iter()
+        .map(|&value| Choice {
+            label: match value {
+                Language::System => system_language(s, Lang::current(value)).into(),
+                _ => Lang::current(value).name().into(),
+            },
+            value,
+        })
+        .collect()
+}
+
+fn background_choices(s: &Strings) -> Vec<Choice<TransparencyMode>> {
+    BACKGROUNDS
+        .iter()
+        .map(|&value| Choice {
+            label: background_label(value, s).into(),
+            value,
+        })
+        .collect()
+}
+
 pub struct SettingsView {
     host: Host,
     live: Entity<Live>,
@@ -63,6 +108,10 @@ pub struct SettingsView {
     section: Section,
     /// The saved `ui` settings; the Appearance controls show these.
     ui: UiConfig,
+    /// The language the dropdown labels are in.
+    lang: Lang,
+    language: Dropdown<Language>,
+    background: Dropdown<TransparencyMode>,
     support: BackdropSupport,
     see_through: Entity<SliderState>,
     /// The slider takes no keys; this wrapper moves it with Left/Right (NFR-10).
@@ -98,12 +147,38 @@ impl SettingsView {
                 .step(0.05)
                 .default_value(slider_from_intensity(ui.transparency_intensity))
         });
+        let lang = live.read(cx).lang;
+        let language =
+            cx.new(|cx| SelectState::new(language_choices(lang.strings()), None, window, cx));
+        let background =
+            cx.new(|cx| SelectState::new(background_choices(lang.strings()), None, window, cx));
         let subscriptions = vec![
-            // A language switch also retitles the window.
-            cx.observe_in(&live, window, |_, live, window, cx| {
-                window.set_window_title(live.read(cx).lang.strings().settings);
+            // Status events notify too; only a language switch relabels.
+            cx.observe_in(&live, window, |this, live, window, cx| {
+                let lang = live.read(cx).lang;
+                if lang != this.lang {
+                    this.relabel(lang, window, cx);
+                }
                 cx.notify();
             }),
+            cx.subscribe_in(
+                &language,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice<Language>>>, window, cx| {
+                    if let SelectEvent::Confirm(Some(language)) = event {
+                        this.save(json!({ "ui": { "language": language } }), window, cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &background,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice<TransparencyMode>>>, window, cx| {
+                    if let SelectEvent::Confirm(Some(mode)) = event {
+                        this.save(json!({ "ui": { "transparency_mode": mode } }), window, cx);
+                    }
+                },
+            ),
             // Saved on release: dragging would write the config at every step.
             cx.subscribe_in(
                 &see_through,
@@ -128,6 +203,9 @@ impl SettingsView {
             events,
             section: Section::Folders,
             ui,
+            lang,
+            language,
+            background,
             support: magi_core::platform::backdrop_support(),
             see_through,
             see_through_focus: cx.focus_handle().tab_stop(true),
@@ -137,7 +215,32 @@ impl SettingsView {
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
+        view.sync_controls(window, cx);
         view
+    }
+
+    /// Makes the Appearance controls show the saved settings.
+    fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (language, mode) = (self.ui.language, self.ui.transparency_mode);
+        let see_through = slider_from_intensity(self.ui.transparency_intensity);
+        self.language
+            .update(cx, |d, cx| d.set_selected_value(&language, window, cx));
+        self.background
+            .update(cx, |d, cx| d.set_selected_value(&mode, window, cx));
+        self.see_through
+            .update(cx, |slider, cx| slider.set_value(see_through, window, cx));
+    }
+
+    /// A live language switch: the window title and the dropdown labels.
+    fn relabel(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
+        let s = lang.strings();
+        self.lang = lang;
+        window.set_window_title(s.settings);
+        self.language
+            .update(cx, |d, cx| d.set_items(language_choices(s), window, cx));
+        self.background
+            .update(cx, |d, cx| d.set_items(background_choices(s), window, cx));
+        self.sync_controls(window, cx);
     }
 
     fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -190,11 +293,9 @@ impl SettingsView {
                         view.error = Some(ErrorCode::from(&error));
                     }
                 }
-                // The slider shows what is saved: the rounded value, or the
-                // old one when the save failed.
-                let saved = slider_from_intensity(view.ui.transparency_intensity);
-                view.see_through
-                    .update(cx, |slider, cx| slider.set_value(saved, window, cx));
+                // The controls show what is saved: the rounded amount, or the
+                // old values when the save failed.
+                view.sync_controls(window, cx);
                 cx.notify();
             });
         })
@@ -343,20 +444,7 @@ impl SettingsView {
 
     fn appearance(&self, p: &Palette, window: &Window, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
-        let languages = LANGUAGES.map(|language| match language {
-            Language::System => system_language(s, Lang::current(language)),
-            _ => Lang::current(language).name().into(),
-        });
-        let backgrounds = BACKGROUNDS.map(|mode| background_label(mode, s));
         let adjustable = see_through_adjustable(self.ui.transparency_mode, self.support);
-        let choice = |label: &'static str, group: RadioGroup| {
-            row(p)
-                .flex_col()
-                .items_start()
-                .gap_3()
-                .child(label)
-                .child(group)
-        };
         div()
             .flex()
             .flex_col()
@@ -364,29 +452,13 @@ impl SettingsView {
             .mb_3()
             .child(choice(
                 s.language,
-                RadioGroup::horizontal("language")
-                    .children(languages)
-                    .selected_index(LANGUAGES.iter().position(|&l| l == self.ui.language))
-                    .on_click(cx.listener(|this, &ix: &usize, window, cx| {
-                        this.save(json!({ "ui": { "language": LANGUAGES[ix] } }), window, cx);
-                    })),
+                Select::new(&self.language).accessibility_label(s.language),
+                p,
             ))
             .child(choice(
                 s.window_background,
-                RadioGroup::horizontal("background")
-                    .children(backgrounds)
-                    .selected_index(
-                        BACKGROUNDS
-                            .iter()
-                            .position(|&m| m == self.ui.transparency_mode),
-                    )
-                    .on_click(cx.listener(|this, &ix: &usize, window, cx| {
-                        this.save(
-                            json!({ "ui": { "transparency_mode": BACKGROUNDS[ix] } }),
-                            window,
-                            cx,
-                        );
-                    })),
+                Select::new(&self.background).accessibility_label(s.window_background),
+                p,
             ))
             .child(
                 row(p)
@@ -497,6 +569,13 @@ impl Render for SettingsView {
                     .child(body),
             )
     }
+}
+
+/// A labelled setting with a dropdown on the right.
+fn choice(label: &'static str, select: impl IntoElement, p: &Palette) -> Div {
+    row(p)
+        .child(div().flex_1().min_w_0().child(label))
+        .child(div().flex_none().w(px(260.)).child(select))
 }
 
 fn row(p: &Palette) -> Div {
