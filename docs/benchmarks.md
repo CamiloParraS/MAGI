@@ -303,6 +303,19 @@ plausible the 3.34 s outlier *is* one batch's worth of blocking, but that
 has not been shown, only asserted. **Status: p95 recorded and looks good;
 the max-latency / one-batch bound is unverified** (see docs/progress.md).
 
+## M6 — idle footprint (GPUI), 2026-09-29
+
+Manual, read by the user from Task Manager (column not recorded), Windows 11,
+`magi-desktop` build, real models:
+
+| State                                         | Memory   | Budget                 |
+| --------------------------------------------- | -------- | ---------------------- |
+| Idle: models unloaded, window closed (NFR-1)  | ~24 MB   | ≤ 150 MB, pass         |
+| After a search, models still loaded           | ~380 MB  | ≤ 900 MB (NFR-12), pass |
+
+Single readings, not the plan's `PrivateUsage` + working-set pair; CPU not
+recorded.
+
 ## Reproducing
 
 ```
