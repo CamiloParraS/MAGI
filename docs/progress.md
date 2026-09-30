@@ -2290,3 +2290,9 @@ Not run / open:
 - Live language/theme switch without restart: `Live` carries both, but nothing changes them until the settings window (Plan 5 owns the live switch). OS light/dark changes are followed live.
 - Relative dates use the plural table ("3 days ago"), absolute dates ICU4X `YMD::medium`; ICU4X relative-time is still experimental.
 - Code review (Standards + Spec, 2026-09-29) follow-ups not done: move "enable, then download if missing" from the view into `Host`; extract the view's state/footer choice into tested functions; an enum for `ui.theme`; a single placeholder-fill helper. The false "Magi is restarting it" error text and the missing indexing hint on an empty query were fixed.
+
+Follow-up from the user, 2026-09-29:
+
+- Input text reduced to gpui-component's large input size (16 px). The 20 px text clipped descenders (`p`, `q`) because the input's line box is fixed at 1.25 rem.
+- The selected row's accent bar is now a quarter of the row's height, centered, instead of a full-height left border.
+- Focus: the window sometimes opened without keyboard focus. Opening a GPUI window on Windows only calls `SetWindowPlacement`, and the foreground lock can leave another app in front (e.g. after `magi --toggle` from a second process). The shell now calls `activate_window()` after opening; GPUI's activate simulates an Alt tap before `SetForegroundWindow`. ✅ Checked by screenshot: after two `magi --toggle` from a second process, typed text lands in the input. Hotkey and tray paths not re-checked by hand.

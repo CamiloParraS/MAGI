@@ -211,6 +211,10 @@ impl Shell {
                         }
                     });
                 }
+                // Opening only shows the window; Windows' foreground lock can
+                // leave another app with the keyboard (e.g. after `--toggle`
+                // from a second process). GPUI's activate works around it.
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
                 self.window = Some(handle)
             }
             Err(error) => tracing::error!(%error, "could not open the search window"),

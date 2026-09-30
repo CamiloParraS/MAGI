@@ -518,9 +518,11 @@ impl Render for SearchView {
                             .items_center()
                             .gap_3()
                             .px(px(18.))
-                            .py(px(10.))
-                            .child(Icon::new(IconName::Search).size(px(20.)).text_color(p.mute))
-                            .child(Input::new(&self.input).appearance(false).text_size(px(20.))),
+                            .py(px(7.))
+                            .child(Icon::new(IconName::Search).size(px(18.)).text_color(p.mute))
+                            // The large size's own text size: its line box is
+                            // fixed at 20 px, so bigger text clips descenders.
+                            .child(Input::new(&self.input).appearance(false).large()),
                     )
                     // ponytail: a static bar; animate it if searches ever
                     // take long enough for it to look frozen.
@@ -587,19 +589,27 @@ fn row(
         .join(", ");
     div()
         .id(ix)
+        .relative()
         .flex()
         .items_center()
         .gap_3()
-        .px(px(10.))
+        .pl(px(13.))
+        .pr(px(10.))
         .py(px(7.))
         .rounded(px(4.))
-        .border_l(px(3.))
-        .border_color(if selected {
-            p.accent
-        } else {
-            transparent_black()
+        .when(selected, |d| {
+            // The accent bar: a quarter of the row's height, centered.
+            d.bg(p.selection).child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(relative(0.375))
+                    .h(relative(0.25))
+                    .w(px(3.))
+                    .rounded_full()
+                    .bg(p.accent),
+            )
         })
-        .when(selected, |d| d.bg(p.selection))
         .child(icon(r))
         .child(
             div()
