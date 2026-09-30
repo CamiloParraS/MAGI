@@ -2323,6 +2323,16 @@ Third slice, What to index (2026-09-30):
 - Tests: `settings::tests` (kind toggling keeps order and drops kinds the window doesn't show, whole-MB parsing, one pattern per line, the two error texts).
 - Checked on screen (isolated instance, 2026-09-30): What to index renders in English and Spanish; an invalid size shows the error and is not saved; picking Español in the Language dropdown switched the title, sidebar, headings and dropdown labels live and wrote `language = "es"`. Fixed from the screenshots: the pattern box showed one line (`rows` does not size it; a height does), Save stretched full width, and the sidebar's accent bar overlapped the label (an absolute child is placed against its direct parent, the button's content row). The tray relabel was not looked at. The variant A mockup the user mentioned (`mockup/`) was empty when checked.
 
+Fourth round, from the user's mockup (`mockup/index.html`, local only), 2026-09-30:
+
+- A failed change shows inside the box it came from (`Field`), with a warning border, as the mockup's hotkey-conflict card does; a failed add, which has no row yet, gets its own box under the list.
+- Boxes as in the mockup: 1 px border, 8 px corners, 12/16 px padding, 6 px apart; the sidebar has its own tint and a chip for the selected item.
+- The settings window uses the search window's background, resolved the same way from `ui.transparency_mode` and the OS preference, and follows a change live (user decision; SPEC M6 amended). Over a blurred backdrop the window and sidebar colors take the tint's alpha; the boxes stay opaque.
+- Fields (size, patterns, dropdowns) take the window color (`solid`) so they stand out from the box, as the mockup's fields do (user request).
+- Test: `tests/settings.rs` also checks that a pattern the core rejects marks the patterns box and is not saved.
+- Checked by screenshot (light, English, blurred backdrop): all three sections; a bad size shows its message inside its box with a warning border.
+- The mockup groups sections differently (Folders with exclusions, file types and limits; General with shortcut, startup, language and results shown; Appearance with theme and background; icons in the sidebar, subheadings, status badges). Not adopted yet; asked the user.
+
 Open:
 
 - Other sections (search features, shortcut and startup, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.

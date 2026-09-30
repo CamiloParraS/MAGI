@@ -184,8 +184,13 @@ impl Shell {
             .is_some_and(|w| w.update(cx, |_, window, _| window.remove_window()).is_ok())
     }
 
-    /// A normal, solid window (ADR-0011: only the search window is blurred).
+    /// A normal window with the search window's background (SPEC M6).
     fn open_settings(&mut self, cx: &mut App) {
+        let backdrop = theme::backdrop(
+            self.ui.transparency_mode,
+            self.ui.transparency_intensity,
+            magi_core::platform::backdrop_support(),
+        );
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
                 title: Some(self.live.read(cx).lang.strings().settings.into()),
@@ -198,6 +203,7 @@ impl Shell {
             ))),
             focus: true,
             show: true,
+            window_background: theme::window_background(backdrop),
             ..Default::default()
         };
         let (host, live, events) = (self.host.clone(), self.live.clone(), self.events.clone());
@@ -205,6 +211,8 @@ impl Shell {
             cx.new(|cx| SettingsView::new(host, live, events, window, cx))
         }) {
             Ok((handle, _)) => {
+                // Always: the background can turn see-through while it is open.
+                clear_root_background(handle, cx);
                 let _ = handle.update(cx, |_, window, _| window.activate_window());
                 self.settings = Some(handle);
             }
@@ -242,17 +250,8 @@ impl Shell {
             cx.new(|cx| SearchView::new(host, live, backdrop, opened_at, window, cx))
         }) {
             Ok((handle, _)) => {
-                // gpui-component paints the theme background (opaque) on the
-                // root, hiding the backdrop; Root's own style is applied last.
                 if matches!(backdrop, theme::Backdrop::Blurred { .. }) {
-                    let _ = handle.update(cx, |root, _, cx| {
-                        if let Ok(root) = root.downcast::<base::Root>() {
-                            root.update(cx, |root, cx| {
-                                root.style().background = Some(transparent_black().into());
-                                cx.notify();
-                            });
-                        }
-                    });
+                    clear_root_background(handle, cx);
                 }
                 // Opening only shows the window; Windows' foreground lock can
                 // leave another app with the keyboard (e.g. after `--toggle`
@@ -272,4 +271,18 @@ fn activate(window: Option<AnyWindowHandle>, cx: &mut App) -> bool {
         w.update(cx, |_, window, _| window.activate_window())
             .is_ok()
     })
+}
+
+/// gpui-component paints the theme background (opaque) on the root, hiding
+/// a blurred backdrop; Root's own style is applied last. The view paints its
+/// own background instead.
+fn clear_root_background(handle: AnyWindowHandle, cx: &mut App) {
+    let _ = handle.update(cx, |root, _, cx| {
+        if let Ok(root) = root.downcast::<base::Root>() {
+            root.update(cx, |root, cx| {
+                root.style().background = Some(transparent_black().into());
+                cx.notify();
+            });
+        }
+    });
 }

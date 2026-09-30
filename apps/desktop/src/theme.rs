@@ -78,10 +78,14 @@ pub struct Palette {
     pub accent: Hsla,
     pub selection: Hsla,
     pub mark: Hsla,
-    /// Opaque windows (settings).
+    /// The settings window.
     pub solid: Hsla,
-    /// A settings row.
+    /// A settings box.
     pub card: Hsla,
+    /// The settings sidebar.
+    pub side: Hsla,
+    /// The selected sidebar item.
+    pub chip: Hsla,
     pub warn: Hsla,
 }
 
@@ -98,6 +102,8 @@ impl Palette {
                 mark: rgba(0xffd6004d).into(),
                 solid: rgb(0x202020).into(),
                 card: rgb(0x2b2b2b).into(),
+                side: rgb(0x191919).into(),
+                chip: rgba(0xffffff14).into(),
                 warn: rgb(0xfcb452).into(),
             }
         } else {
@@ -111,6 +117,8 @@ impl Palette {
                 mark: rgba(0xffd60073).into(),
                 solid: rgb(0xf3f3f3).into(),
                 card: rgb(0xfbfbfb).into(),
+                side: rgb(0xececec).into(),
+                chip: rgba(0x0000000f).into(),
                 warn: rgb(0x9d5d00).into(),
             }
         }

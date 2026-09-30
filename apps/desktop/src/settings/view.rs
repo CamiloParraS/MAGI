@@ -36,7 +36,7 @@ use super::{
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::search::view::Live;
-use crate::theme::{self, Palette};
+use crate::theme::{self, Backdrop, Palette};
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 
@@ -110,6 +110,19 @@ fn background_choices(s: &Strings) -> Vec<Choice<TransparencyMode>> {
         .collect()
 }
 
+/// Where a failed change is shown: inside the box it came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    AddFolder,
+    Root(i64),
+    FileTypes,
+    MaxSize,
+    Excludes,
+    Language,
+    Background,
+    SeeThrough,
+}
+
 pub struct SettingsView {
     host: Host,
     live: Entity<Live>,
@@ -132,8 +145,9 @@ pub struct SettingsView {
     dark: bool,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
-    /// The last change that failed, until the next one or a section switch.
-    error: Option<ErrorCode>,
+    /// The last change that failed and where, until the next change or a
+    /// section switch.
+    error: Option<(Field, ErrorCode)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -189,7 +203,12 @@ impl SettingsView {
                 window,
                 |this, _, event: &SelectEvent<Vec<Choice<Language>>>, window, cx| {
                     if let SelectEvent::Confirm(Some(language)) = event {
-                        this.save(json!({ "ui": { "language": language } }), window, cx);
+                        this.save(
+                            Field::Language,
+                            json!({ "ui": { "language": language } }),
+                            window,
+                            cx,
+                        );
                     }
                 },
             ),
@@ -198,7 +217,12 @@ impl SettingsView {
                 window,
                 |this, _, event: &SelectEvent<Vec<Choice<TransparencyMode>>>, window, cx| {
                     if let SelectEvent::Confirm(Some(mode)) = event {
-                        this.save(json!({ "ui": { "transparency_mode": mode } }), window, cx);
+                        this.save(
+                            Field::Background,
+                            json!({ "ui": { "transparency_mode": mode } }),
+                            window,
+                            cx,
+                        );
                     }
                 },
             ),
@@ -255,8 +279,20 @@ impl SettingsView {
         view
     }
 
-    /// Makes the Appearance controls show the saved settings.
+    /// The window's background, from the saved settings (like the search
+    /// window's).
+    fn backdrop(&self) -> Backdrop {
+        theme::backdrop(
+            self.ui.transparency_mode,
+            self.ui.transparency_intensity,
+            self.support,
+        )
+    }
+
+    /// Makes the Appearance controls and the window background show the
+    /// saved settings.
     fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_background_appearance(theme::window_background(self.backdrop()));
         let (language, mode) = (self.ui.language, self.ui.transparency_mode);
         let see_through = slider_from_intensity(self.ui.transparency_intensity);
         self.language
@@ -288,6 +324,7 @@ impl SettingsView {
     /// Runs a root change on the background executor and keeps its error.
     fn change_root(
         &mut self,
+        field: Field,
         change: impl FnOnce(EngineHandle) -> magi_core::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
@@ -300,7 +337,7 @@ impl SettingsView {
             let _ = this.update(cx, |view, cx| {
                 view.error = done.err().map(|error| {
                     tracing::warn!(%error, "a folder change failed");
-                    ErrorCode::from(&error)
+                    (field, ErrorCode::from(&error))
                 });
                 cx.notify();
             });
@@ -308,9 +345,15 @@ impl SettingsView {
         .detach();
     }
 
-    /// Saves a settings patch; on success the shell applies the new `ui`.
-    /// Public for the headless tests.
-    pub fn save(&mut self, patch: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
+    /// Saves a settings patch; on success the shell applies the new `ui`, on
+    /// failure `field`'s box shows why. Public for the headless tests.
+    pub fn save(
+        &mut self,
+        field: Field,
+        patch: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let host = self.host.clone();
         cx.spawn_in(window, async move |this, cx| {
             let saved = cx
@@ -327,7 +370,7 @@ impl SettingsView {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "a settings change failed");
-                        view.error = Some(ErrorCode::from(&error));
+                        view.error = Some((field, ErrorCode::from(&error)));
                     }
                 }
                 // The controls show what is saved: the rounded amount, or the
@@ -343,14 +386,18 @@ impl SettingsView {
         match max_size_from_text(text) {
             Some(mb) if mb == self.indexing.max_file_size_mb => {}
             Some(mb) => self.save(
+                Field::MaxSize,
                 json!({ "indexing": { "max_file_size_mb": mb } }),
                 window,
                 cx,
             ),
             None => {
-                self.error = Some(ErrorCode::InvalidSetting {
-                    field: MAX_SIZE_FIELD.into(),
-                });
+                self.error = Some((
+                    Field::MaxSize,
+                    ErrorCode::InvalidSetting {
+                        field: MAX_SIZE_FIELD.into(),
+                    },
+                ));
                 cx.notify();
             }
         }
@@ -360,6 +407,7 @@ impl SettingsView {
         let globs = globs_from_text(&self.excludes.read(cx).value());
         if globs != self.indexing.exclude_globs {
             self.save(
+                Field::Excludes,
                 json!({ "indexing": { "exclude_globs": globs } }),
                 window,
                 cx,
@@ -370,6 +418,7 @@ impl SettingsView {
     fn save_intensity(&mut self, see_through: f32, window: &mut Window, cx: &mut Context<Self>) {
         let intensity = intensity_from_slider(see_through);
         self.save(
+            Field::SeeThrough,
             json!({ "ui": { "transparency_intensity": intensity } }),
             window,
             cx,
@@ -408,7 +457,11 @@ impl SettingsView {
             Ok(Ok(Some(mut paths))) => {
                 if let Some(path) = paths.pop() {
                     let _ = this.update(cx, |view, cx| {
-                        view.change_root(move |engine| engine.add_root(&path).map(drop), cx);
+                        view.change_root(
+                            Field::AddFolder,
+                            move |engine| engine.add_root(&path).map(drop),
+                            cx,
+                        );
                     });
                 }
             }
@@ -418,16 +471,54 @@ impl SettingsView {
         .detach();
     }
 
-    fn error_line(&self, s: &Strings, p: &Palette) -> Option<Div> {
+    /// The box showing a failed change, if any.
+    pub fn failed(&self) -> Option<Field> {
+        self.error.as_ref().map(|(field, _)| *field)
+    }
+
+    fn has_problem(&self, field: Field) -> bool {
+        self.error.as_ref().is_some_and(|(f, _)| *f == field)
+    }
+
+    /// The failed change's message, for the last line of `field`'s box.
+    fn problem(&self, field: Field, s: &Strings, p: &Palette) -> Option<Div> {
         self.error
             .as_ref()
-            .map(|error| div().mb_3().text_color(p.warn).child(error_text(error, s)))
+            .filter(|(f, _)| *f == field)
+            .map(|(_, error)| {
+                div()
+                    .mt(px(2.))
+                    .text_xs()
+                    .text_color(p.warn)
+                    .child(error_text(error, s))
+            })
+    }
+
+    /// A settings box; a failed change in it gives it a warning border.
+    fn card(&self, field: Field, p: &Palette) -> Div {
+        card(p).when(self.has_problem(field), |d| d.border_color(p.warn))
+    }
+
+    /// A setting's name and note, and its problem if it has one.
+    fn labelled(
+        &self,
+        label: &'static str,
+        note: Option<&'static str>,
+        field: Field,
+        s: &Strings,
+        p: &Palette,
+    ) -> Div {
+        div()
+            .flex_1()
+            .min_w_0()
+            .child(label)
+            .children(note.map(|note| div().mt(px(2.)).text_xs().text_color(p.mute).child(note)))
+            .children(self.problem(field, s, p))
     }
 
     fn folders(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let s = live.lang.strings();
-        let row = || row(p);
         let roots = live
             .status
             .as_ref()
@@ -435,22 +526,23 @@ impl SettingsView {
             .or(self.opening_roots.as_ref());
         // Nothing when the roots are unknown: an empty list would read "no folders".
         let list = roots.map(|roots| {
-            let group = div().flex().flex_col().gap(px(2.)).mb_3();
             if roots.is_empty() {
-                return group.child(row().text_color(p.mute).child(s.no_folders));
+                return stack().child(card(p).text_color(p.mute).child(s.no_folders));
             }
-            group.children(
-                roots
-                    .iter()
-                    .map(|root| self.root_row(root, row(), s, p, cx)),
-            )
+            stack().children(roots.iter().map(|root| self.root_row(root, s, p, cx)))
+        });
+        // An add that failed has no row yet: its own box says why.
+        let add_problem = self.problem(Field::AddFolder, s, p).map(|problem| {
+            self.card(Field::AddFolder, p)
+                .child(div().flex_1().min_w_0().child(problem))
         });
         div()
             .flex()
             .flex_col()
             .items_start()
+            .gap(STACK_GAP)
             .child(div().w_full().children(list))
-            .children(self.error_line(s, p))
+            .children(add_problem.map(|d| div().w_full().child(d)))
             .child(
                 Button::new("add-folder")
                     .label(s.add_folder)
@@ -458,64 +550,56 @@ impl SettingsView {
             )
     }
 
-    fn root_row(
-        &self,
-        root: &RootStatus,
-        row: Div,
-        s: &Strings,
-        p: &Palette,
-        cx: &Context<Self>,
-    ) -> Div {
+    fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let (line, problem) = root_line(root, s);
         let id = root.id;
-        row.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis_middle()
-                        .child(root.path.clone()),
-                )
-                .child(
-                    div()
-                        .mt(px(2.))
-                        .text_xs()
-                        .text_color(if problem { p.warn } else { p.mute })
-                        .child(line),
-                ),
-        )
-        .child(
-            Switch::new(("root-enabled", id as u64))
-                .checked(root.enabled)
-                .color(p.accent)
-                .accessibility_label(root.path.clone())
-                .on_click(cx.listener(move |this, on: &bool, _, cx| {
-                    let on = *on;
-                    this.change_root(move |engine| engine.set_root_enabled(id, on), cx);
-                })),
-        )
-        .child(
-            Button::new(("remove-root", id as u64))
-                .label(s.remove)
-                .accessibility_label(format!("{} {}", s.remove, root.path))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.change_root(move |engine| engine.remove_root(id), cx);
-                })),
-        )
+        self.card(Field::Root(id), p)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(root.path.clone()),
+                    )
+                    .child(
+                        div()
+                            .mt(px(2.))
+                            .text_xs()
+                            .text_color(if problem { p.warn } else { p.mute })
+                            .child(line),
+                    )
+                    .children(self.problem(Field::Root(id), s, p)),
+            )
+            .child(
+                Switch::new(("root-enabled", id as u64))
+                    .checked(root.enabled)
+                    .color(p.accent)
+                    .accessibility_label(root.path.clone())
+                    .on_click(cx.listener(move |this, on: &bool, _, cx| {
+                        let on = *on;
+                        this.change_root(
+                            Field::Root(id),
+                            move |engine| engine.set_root_enabled(id, on),
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new(("remove-root", id as u64))
+                    .label(s.remove)
+                    .accessibility_label(format!("{} {}", s.remove, root.path))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_root(Field::Root(id), move |engine| engine.remove_root(id), cx);
+                    })),
+            )
     }
 
     fn what_to_index(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
-        let labelled = |label: &'static str, note: &'static str| {
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(label)
-                .child(div().mt(px(2.)).text_xs().text_color(p.mute).child(note))
-        };
         let kinds = FILE_TYPES.into_iter().map(|kind| {
             let on = self.indexing.file_types.contains(&kind);
             Checkbox::new(("kind", kind as usize))
@@ -523,77 +607,94 @@ impl SettingsView {
                 .checked(on)
                 .on_click(cx.listener(move |this, &on: &bool, window, cx| {
                     let types = toggle_kind(&this.indexing.file_types, kind, on);
-                    this.save(json!({ "indexing": { "file_types": types } }), window, cx);
+                    this.save(
+                        Field::FileTypes,
+                        json!({ "indexing": { "file_types": types } }),
+                        window,
+                        cx,
+                    );
                 }))
         });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .mb_3()
+        stack()
             .child(
-                row(p)
+                self.card(Field::FileTypes, p)
                     .flex_col()
                     .items_start()
                     .gap_3()
-                    .child(labelled(s.file_types, s.file_types_note))
+                    .child(self.labelled(
+                        s.file_types,
+                        Some(s.file_types_note),
+                        Field::FileTypes,
+                        s,
+                        p,
+                    ))
                     .child(div().flex().flex_wrap().gap_4().children(kinds)),
             )
             .child(
-                row(p).child(labelled(s.max_size, s.max_size_note)).child(
-                    div().flex_none().w(px(140.)).child(
-                        Input::new(&self.max_size).suffix(div().text_color(p.mute).child("MB")),
+                self.card(Field::MaxSize, p)
+                    .child(self.labelled(s.max_size, Some(s.max_size_note), Field::MaxSize, s, p))
+                    .child(
+                        div().flex_none().w(px(140.)).child(
+                            Input::new(&self.max_size)
+                                .bg(p.solid)
+                                .suffix(div().text_color(p.mute).child("MB")),
+                        ),
                     ),
-                ),
             )
             .child(
-                row(p)
+                self.card(Field::Excludes, p)
                     .flex_col()
                     .items_stretch()
                     .gap_3()
-                    .child(labelled(s.excludes, s.excludes_note))
+                    .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p))
                     // `rows` does not size the box; a height does.
-                    .child(Textarea::new(&self.excludes).h(px(150.)))
+                    .child(Textarea::new(&self.excludes).h(px(150.)).bg(p.solid))
                     .child(div().flex().justify_end().child(
                         Button::new("save-excludes").label(s.save).on_click(
                             cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
                         ),
                     )),
             )
-            .children(self.error_line(s, p))
     }
 
     fn appearance(&self, p: &Palette, window: &Window, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         let adjustable = see_through_adjustable(self.ui.transparency_mode, self.support);
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .mb_3()
+        let choice = |label: &'static str, field: Field, select: Select<_>| {
+            self.card(field, p)
+                .child(self.labelled(label, None, field, s, p))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(260.))
+                        .child(select.accessibility_label(label)),
+                )
+        };
+        stack()
             .child(choice(
                 s.language,
-                Select::new(&self.language).accessibility_label(s.language),
-                p,
-            ))
-            .child(choice(
-                s.window_background,
-                Select::new(&self.background).accessibility_label(s.window_background),
-                p,
+                Field::Language,
+                Select::new(&self.language).bg(p.solid),
             ))
             .child(
-                row(p)
-                    .child(div().flex_1().min_w_0().child(s.see_through_amount).when(
-                        !adjustable,
-                        |d| {
-                            d.child(
-                                div()
-                                    .mt(px(2.))
-                                    .text_xs()
-                                    .text_color(p.mute)
-                                    .child(s.see_through_off),
-                            )
-                        },
+                self.card(Field::Background, p)
+                    .child(self.labelled(s.window_background, None, Field::Background, s, p))
+                    .child(
+                        div().flex_none().w(px(260.)).child(
+                            Select::new(&self.background)
+                                .bg(p.solid)
+                                .accessibility_label(s.window_background),
+                        ),
+                    ),
+            )
+            .child(
+                self.card(Field::SeeThrough, p)
+                    .child(self.labelled(
+                        s.see_through_amount,
+                        (!adjustable).then_some(s.see_through_off),
+                        Field::SeeThrough,
+                        s,
+                        p,
                     ))
                     .child(
                         div()
@@ -624,7 +725,6 @@ impl SettingsView {
                             .child(s.more_transparent),
                     ),
             )
-            .children(self.error_line(s, p))
     }
 }
 
@@ -632,14 +732,20 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
+        // Over a blurred backdrop the window's own colors take the tint's
+        // alpha, as the search window's panel does; the boxes stay opaque.
+        let tint = |color: Hsla| match self.backdrop() {
+            Backdrop::Blurred { tint_alpha } => color.opacity(tint_alpha),
+            Backdrop::Solid => color,
+        };
         let nav = div()
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(220.))
+            .w(px(210.))
             .gap(px(2.))
-            .px_2()
-            .py_4()
+            .p_2()
+            .bg(tint(p.side))
             .child(
                 div()
                     .px_3()
@@ -656,7 +762,8 @@ impl Render for SettingsView {
                     .selected(selected)
                     .w_full()
                     .px_0()
-                    .when(selected, |b| b.bg(p.card).child(p.accent_bar()))
+                    .rounded(px(6.))
+                    .when(selected, |b| b.bg(p.chip).child(p.accent_bar()))
                     // The content row centers a label; a filling child sits
                     // left. The padding is the label's, so the content row
                     // starts at the button's edge: an absolute child (the
@@ -677,7 +784,7 @@ impl Render for SettingsView {
         div()
             .size_full()
             .flex()
-            .bg(p.solid)
+            .bg(tint(p.solid))
             .text_color(p.ink)
             .text_size(px(14.))
             .child(nav)
@@ -687,29 +794,34 @@ impl Render for SettingsView {
                     .flex_1()
                     .min_w_0()
                     .overflow_y_scroll()
-                    .px(px(28.))
-                    .py(px(24.))
+                    .px(px(32.))
+                    .pt(px(22.))
+                    .pb(px(28.))
                     .child(heading(self.section.title(s)))
                     .child(body),
             )
     }
 }
 
-/// A labelled setting with a dropdown on the right.
-fn choice(label: &'static str, select: impl IntoElement, p: &Palette) -> Div {
-    row(p)
-        .child(div().flex_1().min_w_0().child(label))
-        .child(div().flex_none().w(px(260.)).child(select))
+/// The space between boxes (the variant A mockup's 6 px).
+const STACK_GAP: Pixels = px(6.);
+
+fn stack() -> Div {
+    div().flex().flex_col().gap(STACK_GAP)
 }
 
-fn row(p: &Palette) -> Div {
+/// A settings box, as in the variant A mockup. Fields inside it take
+/// `p.solid` so they stand out from the box.
+fn card(p: &Palette) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_4()
+        .gap(px(14.))
         .px_4()
-        .py(px(14.))
-        .rounded(px(4.))
+        .py_3()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(p.line)
         .bg(p.card)
 }
 
