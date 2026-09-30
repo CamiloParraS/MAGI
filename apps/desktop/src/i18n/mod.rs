@@ -100,7 +100,20 @@ pub struct Strings {
     /// `{path}` is the folder, `{other}` the root that already covers it.
     pub root_nested: &'static str,
     pub engine_starting: &'static str,
-    pub folders_failed: &'static str,
+    pub change_failed: &'static str,
+    pub appearance: &'static str,
+    pub language: &'static str,
+    /// `{lang}` is the language `system` resolves to, in that language.
+    pub language_system: &'static str,
+    pub window_background: &'static str,
+    pub background_match_system: &'static str,
+    pub background_always: &'static str,
+    pub background_never: &'static str,
+    pub see_through_amount: &'static str,
+    /// Shown when the amount does nothing (solid window).
+    pub see_through_off: &'static str,
+    pub more_solid: &'static str,
+    pub more_transparent: &'static str,
 }
 
 impl Strings {
@@ -143,6 +156,14 @@ impl Lang {
     /// Reads the OS UI language for `system`.
     pub fn current(setting: Language) -> Self {
         Self::resolve(setting, sys_locale::get_locale().as_deref())
+    }
+
+    /// The language's name in itself, the same in every table.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::En => "English",
+            Self::Es => "Español",
+        }
     }
 
     pub fn strings(self) -> &'static Strings {

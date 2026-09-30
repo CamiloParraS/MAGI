@@ -3,10 +3,13 @@
 
 pub mod view;
 
+use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
 use magi_core::dto::{ErrorCode, RootStatus};
+use magi_core::platform::BackdropSupport;
 
-use crate::i18n::Strings;
+use crate::i18n::{Lang, Strings};
+use crate::theme::{self, Backdrop};
 
 /// A root's second line, and whether it is a problem to fix (FR-11).
 pub fn root_line(root: &RootStatus, s: &Strings) -> (&'static str, bool) {
@@ -21,7 +24,7 @@ pub fn root_line(root: &RootStatus, s: &Strings) -> (&'static str, bool) {
     }
 }
 
-/// Why adding, removing or switching a folder failed, for the user.
+/// Why a settings change failed, for the user.
 pub fn error_text(error: &ErrorCode, s: &Strings) -> String {
     match error {
         ErrorCode::RootNotFound { path } => s.root_not_found.replace("{path}", path),
@@ -34,8 +37,50 @@ pub fn error_text(error: &ErrorCode, s: &Strings) -> String {
             .replace("{path}", path)
             .replace("{other}", conflicts_with),
         ErrorCode::EngineStarting => s.engine_starting.into(),
-        _ => s.folders_failed.into(),
+        _ => s.change_failed.into(),
     }
+}
+
+/// "Same as system (English)": the `system` choice names what it resolves to.
+pub fn system_language(s: &Strings, resolved: Lang) -> String {
+    s.language_system.replace("{lang}", resolved.name())
+}
+
+/// A background choice as the user sees it.
+pub fn background_label(mode: TransparencyMode, s: &Strings) -> &'static str {
+    match mode {
+        TransparencyMode::MatchSystem => s.background_match_system,
+        TransparencyMode::Always => s.background_always,
+        TransparencyMode::Never => s.background_never,
+    }
+}
+
+/// The amount slider only matters when the search window would be see-through.
+pub fn see_through_adjustable(mode: TransparencyMode, support: BackdropSupport) -> bool {
+    matches!(
+        theme::backdrop(mode, *TRANSPARENCY_INTENSITY.end(), support),
+        Backdrop::Blurred { .. }
+    )
+}
+
+/// The slider runs from "More solid" to "More transparent"; the config keeps
+/// the tint's alpha (`ui.transparency_intensity`), always inside its allowed
+/// range and to two decimals, so float error never fails validation.
+pub fn intensity_from_slider(see_through: f32) -> f32 {
+    let (lo, hi) = (
+        *TRANSPARENCY_INTENSITY.start(),
+        *TRANSPARENCY_INTENSITY.end(),
+    );
+    let alpha = hi - see_through.clamp(0., 1.) * (hi - lo);
+    ((alpha * 100.).round() / 100.).clamp(lo, hi)
+}
+
+pub fn slider_from_intensity(intensity: f32) -> f32 {
+    let (lo, hi) = (
+        *TRANSPARENCY_INTENSITY.start(),
+        *TRANSPARENCY_INTENSITY.end(),
+    );
+    ((hi - intensity) / (hi - lo)).clamp(0., 1.)
 }
 
 #[cfg(test)]
@@ -115,8 +160,59 @@ mod tests {
                 },
                 s
             ),
-            "Couldn't change the folders.",
+            "Couldn't save the change.",
             "internal details are for the log only"
         );
+    }
+
+    #[test]
+    fn the_system_language_names_what_it_resolves_to() {
+        assert_eq!(
+            system_language(Lang::En.strings(), Lang::En),
+            "Same as system (English)"
+        );
+        assert_eq!(
+            system_language(Lang::Es.strings(), Lang::Es),
+            "Igual que el sistema (Español)"
+        );
+    }
+
+    #[test]
+    fn the_amount_is_adjustable_only_when_see_through() {
+        use TransparencyMode::*;
+        let blur = BackdropSupport {
+            mica: true,
+            reduce_transparency: false,
+        };
+        assert!(see_through_adjustable(Always, blur));
+        assert!(see_through_adjustable(MatchSystem, blur));
+        assert!(!see_through_adjustable(Never, blur));
+        let reduced = BackdropSupport {
+            reduce_transparency: true,
+            ..blur
+        };
+        assert!(!see_through_adjustable(MatchSystem, reduced));
+        assert!(!see_through_adjustable(Always, BackdropSupport::default()));
+    }
+
+    #[test]
+    fn the_slider_maps_to_an_intensity_the_config_accepts() {
+        // Ends of the slider are the ends of the allowed range, reversed.
+        assert_eq!(intensity_from_slider(0.0), 0.95);
+        assert_eq!(intensity_from_slider(1.0), 0.40);
+        assert_eq!(intensity_from_slider(0.2), 0.84);
+        // Out of range or float noise still lands inside the range.
+        assert_eq!(intensity_from_slider(1.3), 0.40);
+        assert_eq!(intensity_from_slider(-0.2), 0.95);
+        for step in 0..=20 {
+            let i = intensity_from_slider(step as f32 * 0.05);
+            assert!(TRANSPARENCY_INTENSITY.contains(&i), "{i}");
+            assert!(
+                (intensity_from_slider(slider_from_intensity(i)) - i).abs() < 1e-6,
+                "round trip {i}"
+            );
+        }
+        assert_eq!(slider_from_intensity(0.95), 0.0);
+        assert!((slider_from_intensity(0.40) - 1.0).abs() < 1e-6);
     }
 }

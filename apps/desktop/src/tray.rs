@@ -28,25 +28,26 @@ pub fn status_line(status: &IndexStatus, lang: Lang) -> String {
 pub struct Tray {
     _icon: TrayIcon,
     status: MenuItem,
+    open: MenuItem,
     pause: MenuItem,
+    settings: MenuItem,
+    quit: MenuItem,
     lang: Lang,
 }
 
 impl Tray {
     /// Must run on the main thread with GPUI's event loop running (tray-icon
     /// README). `on_action` runs on tray-icon's event thread.
-    /// ponytail: `lang` is fixed at startup; the settings window (Plan 5)
-    /// switches it live by rebuilding the tray or setting each item's text.
     pub fn new(
         lang: Lang,
         on_action: impl Fn(TrayAction) + Send + Sync + 'static,
     ) -> Result<Self, String> {
-        let s = lang.strings();
-        let status = MenuItem::new(s.tray_starting, false, None);
-        let open = MenuItem::new(s.tray_open, true, None);
-        let pause = MenuItem::new(s.tray_pause, true, None);
-        let settings = MenuItem::new(s.settings, true, None);
-        let quit = MenuItem::new(s.tray_quit, true, None);
+        // Labeled by `set_lang` below.
+        let status = MenuItem::new("", false, None);
+        let open = MenuItem::new("", true, None);
+        let pause = MenuItem::new("", true, None);
+        let settings = MenuItem::new("", true, None);
+        let quit = MenuItem::new("", true, None);
         let menu = Menu::with_items(&[
             &status,
             &PredefinedMenuItem::separator(),
@@ -74,12 +75,33 @@ impl Tray {
             .with_tooltip("magi")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self {
+        let mut tray = Self {
             _icon: icon,
             status,
+            open,
             pause,
+            settings,
+            quit,
             lang,
-        })
+        };
+        tray.set_lang(lang, None);
+        Ok(tray)
+    }
+
+    /// Relabels every item; `status` is the latest, if any.
+    pub fn set_lang(&mut self, lang: Lang, status: Option<&IndexStatus>) {
+        let s = lang.strings();
+        self.lang = lang;
+        self.open.set_text(s.tray_open);
+        self.settings.set_text(s.settings);
+        self.quit.set_text(s.tray_quit);
+        match status {
+            Some(status) => self.show_status(status),
+            None => {
+                self.status.set_text(s.tray_starting);
+                self.pause.set_text(s.tray_pause);
+            }
+        }
     }
 
     pub fn show_status(&self, status: &IndexStatus) {

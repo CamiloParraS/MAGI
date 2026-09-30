@@ -24,6 +24,8 @@ pub enum AppEvent {
     Toggle,
     Host(HostEvent),
     Tray(TrayAction),
+    /// The settings window saved new `ui` settings; apply them live.
+    Ui(UiConfig),
 }
 
 pub type Events = async_channel::Sender<AppEvent>;
@@ -71,6 +73,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
             live,
             window: None,
             settings: None,
+            events: tx.clone(),
             _hotkey: hotkey,
             tray,
             paused: false,
@@ -93,6 +96,8 @@ struct Shell {
     live: Entity<Live>,
     window: Option<AnyWindowHandle>,
     settings: Option<AnyWindowHandle>,
+    /// For windows that report back to the shell (settings).
+    events: Events,
     /// Dropping the manager unregisters the hotkey.
     _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
     tray: Option<Tray>,
@@ -127,6 +132,19 @@ impl Shell {
                 if !activate(self.window, cx) {
                     self.open_window(cx);
                 }
+            }
+            AppEvent::Ui(ui) => {
+                let lang = Lang::current(ui.language);
+                if let Some(tray) = &mut self.tray {
+                    tray.set_lang(lang, self.live.read(cx).status.as_ref());
+                }
+                self.live.update(cx, |live, cx| {
+                    live.lang = lang;
+                    live.theme = ui.theme.clone();
+                    cx.notify();
+                });
+                // The search window reads the rest when it next opens.
+                self.ui = ui;
             }
             AppEvent::Settings | AppEvent::Tray(TrayAction::OpenSettings) => {
                 if !activate(self.settings, cx) {
@@ -182,9 +200,9 @@ impl Shell {
             show: true,
             ..Default::default()
         };
-        let (host, live) = (self.host.clone(), self.live.clone());
+        let (host, live, events) = (self.host.clone(), self.live.clone(), self.events.clone());
         match gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| SettingsView::new(host, live, window, cx))
+            cx.new(|cx| SettingsView::new(host, live, events, window, cx))
         }) {
             Ok((handle, _)) => {
                 let _ = handle.update(cx, |_, window, _| window.activate_window());

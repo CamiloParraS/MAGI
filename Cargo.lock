@@ -5036,6 +5036,7 @@ dependencies = [
  "icu_plurals",
  "interprocess",
  "magi-core",
+ "serde_json",
  "sys-locale",
  "tempfile",
  "tracing",

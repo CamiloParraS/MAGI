@@ -2309,9 +2309,19 @@ Done:
 
 Checked on Windows 11, isolated dev instance (own socket name, temp data/config dirs, fake embedder), by screenshot and scripted clicks: light/English and dark/Spanish render; the switch disables a root ("Paused, not searched"); Remove removes the missing root; Add folder opens the native picker, and choosing a subfolder of a root shows the nested-root message; `magi --toggle` still opens search.
 
+Second slice, Appearance (2026-09-30):
+
+- Sidebar with Folders and Appearance (keyboard-reachable buttons). Appearance: language (Same as system (…) / English / Español), search window background (Match system / Always see-through / Always solid), and the see-through amount slider ("More solid" ↔ "More transparent"), disabled with a note when the search window would be solid. Radio groups instead of the prototype's dropdowns: stateless, keyboard-reachable, and three options fit in a row.
+- A saved change goes to the shell as `AppEvent::Ui`: `Live` gets the new language (the settings window retitles itself), the tray relabels every item, and the next search window uses the new background. No restart.
+- The slider saves on release, and Left/Right on its focused wrapper step it (gpui-component's slider takes no keys); after every save it shows the saved value, so a failed save does not leave an unsaved value on screen.
+- Tests: `settings::tests` (system-language label, when the amount is adjustable, slider ↔ `ui.transparency_intensity` staying inside its allowed range), `tests/settings.rs` (headless: a save writes `config.toml` and sends `AppEvent::Ui`).
+- Checked by one screenshot (dark, Spanish): the section renders; the sidebar labels were centered, fixed after (left-aligned via a filling child), not re-screenshotted. The live switch, the tray relabel and the slider keys were not tried by hand.
+
 Open:
 
-- Other sections (search features, what to index, shortcut and startup, appearance with the live language/theme switch, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- Other sections (search features, what to index, shortcut and startup, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
+- In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
 - No quit without a tray: closing settings leaves the app running and only the tray quits (SPEC §6.3 "fully usable without a tray").
 - Remove has no confirmation; after a parent collapsed its children, one Remove purges all of them.
