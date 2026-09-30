@@ -2296,3 +2296,24 @@ Follow-up from the user, 2026-09-29:
 - Input text reduced to gpui-component's large input size (16 px). The 20 px text clipped descenders (`p`, `q`) because the input's line box is fixed at 1.25 rem.
 - The selected row's accent bar is now a quarter of the row's height, centered, instead of a full-height left border.
 - Focus: the window sometimes opened without keyboard focus. Opening a GPUI window on Windows only calls `SetWindowPlacement`, and the foreground lock can leave another app in front (e.g. after `magi --toggle` from a second process). The shell now calls `activate_window()` after opening; GPUI's activate simulates an Alt tap before `SetForegroundWindow`. ✅ Checked by screenshot: after two `magi --toggle` from a second process, typed text lands in the input. Hotkey and tray paths not re-checked by hand.
+
+## M6 — Plan 5 (settings, onboarding, shell integration; started 2026-09-30)
+
+No separate plan document yet; scope is Plan 3's header line. First slice: the settings window with its Folders section.
+
+Done:
+
+- Settings window in variant A (sidebar + grouped rows, solid, 900×620): the Folders section lists every root with its status line (watching, polling, paused, missing, permission denied; problems in the warning color), an enable switch, Remove, and Add folder through the native folder picker (FR-1, FR-11). Errors reach the view as `ErrorCode` and are localized; nested roots name both paths. Roots come from each status event, seeded from `Host::list_roots` when the window opens, because the engine sends no status during its startup walk.
+- Tray: a "Settings" item (FR-8). A plain launch, first or forwarded, now opens settings, and `--toggle` opens search (SPEC §6.3 "launcher opens settings").
+- en/es strings for all of it. Tests: `settings::tests` (status lines, error texts).
+
+Checked on Windows 11, isolated dev instance (own socket name, temp data/config dirs, fake embedder), by screenshot and scripted clicks: light/English and dark/Spanish render; the switch disables a root ("Paused, not searched"); Remove removes the missing root; Add folder opens the native picker, and choosing a subfolder of a root shows the nested-root message; `magi --toggle` still opens search.
+
+Open:
+
+- Other sections (search features, what to index, shortcut and startup, appearance with the live language/theme switch, index stats/errors/clear), onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
+- No quit without a tray: closing settings leaves the app running and only the tray quits (SPEC §6.3 "fully usable without a tray").
+- Remove has no confirmation; after a parent collapsed its children, one Remove purges all of them.
+- In dark mode the off switch has low contrast (gpui-component's default thumb).
+- A switched-off root always reads "Paused, not searched", even if its last health was a problem (it is not probed while off).

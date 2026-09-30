@@ -1,7 +1,11 @@
 //! Light/dark, the variant A palette and window background resolution
 //! (ADR-0010, ADR-0011).
 
-use gpui_kit::{Hsla, Rgba, WindowAppearance, WindowBackgroundAppearance, rgb, rgba};
+use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::{
+    App, Div, Hsla, Rgba, Styled as _, Window, WindowAppearance, WindowBackgroundAppearance, div,
+    px, relative, rgb, rgba,
+};
 use magi_core::config::TransparencyMode;
 use magi_core::platform::BackdropSupport;
 
@@ -50,6 +54,19 @@ pub fn is_dark(theme: &str, appearance: WindowAppearance) -> bool {
     }
 }
 
+/// Applies `ui.theme` (or the OS appearance) to gpui-component's theme,
+/// which colors its widgets; returns whether it is dark.
+pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
+    let dark = is_dark(theme, window.appearance());
+    let mode = if dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    Theme::change(mode, Some(window), cx);
+    dark
+}
+
 /// Variant A "Pane" colors (M6 visual direction, `docs/screenshots/m6-variant-a/`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
@@ -61,6 +78,11 @@ pub struct Palette {
     pub accent: Hsla,
     pub selection: Hsla,
     pub mark: Hsla,
+    /// Opaque windows (settings).
+    pub solid: Hsla,
+    /// A settings row.
+    pub card: Hsla,
+    pub warn: Hsla,
 }
 
 impl Palette {
@@ -74,6 +96,9 @@ impl Palette {
                 accent: rgb(0x4cc2ff).into(),
                 selection: rgba(0x4cc2ff24).into(),
                 mark: rgba(0xffd6004d).into(),
+                solid: rgb(0x202020).into(),
+                card: rgb(0x2b2b2b).into(),
+                warn: rgb(0xfcb452).into(),
             }
         } else {
             Self {
@@ -84,6 +109,9 @@ impl Palette {
                 accent: rgb(0x0a64d8).into(),
                 selection: rgba(0x0a64d81f).into(),
                 mark: rgba(0xffd60073).into(),
+                solid: rgb(0xf3f3f3).into(),
+                card: rgb(0xfbfbfb).into(),
+                warn: rgb(0x9d5d00).into(),
             }
         }
     }
@@ -94,6 +122,19 @@ impl Palette {
             Backdrop::Solid => 1.0,
         };
         Rgba { a, ..self.panel }
+    }
+
+    /// Marks the selected row: a quarter of its height, centered on its left
+    /// edge. The row must be `relative()`.
+    pub fn accent_bar(&self) -> Div {
+        div()
+            .absolute()
+            .left_0()
+            .top(relative(0.375))
+            .h(relative(0.25))
+            .w(px(3.))
+            .rounded_full()
+            .bg(self.accent)
     }
 }
 

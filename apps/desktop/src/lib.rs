@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod instance;
 mod logging;
 pub mod search;
+pub mod settings;
 pub mod theme;
 pub mod tray;
 
@@ -21,7 +22,7 @@ pub fn run(args: Vec<String>) -> ExitCode {
         if toggle {
             AppEvent::Toggle
         } else {
-            AppEvent::Show
+            AppEvent::Settings
         }
     };
     let name = instance::socket_name();

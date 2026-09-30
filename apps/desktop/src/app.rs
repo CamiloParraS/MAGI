@@ -12,12 +12,14 @@ use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::i18n::Lang;
 use crate::search::view::{self, Live, SearchView};
+use crate::settings::view::{self as settings, SettingsView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
 
 pub enum AppEvent {
-    /// Open the search window, or bring it forward.
-    Show,
+    /// A plain launch: open the settings window, or bring it forward. The
+    /// app stays usable without a tray (SPEC.md §6.3).
+    Settings,
     /// Close the search window if it is open, else open it.
     Toggle,
     Host(HostEvent),
@@ -68,6 +70,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
             ui,
             live,
             window: None,
+            settings: None,
             _hotkey: hotkey,
             tray,
             paused: false,
@@ -89,6 +92,7 @@ struct Shell {
     ui: UiConfig,
     live: Entity<Live>,
     window: Option<AnyWindowHandle>,
+    settings: Option<AnyWindowHandle>,
     /// Dropping the manager unregisters the hotkey.
     _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
     tray: Option<Tray>,
@@ -98,11 +102,6 @@ struct Shell {
 impl Shell {
     fn handle(&mut self, event: AppEvent, cx: &mut App) -> ControlFlow<()> {
         match event {
-            AppEvent::Show => {
-                if !self.activate_window(cx) {
-                    self.open_window(cx);
-                }
-            }
             AppEvent::Toggle => {
                 if !self.close_window(cx) {
                     self.open_window(cx);
@@ -125,8 +124,13 @@ impl Shell {
                 });
             }
             AppEvent::Tray(TrayAction::OpenSearch) => {
-                if !self.activate_window(cx) {
+                if !activate(self.window, cx) {
                     self.open_window(cx);
+                }
+            }
+            AppEvent::Settings | AppEvent::Tray(TrayAction::OpenSettings) => {
+                if !activate(self.settings, cx) {
+                    self.open_settings(cx);
                 }
             }
             AppEvent::Tray(TrayAction::TogglePause) => {
@@ -162,11 +166,32 @@ impl Shell {
             .is_some_and(|w| w.update(cx, |_, window, _| window.remove_window()).is_ok())
     }
 
-    fn activate_window(&self, cx: &mut App) -> bool {
-        self.window.is_some_and(|w| {
-            w.update(cx, |_, window, _| window.activate_window())
-                .is_ok()
-        })
+    /// A normal, solid window (ADR-0011: only the search window is blurred).
+    fn open_settings(&mut self, cx: &mut App) {
+        let options = WindowOptions {
+            titlebar: Some(TitlebarOptions {
+                title: Some(self.live.read(cx).lang.strings().settings.into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                None,
+                settings::SIZE,
+                cx,
+            ))),
+            focus: true,
+            show: true,
+            ..Default::default()
+        };
+        let (host, live) = (self.host.clone(), self.live.clone());
+        match gpui_kit::open_window(options, cx, move |window, cx| {
+            cx.new(|cx| SettingsView::new(host, live, window, cx))
+        }) {
+            Ok((handle, _)) => {
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
+                self.settings = Some(handle);
+            }
+            Err(error) => tracing::error!(%error, "could not open the settings window"),
+        }
     }
 
     fn open_window(&mut self, cx: &mut App) {
@@ -220,4 +245,13 @@ impl Shell {
             Err(error) => tracing::error!(%error, "could not open the search window"),
         }
     }
+}
+
+/// Brings a window forward; false when it is not open (never opened, or
+/// closed by the user).
+fn activate(window: Option<AnyWindowHandle>, cx: &mut App) -> bool {
+    window.is_some_and(|w| {
+        w.update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    })
 }

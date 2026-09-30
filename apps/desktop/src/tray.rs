@@ -9,6 +9,7 @@ use crate::i18n::Lang;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     OpenSearch,
+    OpenSettings,
     TogglePause,
     Quit,
 }
@@ -44,12 +45,14 @@ impl Tray {
         let status = MenuItem::new(s.tray_starting, false, None);
         let open = MenuItem::new(s.tray_open, true, None);
         let pause = MenuItem::new(s.tray_pause, true, None);
+        let settings = MenuItem::new(s.settings, true, None);
         let quit = MenuItem::new(s.tray_quit, true, None);
         let menu = Menu::with_items(&[
             &status,
             &PredefinedMenuItem::separator(),
             &open,
             &pause,
+            &settings,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -57,6 +60,7 @@ impl Tray {
         let ids = [
             (open.id().clone(), TrayAction::OpenSearch),
             (pause.id().clone(), TrayAction::TogglePause),
+            (settings.id().clone(), TrayAction::OpenSettings),
             (quit.id().clone(), TrayAction::Quit),
         ];
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {

@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Copy as CopyText, Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::{Icon, IconName, Sizable as _, Theme, ThemeMode};
+use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::discovery::Kind;
@@ -138,13 +138,8 @@ impl SearchView {
 
     /// Follows `ui.theme` and the OS; gpui-component's theme colors the input.
     fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dark = theme::is_dark(&self.live.read(cx).theme, window.appearance());
-        let mode = if self.dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        };
-        Theme::change(mode, Some(window), cx);
+        let theme = self.live.read(cx).theme.clone();
+        self.dark = theme::sync(&theme, window, cx);
         cx.notify();
     }
 
@@ -597,19 +592,7 @@ fn row(
         .pr(px(10.))
         .py(px(7.))
         .rounded(px(4.))
-        .when(selected, |d| {
-            // The accent bar: a quarter of the row's height, centered.
-            d.bg(p.selection).child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(relative(0.375))
-                    .h(relative(0.25))
-                    .w(px(3.))
-                    .rounded_full()
-                    .bg(p.accent),
-            )
-        })
+        .when(selected, |d| d.bg(p.selection).child(p.accent_bar()))
         .child(icon(r))
         .child(
             div()

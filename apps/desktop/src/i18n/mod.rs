@@ -83,6 +83,24 @@ pub struct Strings {
     pub status_indexing: Plural,
     pub status_idle: &'static str,
     pub status_idle_errors: Plural,
+    pub settings: &'static str,
+    pub folders: &'static str,
+    pub add_folder: &'static str,
+    pub remove: &'static str,
+    pub root_watching: &'static str,
+    pub root_polling: &'static str,
+    pub root_disabled: &'static str,
+    pub root_missing: &'static str,
+    pub root_denied: &'static str,
+    pub no_folders: &'static str,
+    /// `{path}` is the folder.
+    pub root_not_found: &'static str,
+    /// `{path}` is the folder.
+    pub root_exists: &'static str,
+    /// `{path}` is the folder, `{other}` the root that already covers it.
+    pub root_nested: &'static str,
+    pub engine_starting: &'static str,
+    pub folders_failed: &'static str,
 }
 
 impl Strings {
