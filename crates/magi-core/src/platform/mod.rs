@@ -319,6 +319,25 @@ pub fn backdrop_support() -> BackdropSupport {
     }
 }
 
+/// The OS id of the display under the mouse cursor, which is what GPUI's
+/// `DisplayId` wraps: the `HMONITOR` on Windows, the `CGDirectDisplayID` on
+/// macOS (gpui-pre 0.3.7). `None` on Linux, where Wayland has no global
+/// cursor position, or when the OS call fails.
+pub fn display_under_cursor() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::display_under_cursor()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::display_under_cursor()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -150,6 +150,21 @@ pub fn backdrop_support() -> super::BackdropSupport {
     }
 }
 
+pub fn display_under_cursor() -> Option<u64> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromPoint};
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: `point` is a valid out-pointer; both calls only read or write it.
+    let monitor = unsafe {
+        if GetCursorPos(&mut point) == 0 {
+            return None;
+        }
+        MonitorFromPoint(point, MONITOR_DEFAULTTONULL)
+    };
+    (!monitor.is_null()).then_some(monitor as usize as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

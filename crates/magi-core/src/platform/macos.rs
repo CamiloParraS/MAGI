@@ -44,3 +44,45 @@ pub fn lower_current_thread() {
         tracing::debug!(rc, "could not lower thread QoS");
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
+    fn CGGetDisplaysWithPoint(
+        point: CGPoint,
+        max_displays: u32,
+        displays: *mut u32,
+        matching_display_count: *mut u32,
+    ) -> i32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const std::ffi::c_void);
+}
+
+/// A null-source event carries the current cursor location, in the global
+/// display coordinates `CGGetDisplaysWithPoint` takes.
+pub fn display_under_cursor() -> Option<u64> {
+    // SAFETY: the event is checked for null and released once; the out
+    // pointers are valid for one display id and one count.
+    unsafe {
+        let event = CGEventCreate(std::ptr::null());
+        if event.is_null() {
+            return None;
+        }
+        let point = CGEventGetLocation(event);
+        CFRelease(event);
+        let (mut display, mut count) = (0u32, 0u32);
+        (CGGetDisplaysWithPoint(point, 1, &mut display, &mut count) == 0 && count == 1)
+            .then_some(u64::from(display))
+    }
+}
