@@ -22,9 +22,24 @@ pub fn runs(
         .collect()
 }
 
+/// Snippets span lines; the row shows them as running text. Each line break
+/// or tab becomes one space, so highlight byte ranges still hold.
+pub fn one_line(text: &str) -> String {
+    text.replace(['\r', '\n', '\t'], " ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_line_keeps_byte_offsets() {
+        let text = "Summary\r\n\nMonthly rent\tdue";
+        let flat = one_line(text);
+        assert_eq!(flat, "Summary   Monthly rent due");
+        assert_eq!(flat.len(), text.len());
+        assert_eq!(&flat[18..22], "rent");
+    }
 
     #[test]
     fn ranges_map_to_runs_with_the_style() {

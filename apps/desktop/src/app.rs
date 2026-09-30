@@ -11,7 +11,7 @@ use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::i18n::Lang;
-use crate::search::view::SearchView;
+use crate::search::view::{self, Live, SearchView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
 
@@ -40,7 +40,9 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
     };
     let ui = host.settings().map(|c| c.ui).unwrap_or_default();
     let _ = tx.send_blocking(first);
-    gpui_kit::application().run(move |cx| {
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
         gpui_kit::init(cx);
         SearchView::bind_keys(cx);
         // The app lives in the tray; closing the search window never quits.
@@ -54,7 +56,9 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         })
         .ok();
         let tray_tx = tx.clone();
-        let tray = Tray::new(Lang::current(ui.language), move |action| {
+        let lang = Lang::current(ui.language);
+        let live = cx.new(|_| Live::new(lang, ui.theme.clone()));
+        let tray = Tray::new(lang, move |action| {
             let _ = tray_tx.send_blocking(AppEvent::Tray(action));
         })
         .inspect_err(|error| tracing::warn!(%error, "no tray icon; use the hotkey or `magi --toggle`"))
@@ -62,6 +66,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         let mut shell = Shell {
             host,
             ui,
+            live,
             window: None,
             _hotkey: hotkey,
             tray,
@@ -82,6 +87,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
 struct Shell {
     host: Host,
     ui: UiConfig,
+    live: Entity<Live>,
     window: Option<AnyWindowHandle>,
     /// Dropping the manager unregisters the hotkey.
     _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
@@ -107,8 +113,17 @@ impl Shell {
                 if let Some(tray) = &self.tray {
                     tray.show_status(&status);
                 }
+                self.live.update(cx, |live, cx| {
+                    live.status = Some(status);
+                    cx.notify();
+                });
             }
-            AppEvent::Host(HostEvent::Features(_)) => {}
+            AppEvent::Host(HostEvent::Features(features)) => {
+                self.live.update(cx, |live, cx| {
+                    live.features = features;
+                    cx.notify();
+                });
+            }
             AppEvent::Tray(TrayAction::OpenSearch) => {
                 if !self.activate_window(cx) {
                     self.open_window(cx);
@@ -161,9 +176,16 @@ impl Shell {
             self.ui.transparency_intensity,
             magi_core::platform::backdrop_support(),
         );
+        // Multi-monitor: the display under the cursor, else the primary.
+        let display = magi_core::platform::display_under_cursor().map(DisplayId::from);
+        let full = Bounds::centered(display, size(view::WIDTH, view::MAX_HEIGHT), cx);
         let options = WindowOptions {
             titlebar: None,
-            window_bounds: Some(WindowBounds::centered(size(px(680.), px(460.)), cx)),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: full.origin,
+                size: size(view::WIDTH, view::OPEN_HEIGHT),
+            })),
+            display_id: display,
             kind: WindowKind::PopUp,
             is_movable: false,
             is_resizable: false,
@@ -172,9 +194,9 @@ impl Shell {
             window_background: theme::window_background(backdrop),
             ..Default::default()
         };
-        let host = self.host.clone();
+        let (host, live) = (self.host.clone(), self.live.clone());
         match gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| SearchView::new(host, backdrop, opened_at, window, cx))
+            cx.new(|cx| SearchView::new(host, live, backdrop, opened_at, window, cx))
         }) {
             Ok((handle, _)) => {
                 // gpui-component paints the theme background (opaque) on the

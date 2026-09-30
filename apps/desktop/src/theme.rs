@@ -1,6 +1,7 @@
-//! Window background resolution (ADR-0010, ADR-0011).
+//! Light/dark, the variant A palette and window background resolution
+//! (ADR-0010, ADR-0011).
 
-use gpui_kit::WindowBackgroundAppearance;
+use gpui_kit::{Hsla, Rgba, WindowAppearance, WindowBackgroundAppearance, rgb, rgba};
 use magi_core::config::TransparencyMode;
 use magi_core::platform::BackdropSupport;
 
@@ -36,9 +37,83 @@ pub fn window_background(backdrop: Backdrop) -> WindowBackgroundAppearance {
     }
 }
 
+/// `ui.theme`: `"light"` or `"dark"` force it; anything else (`"system"`)
+/// follows the OS.
+pub fn is_dark(theme: &str, appearance: WindowAppearance) -> bool {
+    match theme {
+        "dark" => true,
+        "light" => false,
+        _ => matches!(
+            appearance,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        ),
+    }
+}
+
+/// Variant A "Pane" colors (M6 visual direction, `docs/screenshots/m6-variant-a/`).
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    pub ink: Hsla,
+    pub mute: Hsla,
+    pub line: Hsla,
+    /// The panel color; its alpha comes from the backdrop.
+    pub panel: Rgba,
+    pub accent: Hsla,
+    pub selection: Hsla,
+    pub mark: Hsla,
+}
+
+impl Palette {
+    pub fn new(dark: bool) -> Self {
+        if dark {
+            Self {
+                ink: rgb(0xf3f3f5).into(),
+                mute: rgb(0xa4a6ad).into(),
+                line: rgba(0xffffff14).into(),
+                panel: rgb(0x202024),
+                accent: rgb(0x4cc2ff).into(),
+                selection: rgba(0x4cc2ff24).into(),
+                mark: rgba(0xffd6004d).into(),
+            }
+        } else {
+            Self {
+                ink: rgb(0x1b1b1f).into(),
+                mute: rgb(0x5f6168).into(),
+                line: rgba(0x00000014).into(),
+                panel: rgb(0xf6f6f8),
+                accent: rgb(0x0a64d8).into(),
+                selection: rgba(0x0a64d81f).into(),
+                mark: rgba(0xffd60073).into(),
+            }
+        }
+    }
+
+    pub fn background(&self, backdrop: Backdrop) -> Rgba {
+        let a = match backdrop {
+            Backdrop::Blurred { tint_alpha } => tint_alpha,
+            Backdrop::Solid => 1.0,
+        };
+        Rgba { a, ..self.panel }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_theme_setting_overrides_the_os_appearance() {
+        use WindowAppearance::*;
+        assert!(is_dark("system", Dark));
+        assert!(is_dark("system", VibrantDark));
+        assert!(!is_dark("system", Light));
+        assert!(is_dark("dark", Light));
+        assert!(!is_dark("light", VibrantDark));
+        assert!(
+            !is_dark("something-else", Light),
+            "unknown values follow the OS"
+        );
+    }
 
     const MICA: BackdropSupport = BackdropSupport {
         mica: true,

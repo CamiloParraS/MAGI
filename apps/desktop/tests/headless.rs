@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use gpui_kit::{AppContext as _, TestAppContext};
 use magi_core::host::{Host, HostPaths};
-use magi_desktop::search::view::SearchView;
+use magi_desktop::i18n::Lang;
+use magi_desktop::search::view::{Live, SearchView};
 use magi_desktop::theme::Backdrop;
 
 struct Counter(u32);
@@ -34,8 +35,16 @@ fn the_search_window_opens_empty_over_a_real_host(cx: &mut TestAppContext) {
         gpui_kit::init(cx);
         SearchView::bind_keys(cx);
     });
+    let live = cx.new(|_| Live::new(Lang::En, "system".into()));
     let window = cx.add_window(|window, cx| {
-        SearchView::new(host.clone(), Backdrop::Solid, Instant::now(), window, cx)
+        SearchView::new(
+            host.clone(),
+            live,
+            Backdrop::Solid,
+            Instant::now(),
+            window,
+            cx,
+        )
     });
     window
         .update(cx, |view, _, _| {

@@ -85,6 +85,11 @@ impl SearchState {
         self.selected = self.selected.saturating_add_signed(delta).min(last);
     }
 
+    /// Selects the result at `ix`, clamped to the last one.
+    pub fn select_at(&mut self, ix: usize) {
+        self.selected = ix.min(self.results.len().saturating_sub(1));
+    }
+
     pub fn selected_index(&self) -> Option<usize> {
         (!self.results.is_empty()).then_some(self.selected)
     }
@@ -187,6 +192,10 @@ mod tests {
         s.select(-1);
         assert_eq!(s.selected_index(), Some(0));
         s.select(5);
+        assert_eq!(s.selected().map(|r| r.file_id), Some(3));
+        s.select_at(1);
+        assert_eq!(s.selected().map(|r| r.file_id), Some(2));
+        s.select_at(9);
         assert_eq!(s.selected().map(|r| r.file_id), Some(3));
         let q = s.set_query("rent payment").unwrap();
         s.apply(q.generation, reply(&[7, 8]));
