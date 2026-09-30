@@ -2321,7 +2321,7 @@ Third slice, What to index (2026-09-30):
 
 - File types (a checkbox per kind; other files are found by name only), largest file to read (whole MB, saved on Enter or blur), and exclusion patterns (one per line, saved with Save). Every indexing save restarts the engine, which re-walks every root, so nothing is saved per keystroke and an unchanged value is not saved. A bad size is caught in the window; a bad pattern comes back from the core as `InvalidGlob` and is named in the message, and the text stays so it can be fixed.
 - Tests: `settings::tests` (kind toggling keeps order and drops kinds the window doesn't show, whole-MB parsing, one pattern per line, the two error texts).
-- Not looked at on screen yet, and the variant A mockup the user mentioned (`mockup/`) was empty when checked.
+- Checked on screen (isolated instance, 2026-09-30): What to index renders in English and Spanish; an invalid size shows the error and is not saved; picking Español in the Language dropdown switched the title, sidebar, headings and dropdown labels live and wrote `language = "es"`. Fixed from the screenshots: the pattern box showed one line (`rows` does not size it; a height does), Save stretched full width, and the sidebar's accent bar overlapped the label (an absolute child is placed against its direct parent, the button's content row). The tray relabel was not looked at. The variant A mockup the user mentioned (`mockup/`) was empty when checked.
 
 Open:
 

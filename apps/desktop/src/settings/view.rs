@@ -552,12 +552,13 @@ impl SettingsView {
                     .items_stretch()
                     .gap_3()
                     .child(labelled(s.excludes, s.excludes_note))
-                    .child(Textarea::new(&self.excludes))
-                    .child(
-                        div().child(Button::new("save-excludes").label(s.save).on_click(
+                    // `rows` does not size the box; a height does.
+                    .child(Textarea::new(&self.excludes).h(px(150.)))
+                    .child(div().flex().justify_end().child(
+                        Button::new("save-excludes").label(s.save).on_click(
                             cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
-                        )),
-                    ),
+                        ),
+                    )),
             )
             .children(self.error_line(s, p))
     }
@@ -654,11 +655,13 @@ impl Render for SettingsView {
                     .ghost()
                     .selected(selected)
                     .w_full()
-                    .relative()
-                    .px_3()
+                    .px_0()
                     .when(selected, |b| b.bg(p.card).child(p.accent_bar()))
-                    // The content row centers a label; a filling child sits left.
-                    .child(div().flex_1().child(section.title(s)))
+                    // The content row centers a label; a filling child sits
+                    // left. The padding is the label's, so the content row
+                    // starts at the button's edge: an absolute child (the
+                    // accent bar) is placed against its direct parent.
+                    .child(div().flex_1().px_3().child(section.title(s)))
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;
