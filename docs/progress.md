@@ -2253,7 +2253,11 @@ Second round, 2026-09-29:
 - ✅ **Transparency effects off** → the window is solid (user).
 - ✅ **IME / dead keys:** `canción` typed with `'` + `o` works; `ó` and `o` both highlight `cancion` (user).
 - ⚠️ **Tray:** the icon is there and "Open search" works; Pause/Resume, the status line and Quit were not confirmed (the user saw only a search entry).
-- **Typing → results:** `search window` now logs `search results after typing stopped elapsed=` (last keystroke to reply, debounce included). Not measured yet.
+- ✅ **Tray** (user, third round): status line shows, "Indexing paused" → Resume works, Open search works, Quit exits.
+- **Typing → results < 400 ms** (`search results after typing stopped elapsed=`, last keystroke to reply, 150 ms debounce included; release build, real models, user's index, 2026-09-30):
+  - ✅ Models warm: every sample 154–214 ms (search itself ~5–65 ms).
+  - ❌ First search after idle unload: 1.86 s, 1.82 s, 0.98 s (text model load). Known cost of lazy loading (SPEC §3); whether to warm the model on window open is an open question for a later plan.
+- Search quality note (user's `random_names` copy of the corpus): photos with random names are unreachable because `image_visual` is off by default (only 77 stale `vec_image` rows from an earlier run exist); `walls-io-whiteboard.jpg` (noisy OCR), `FORMULARIOS` PDFs and a minified `main.*.js` surface on unrelated queries: RRF fuses by rank only, so nearest-but-irrelevant vectors fill the list. Candidate fix: a minimum similarity for vector hits, tuned with `just eval`.
 - Not run: GPU-less VM, WSLg.
 
 ### Open for other OSes / CI
