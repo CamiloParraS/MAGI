@@ -24,7 +24,8 @@ The UI calls `host::Host` directly; there is no IPC layer, serialization or
 generated bindings (ADR-0011, SPEC.md §5.7). The types it sees live in
 `crates/magi-core/src/dto.rs`: `IndexStatus { state: idle|scanning|indexing|paused,
 queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` and
-`RootStatus { id, path, enabled, status }`. Paths are strings (lossy for
+`RootStatus { id, path, enabled, status, indexed }` (`indexed`: its files in
+the `indexed` state). Paths are strings (lossy for
 non-UTF-8 names). See "Control surface" below for the `EngineHandle` methods
 behind them. The DTOs keep their `serde` derives (config, the CLI's output and
 the wire-name tests use them); the `ts-rs` derives are gone.

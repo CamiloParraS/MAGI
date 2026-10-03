@@ -369,7 +369,10 @@ fn print_status(elapsed: Duration, s: &IndexStatus) {
 fn print_roots(roots: &[RootStatus]) {
     for root in roots {
         let enabled = if root.enabled { "" } else { " (disabled)" };
-        println!("  root {} {}: {}{enabled}", root.id, root.path, root.status);
+        println!(
+            "  root {} {}: {}{enabled}, {} indexed",
+            root.id, root.path, root.status, root.indexed
+        );
     }
 }
 

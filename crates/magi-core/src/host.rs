@@ -221,10 +221,7 @@ impl Host {
 
     /// From the database, so it answers while the engine (re)starts.
     pub fn list_roots(&self) -> Result<Vec<RootStatus>> {
-        Ok(db::roots::list(&lock(&self.inner.reader))?
-            .into_iter()
-            .map(RootStatus::from)
-            .collect())
+        crate::engine::root_statuses(&lock(&self.inner.reader))
     }
 
     pub fn list_errors(&self, limit: u32) -> Result<Vec<FileError>> {

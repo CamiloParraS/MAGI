@@ -319,6 +319,49 @@ pub fn backdrop_support() -> BackdropSupport {
     }
 }
 
+/// The user asked the OS for less motion: Windows' "Show animations" off,
+/// macOS "Reduce motion", GNOME animations off. `false` when unknown.
+pub fn reduce_motion() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::reduce_motion()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        read_setting(
+            "defaults",
+            &["read", "com.apple.universalaccess", "reduceMotion"],
+        ) == Some(true)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        read_setting(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "enable-animations"],
+        ) == Some(false)
+    }
+}
+
+/// ponytail: one process spawn, once at startup; a native API if it ever
+/// needs to follow the setting live.
+#[cfg(not(target_os = "windows"))]
+fn read_setting(program: &str, args: &[&str]) -> Option<bool> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
+    setting_flag(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// A boolean setting as `defaults` (`1`/`0`) or `gsettings` (`true`/`false`) prints it.
+pub fn setting_flag(output: &str) -> Option<bool> {
+    match output.trim() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
 /// The OS id of the display under the mouse cursor, which is what GPUI's
 /// `DisplayId` wraps: the `HMONITOR` on Windows, the `CGDirectDisplayID` on
 /// macOS (gpui-pre 0.3.7). `None` on Linux, where Wayland has no global
@@ -386,6 +429,17 @@ mod tests {
         assert_eq!(pmset_on_battery(ac), Some(false));
         assert_eq!(pmset_on_battery(""), None);
         assert_eq!(pmset_on_battery("No batteries"), None);
+    }
+
+    #[test]
+    fn setting_output_reads_as_a_flag() {
+        // `defaults read … reduceMotion` and `gsettings get … enable-animations`.
+        assert_eq!(setting_flag("1\n"), Some(true));
+        assert_eq!(setting_flag("0\n"), Some(false));
+        assert_eq!(setting_flag("true\n"), Some(true));
+        assert_eq!(setting_flag("false\n"), Some(false));
+        assert_eq!(setting_flag(""), None);
+        assert_eq!(setting_flag("No such key"), None);
     }
 
     #[test]

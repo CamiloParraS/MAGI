@@ -34,6 +34,7 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
+use magi_core::discovery::Kind;
 use magi_core::dto::{ErrorCode, FeatureStatus, FileError, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
@@ -42,9 +43,9 @@ use serde_json::json;
 
 use super::{
     FILE_TYPES, FeatureAction, MAX_SIZE_FIELD, background_label, download_error_label, error_text,
-    feature_action, file_error_label, globs_from_text, hotkey_keystroke, intensity_from_slider,
-    kind_label, max_size_from_text, result_counts, root_state, see_through_adjustable,
-    slider_from_intensity, system_language, toggle_kind,
+    feature_action, file_error_label, globs_from_text, hotkey_keystroke, images_needed,
+    intensity_from_slider, kind_examples, kind_label, max_size_from_text, result_counts, root_line,
+    root_state, see_through_adjustable, slider_from_intensity, system_language, toggle_kind,
 };
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
@@ -219,6 +220,8 @@ pub struct SettingsView {
     see_through: Entity<SliderState>,
     /// The slider takes no keys; this wrapper moves it with Left/Right (NFR-10).
     see_through_focus: FocusHandle,
+    /// Back to the top on every section change.
+    pane_scroll: ScrollHandle,
     dark: bool,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
@@ -363,6 +366,7 @@ impl SettingsView {
             support: magi_core::platform::backdrop_support(),
             see_through,
             see_through_focus: cx.focus_handle().tab_stop(true),
+            pane_scroll: ScrollHandle::new(),
             dark: false,
             opening_roots,
             unreadable: None,
@@ -758,7 +762,8 @@ impl SettingsView {
     }
 
     fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let (badge, tone, line) = root_state(root, s);
+        let (badge, tone, _) = root_state(root, s);
+        let line = root_line(root, s, self.live.read(cx).lang);
         let id = root.id;
         let icon = match tone {
             Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
@@ -780,7 +785,11 @@ impl SettingsView {
                     .children(line.map(|line| note(p).child(line)))
                     .children(self.problem(Field::Root(id), s, p)),
             )
-            .child(p.status(badge, tone))
+            // A changed status fades in, so the change is seen.
+            .child(theme::fade_in(
+                p.status(badge, tone),
+                SharedString::from(format!("root-status-{id}-{badge}")),
+            ))
             .child(
                 Switch::new(("root-enabled", id as u64))
                     .checked(root.enabled)
@@ -812,9 +821,11 @@ impl SettingsView {
     }
 
     fn what_to_index(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let types = &self.indexing.file_types;
+        let images_needed = images_needed(types, &self.live.read(cx).features);
         let kinds = FILE_TYPES.into_iter().map(|kind| {
-            let on = self.indexing.file_types.contains(&kind);
-            Checkbox::new(("kind", kind as usize))
+            let on = types.contains(&kind);
+            let checkbox = Checkbox::new(("kind", kind as usize))
                 .label(kind_label(kind, s))
                 .checked(on)
                 .on_click(cx.listener(move |this, &on: &bool, window, cx| {
@@ -825,8 +836,25 @@ impl SettingsView {
                         window,
                         cx,
                     );
-                }))
+                }));
+            let warning = (kind == Kind::Image && images_needed)
+                .then(|| note(p).text_color(p.warn).child(s.images_needed));
+            div()
+                .flex()
+                .items_start()
+                .gap_3()
+                .child(theme::kind_glyph(kind, px(22.)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(checkbox)
+                        .children(kind_examples(kind).map(|e| note(p).child(e)))
+                        .children(warning),
+                )
         });
+        let none = types
+            .is_empty()
+            .then(|| note(p).mt_0().text_color(p.warn).child(s.kind_none));
         let battery = self.indexing.pause_on_battery;
         let excludes_edited =
             globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
@@ -843,7 +871,16 @@ impl SettingsView {
                         s,
                         p,
                     ))
-                    .child(div().flex().flex_wrap().gap_4().children(kinds)),
+                    .child(
+                        div()
+                            .grid()
+                            .grid_cols(2)
+                            .w_full()
+                            .gap_x_6()
+                            .gap_y_3()
+                            .children(kinds),
+                    )
+                    .children(none),
             )
             .child(
                 self.setting(
@@ -1021,6 +1058,10 @@ impl SettingsView {
                     .min_w_0()
                     .child(div().font_weight(FontWeight::MEDIUM).child(text.name))
                     .child(note(p).child(text.pitch))
+                    .children(
+                        (images_needed(&self.indexing.file_types, std::slice::from_ref(f)))
+                            .then(|| note(p).text_color(p.warn).child(s.images_off)),
+                    )
                     .child(state)
                     .children(backfill)
                     .children(self.problem(field, s, p)),
@@ -1330,6 +1371,7 @@ impl Render for SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;
                         this.error = None;
+                        this.pane_scroll.set_offset(Point::default());
                         if section == Section::Index {
                             this.load_unreadable(cx);
                         }
@@ -1365,6 +1407,7 @@ impl Render for SettingsView {
                     .flex_1()
                     .min_w_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.pane_scroll)
                     .px(px(32.))
                     .pt(px(22.))
                     .pb(px(28.))
@@ -1415,5 +1458,5 @@ fn subheading(text: &'static str, p: &Palette) -> Div {
         .text_xs()
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(p.mute)
-        .child(text.to_uppercase())
+        .child(text)
 }

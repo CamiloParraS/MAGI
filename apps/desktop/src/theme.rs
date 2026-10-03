@@ -2,13 +2,58 @@
 //! (ADR-0010, ADR-0011).
 
 use gpui_kit::component::{Theme, ThemeMode};
+use std::time::Duration;
+
 use gpui_kit::{
-    App, Div, Hsla, ParentElement as _, Rgba, Styled as _, Window, WindowAppearance,
-    WindowBackgroundAppearance, div, px, relative, rgb, rgba,
+    Animation, AnimationElement, AnimationExt as _, App, Div, ElementId, FontWeight, Hsla,
+    IntoElement, ParentElement as _, Pixels, Rgba, Styled, Window, WindowAppearance,
+    WindowBackgroundAppearance, div, ease_out_quint, px, relative, rgb, rgba,
 };
 use gpui_kit::{black, white};
 use magi_core::config::TransparencyMode;
+use magi_core::discovery::Kind;
 use magi_core::platform::BackdropSupport;
+
+/// How long [`fade_in`] takes.
+pub const FADE: Duration = Duration::from_millis(150);
+
+/// Something new arrives with a short ease-out fade instead of popping in.
+/// It replays only when `id` changes or `el` was not shown the frame before;
+/// leaving is instant. Under reduced motion GPUI shows the end state.
+pub fn fade_in<E: IntoElement + Styled + 'static>(
+    el: E,
+    id: impl Into<ElementId>,
+) -> AnimationElement<E> {
+    el.with_animation(
+        id,
+        Animation::new(FADE).with_easing(ease_out_quint()),
+        |el, t| el.opacity(t),
+    )
+}
+
+/// A file type's colored square, the same in the results and in settings.
+pub fn kind_glyph(kind: Kind, size: Pixels) -> Div {
+    let (label, color) = match kind {
+        Kind::Pdf => ("PDF", 0xc4314b),
+        Kind::Office => ("DOC", 0x185abd),
+        Kind::Code => ("</>", 0x5c2d91),
+        Kind::Text => ("TXT", 0x6b7280),
+        Kind::Image => ("IMG", 0x6b7280),
+        Kind::Other => ("•", 0x6b7280),
+    };
+    div()
+        .flex_none()
+        .size(size)
+        .rounded(size * (3. / 32.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(color))
+        .text_color(white())
+        .text_size(size * (9. / 32.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(label)
+}
 
 /// What a status dot or badge says, by color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

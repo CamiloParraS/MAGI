@@ -785,6 +785,18 @@ pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<FileS
     Ok(counts)
 }
 
+/// Indexed files per root id; a root with none is absent.
+pub fn count_indexed_by_root(conn: &Connection) -> Result<std::collections::HashMap<i64, u64>> {
+    let mut stmt = conn
+        .prepare_cached("SELECT root_id, COUNT(*) FROM files WHERE state = ?1 GROUP BY root_id")?;
+    let counts = stmt
+        .query_map([FileState::Indexed], |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)? as u64))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(counts)
+}
+
 pub fn count_files(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?)
 }
@@ -1251,6 +1263,41 @@ mod tests {
         assert_eq!(scalar(&conn, "SELECT root_id FROM files"), other);
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM vec_text"), 1);
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM vec_image"), 1);
+    }
+
+    #[test]
+    fn counts_indexed_files_per_root() {
+        let (_dir, mut conn) = open_test_db();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = db::roots::add(&conn, other_dir.path()).unwrap().id;
+        add_file(&mut conn, 1, "a.txt", 1, "x");
+        add_file(&mut conn, 1, "b.txt", 2, "x");
+        let queued = add_file(&mut conn, other, "c.txt", 3, "x");
+        mark_pending(&conn, queued).unwrap();
+
+        let counts = count_indexed_by_root(&conn).unwrap();
+        assert_eq!(counts.get(&1), Some(&2));
+        assert_eq!(counts.get(&other), None, "a queued file is not indexed yet");
+    }
+
+    /// The status thread runs it twice a second: it must count from an
+    /// index alone, never reading the table row by row.
+    #[test]
+    fn indexed_per_root_counts_from_a_covering_index() {
+        let (_dir, conn) = open_test_db();
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT root_id, COUNT(*) FROM files WHERE state = 'indexed' GROUP BY root_id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let plan = plan.join("\n");
+        assert!(plan.contains("COVERING INDEX"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     }
 
     #[test]

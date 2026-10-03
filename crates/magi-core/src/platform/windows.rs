@@ -150,6 +150,24 @@ pub fn backdrop_support() -> super::BackdropSupport {
     }
 }
 
+/// "Show animations in Windows" is off.
+pub fn reduce_motion() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+    };
+    let mut animate: i32 = 1;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL into `animate`.
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            (&mut animate as *mut i32).cast(),
+            0,
+        )
+    };
+    ok != 0 && animate == 0
+}
+
 pub fn display_under_cursor() -> Option<u64> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromPoint};

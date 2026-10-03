@@ -12,7 +12,6 @@ use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::discovery::Kind;
 use magi_core::dto::{
     ErrorCode, FeatureStatus, IndexState, IndexStatus, Install, SearchRequest, SearchResult,
 };
@@ -31,6 +30,13 @@ actions!(magi_search, [SelectUp, SelectDown, Close, OpenSettings]);
 
 const CONTEXT: &str = "SearchWindow";
 pub const DEBOUNCE: Duration = Duration::from_millis(150);
+/// A search shows it is loading only once it has run this long, so fast ones
+/// never flash the bar or dim the list.
+const SLOW: Duration = Duration::from_millis(150);
+/// How long "Path copied" replaces "Copy path".
+const COPIED: Duration = Duration::from_millis(1200);
+/// How long the copied row's highlight takes to fade.
+const COPY_FLASH: Duration = Duration::from_millis(600);
 pub const WIDTH: Pixels = px(680.);
 /// The tallest the window gets. It opens with its top where a window this
 /// tall would be centered, then fits its content, growing downward.
@@ -78,6 +84,13 @@ pub struct SearchView {
     opened_at: Option<Instant>,
     /// Replacing it cancels the debounce or search still pending.
     pending: Option<Task<()>>,
+    /// The search has run past [`SLOW`]; see [`dimmed`](Self::dimmed).
+    slow: bool,
+    slow_timer: Option<Task<()>>,
+    /// Set while the footer says the path was copied; its task clears it.
+    copied: Option<Task<()>>,
+    /// Copies so far; keys the row flash so each copy replays it.
+    copies: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -132,6 +145,10 @@ impl SearchView {
             dark: false,
             opened_at: Some(opened_at),
             pending: None,
+            slow: false,
+            slow_timer: None,
+            copied: None,
+            copies: 0,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -203,7 +220,21 @@ impl SearchView {
                 cx.notify();
             });
         }));
+        self.slow = false;
+        self.slow_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay + SLOW).await;
+            let _ = this.update(cx, |view, cx| {
+                view.slow = true;
+                cx.notify();
+            });
+        }));
         cx.notify();
+    }
+
+    /// The search has been loading past [`SLOW`]: the list dims and the bar
+    /// pulses.
+    fn dimmed(&self) -> bool {
+        self.state.is_loading() && self.slow
     }
 
     /// Opens (or, with `reveal`, shows in the file manager) the selected
@@ -234,6 +265,15 @@ impl SearchView {
         match self.state.selected() {
             Some(result) if !text_selected => {
                 cx.write_to_clipboard(ClipboardItem::new_string(result.path.clone()));
+                self.copies += 1;
+                self.copied = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(COPIED).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.copied = None;
+                        cx.notify();
+                    });
+                }));
+                cx.notify();
             }
             _ => cx.propagate(),
         }
@@ -329,7 +369,8 @@ impl SearchView {
             );
         }
         let results = state.results();
-        let hint = (!state.is_loading())
+        // Kept while typing, so its fade does not replay on every keystroke.
+        let hint = (!self.dimmed())
             .then(|| hint(results.len(), &live.features, &live.dismissed))
             .flatten()
             .map(|h| self.hint(h, p, cx));
@@ -346,7 +387,11 @@ impl SearchView {
         }
         let today = chrono::Local::now().date_naive();
         let selected = state.selected_index();
+        let dimmed = self.dimmed();
+        let reduce_motion = self.copied.is_some() && magi_core::platform::reduce_motion();
         let rows = results.iter().enumerate().map(|(ix, r)| {
+            let flash = (selected == Some(ix) && self.copied.is_some()).then_some(self.copies);
+            let (accent, selection) = (p.accent, p.selection);
             row(ix, r, selected == Some(ix), p, lang, today)
                 // Mouse move, not hover: keyboard scrolling slides rows under a
                 // still cursor and must not steal the selection.
@@ -360,6 +405,22 @@ impl SearchView {
                     this.state.select_at(ix);
                     this.act(false, window, cx);
                 }))
+                // The copied row flashes the accent, then settles back to the
+                // selection color. A new copy changes the id and replays it.
+                // Under reduced motion it is a steady tint while "Path copied" shows.
+                .map(move |row| match flash {
+                    Some(_) if reduce_motion => row
+                        .bg(selection.blend(accent.opacity(0.2)))
+                        .into_any_element(),
+                    Some(n) => row
+                        .with_animation(
+                            ("copied", n),
+                            Animation::new(COPY_FLASH).with_easing(ease_out_quint()),
+                            move |row, t| row.bg(selection.blend(accent.opacity(0.4 * (1. - t)))),
+                        )
+                        .into_any_element(),
+                    None => row.into_any_element(),
+                })
         });
         Some(
             div()
@@ -378,15 +439,24 @@ impl SearchView {
                         .pb(px(6.))
                         .border_t_1()
                         .border_color(p.line)
-                        .when(state.is_loading(), |d| d.opacity(0.45))
-                        .children(rows),
+                        .children(rows)
+                        .map(|list| match dimmed {
+                            true => list
+                                .with_animation(
+                                    "dim",
+                                    Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                                    |list, t| list.opacity(1. - 0.55 * t),
+                                )
+                                .into_any_element(),
+                            false => list.into_any_element(),
+                        }),
                 )
                 .children(hint.map(|h| div().px(px(12.)).pb(px(10.)).child(h)))
                 .into_any_element(),
         )
     }
 
-    fn hint(&self, hint: Hint, p: &Palette, cx: &Context<Self>) -> Div {
+    fn hint(&self, hint: Hint, p: &Palette, cx: &Context<Self>) -> impl IntoElement + use<> {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
         let feature = hint.feature();
@@ -423,7 +493,13 @@ impl SearchView {
         let highlights = name_at
             .map(|at| vec![(at..at + text.name.len(), bold)])
             .unwrap_or_default();
-        div()
+        // A new stage (offer, downloading, updating) fades in again.
+        let stage = match hint {
+            Hint::Offer { .. } => 0u64,
+            Hint::Downloading { .. } => 1,
+            Hint::Updating { .. } => 2,
+        };
+        let hint = div()
             .flex()
             .items_center()
             .gap_3()
@@ -447,7 +523,8 @@ impl SearchView {
                     .icon(IconName::Close)
                     .tooltip(s.dismiss)
                     .on_click(cx.listener(move |this, _, _, cx| this.dismiss(feature, cx))),
-            )
+            );
+        theme::fade_in(hint, ("hint", stage))
     }
 
     /// Always there: the settings gear, the index status (as in the tray)
@@ -470,7 +547,14 @@ impl SearchView {
             &[
                 ("enter", s.open),
                 ("secondary-enter", s.reveal),
-                ("secondary-c", s.copy_path),
+                (
+                    "secondary-c",
+                    if self.copied.is_some() {
+                        s.copied
+                    } else {
+                        s.copy_path
+                    },
+                ),
             ]
         };
         div()
@@ -489,7 +573,7 @@ impl SearchView {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Settings)
-                    .tooltip(s.settings)
+                    .tooltip_with_action(s.settings, &OpenSettings, Some(CONTEXT))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(&OpenSettings, window, cx)
                     })),
@@ -561,10 +645,16 @@ impl Render for SearchView {
                             // fixed at 20 px, so bigger text clips descenders.
                             .child(Input::new(&self.input).appearance(false).large()),
                     )
-                    // ponytail: a static bar; animate it if searches ever
-                    // take long enough for it to look frozen.
-                    .when(self.state.is_loading(), |d| {
-                        d.child(div().h(px(2.)).bg(p.accent).opacity(0.4))
+                    .when(self.dimmed(), |d| {
+                        d.child(
+                            div().h(px(2.)).bg(p.accent).with_animation(
+                                "loading",
+                                Animation::new(Duration::from_millis(1200))
+                                    .repeat()
+                                    .with_easing(pulsating_between(0.25, 0.5)),
+                                |bar, alpha| bar.opacity(alpha),
+                            ),
+                        )
                     })
                     .children(self.body(&p, cx))
                     .child(self.footer(&p, cx)),
@@ -624,6 +714,11 @@ fn row(
         .map(|&m| s.source(m))
         .collect::<Vec<_>>()
         .join(", ");
+    // Feedback on mouse down; the click opens on release.
+    let pressed = Hsla {
+        a: p.selection.a * 2.,
+        ..p.selection
+    };
     div()
         .id(ix)
         .relative()
@@ -635,6 +730,7 @@ fn row(
         .py(px(7.))
         .rounded(px(4.))
         .when(selected, |d| d.bg(p.selection).child(p.accent_bar()))
+        .active(move |s| s.bg(pressed))
         .child(icon(r))
         .child(
             div()
@@ -673,33 +769,10 @@ fn icon(r: &SearchResult) -> AnyElement {
             .size(px(32.))
             .rounded(px(3.))
             .object_fit(ObjectFit::Cover)
-            .with_fallback(move || glyph(kind).into_any_element())
+            .with_fallback(move || theme::kind_glyph(kind, px(32.)).into_any_element())
             .into_any_element(),
-        None => glyph(kind).into_any_element(),
+        None => theme::kind_glyph(kind, px(32.)).into_any_element(),
     }
-}
-
-fn glyph(kind: Kind) -> Div {
-    let (label, color) = match kind {
-        Kind::Pdf => ("PDF", 0xc4314b),
-        Kind::Office => ("DOC", 0x185abd),
-        Kind::Code => ("</>", 0x5c2d91),
-        Kind::Text => ("TXT", 0x6b7280),
-        Kind::Image => ("IMG", 0x6b7280),
-        Kind::Other => ("•", 0x6b7280),
-    };
-    div()
-        .flex_none()
-        .size(px(32.))
-        .rounded(px(3.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgb(color))
-        .text_color(white())
-        .text_size(px(9.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(label)
 }
 
 /// Key hints; `keys` are GPUI keystrokes (`secondary` is Ctrl, or Cmd on

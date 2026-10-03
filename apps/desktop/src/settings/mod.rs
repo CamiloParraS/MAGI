@@ -7,6 +7,7 @@ use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
 use magi_core::discovery::Kind;
 use magi_core::dto::{DownloadError, ErrorCode, FeatureStatus, FileErrorCode, Install, RootStatus};
+use magi_core::features::Feature;
 use magi_core::platform::BackdropSupport;
 
 use crate::i18n::{Lang, Strings};
@@ -23,6 +24,38 @@ pub fn root_state(root: &RootStatus, s: &Strings) -> (&'static str, Tone, Option
         Health::WatchFailed => (s.badge_polling, Tone::Neutral, Some(s.root_polling)),
         Health::Missing => (s.badge_missing, Tone::Warn, Some(s.root_missing)),
         Health::PermissionDenied => (s.badge_denied, Tone::Err, Some(s.root_denied)),
+    }
+}
+
+/// A root's second line: how many of its files are indexed, then what
+/// [`root_state`] explains. No count before the first file is indexed.
+pub fn root_line(root: &RootStatus, s: &Strings, lang: Lang) -> Option<String> {
+    let count = (root.indexed > 0).then(|| lang.plural(&s.root_files, root.indexed));
+    let explain = root_state(root, s).2.map(str::to_owned);
+    match (count, explain) {
+        (Some(count), Some(explain)) => Some(format!("{count} · {explain}")),
+        (count, explain) => count.or(explain),
+    }
+}
+
+/// An image feature is on but the Images type is off, so it finds nothing:
+/// images are then indexed by name only.
+pub fn images_needed(types: &[Kind], features: &[FeatureStatus]) -> bool {
+    !types.contains(&Kind::Image)
+        && features
+            .iter()
+            .any(|f| f.enabled && matches!(f.feature, Feature::ImageText | Feature::ImageVisual))
+}
+
+/// A few of the extensions a type covers, to show what it means. `None`
+/// where the label already says it.
+pub fn kind_examples(kind: Kind) -> Option<&'static str> {
+    match kind {
+        Kind::Text => Some("txt, md, csv, json, yaml…"),
+        Kind::Code => Some("rs, py, js, ts, java, c, go, cs…"),
+        Kind::Office => Some("docx, pptx, xlsx"),
+        Kind::Image => Some("png, jpg, webp, heic, tiff…"),
+        Kind::Pdf | Kind::Other => None,
     }
 }
 
@@ -213,7 +246,6 @@ pub fn slider_from_intensity(intensity: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::i18n::Lang;
-    use magi_core::features::Feature;
 
     fn root(enabled: bool, status: Health) -> RootStatus {
         RootStatus {
@@ -221,6 +253,7 @@ mod tests {
             path: "D:\\Photos".into(),
             enabled,
             status,
+            indexed: 0,
         }
     }
 
@@ -483,5 +516,54 @@ mod tests {
         }
         assert_eq!(slider_from_intensity(0.95), 0.0);
         assert!((slider_from_intensity(0.40) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_root_line_joins_its_count_and_its_explanation() {
+        let (lang, s) = (Lang::En, Lang::En.strings());
+        let line = |indexed, enabled, status| {
+            root_line(
+                &RootStatus {
+                    indexed,
+                    ..root(enabled, status)
+                },
+                s,
+                lang,
+            )
+        };
+        assert_eq!(
+            line(8214, true, Health::Ok).as_deref(),
+            Some("8,214 files indexed")
+        );
+        assert_eq!(
+            line(1, false, Health::Ok).as_deref(),
+            Some("1 file indexed · Paused, not searched")
+        );
+        // Nothing indexed yet: no "0 files" while the first scan runs.
+        assert_eq!(line(0, true, Health::Ok), None);
+        assert_eq!(
+            line(0, false, Health::Ok).as_deref(),
+            Some("Paused, not searched")
+        );
+    }
+
+    #[test]
+    fn image_features_need_the_images_type() {
+        let on = |f| FeatureStatus {
+            feature: f,
+            ..feature(true, Install::NotInstalled)
+        };
+        let all = [Kind::Text, Kind::Image];
+        let no_images = [Kind::Text];
+        assert!(!images_needed(&all, &[on(Feature::ImageText)]));
+        assert!(images_needed(&no_images, &[on(Feature::ImageText)]));
+        assert!(images_needed(&no_images, &[on(Feature::ImageVisual)]));
+        // Search by meaning reads text, not images.
+        assert!(!images_needed(&no_images, &[on(Feature::Meaning)]));
+        let off = FeatureStatus {
+            enabled: false,
+            ..on(Feature::ImageText)
+        };
+        assert!(!images_needed(&no_images, &[off]));
     }
 }

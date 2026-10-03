@@ -50,6 +50,8 @@ pub struct Strings {
     pub open: &'static str,
     pub reveal: &'static str,
     pub copy_path: &'static str,
+    /// Replaces [`copy_path`](Self::copy_path) for a moment after a copy.
+    pub copied: &'static str,
     pub move_selection: &'static str,
     pub close: &'static str,
     pub today: &'static str,
@@ -90,6 +92,7 @@ pub struct Strings {
     pub root_watching: &'static str,
     pub root_polling: &'static str,
     pub root_disabled: &'static str,
+    pub root_files: Plural,
     pub root_missing: &'static str,
     pub root_denied: &'static str,
     pub no_folders: &'static str,
@@ -104,6 +107,12 @@ pub struct Strings {
     pub what_to_index: &'static str,
     pub file_types: &'static str,
     pub file_types_note: &'static str,
+    /// Under the file types when none is checked.
+    pub kind_none: &'static str,
+    /// Under Images, unchecked while an image feature is on.
+    pub images_needed: &'static str,
+    /// Under an image feature that is on while Images is unchecked.
+    pub images_off: &'static str,
     pub kind_text: &'static str,
     pub kind_code: &'static str,
     pub kind_pdf: &'static str,

@@ -3,6 +3,8 @@
 //! They keep their `serde` derives: config and the stable wire names the
 //! tests below pin rely on them.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::db::roots::{Health, Root};
@@ -96,15 +98,20 @@ pub struct RootStatus {
     pub path: String,
     pub enabled: bool,
     pub status: Health,
+    /// Its files in the `indexed` state.
+    pub indexed: u64,
 }
 
-impl From<Root> for RootStatus {
-    fn from(root: Root) -> Self {
+impl RootStatus {
+    /// `counts`: indexed files per root id, as `db::files::count_indexed_by_root`
+    /// returns them.
+    pub(crate) fn new(root: Root, counts: &HashMap<i64, u64>) -> Self {
         Self {
             id: root.id,
             path: root.path.to_string_lossy().into_owned(),
             enabled: root.enabled,
             status: root.status,
+            indexed: counts.get(&root.id).copied().unwrap_or(0),
         }
     }
 }

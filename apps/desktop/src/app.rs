@@ -49,6 +49,8 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         .run(move |cx| {
         gpui_kit::init(cx);
         SearchView::bind_keys(cx);
+        // `with_animation` then renders each animation's static state.
+        cx.set_reduce_motion(magi_core::platform::reduce_motion());
         // The app lives in the tray; closing the search window never quits.
         cx.set_quit_mode(QuitMode::Explicit);
         let hotkey_tx = tx.clone();

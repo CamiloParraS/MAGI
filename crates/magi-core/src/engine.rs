@@ -317,17 +317,19 @@ impl EngineHandle {
     /// returned is the probe's result.
     pub fn add_root(&self, path: &Path) -> Result<RootStatus> {
         let path = path.to_path_buf();
-        let (root, collapsed) = self.write(move |conn| {
+        // Collapsed roots' indexed files are now this root's.
+        let (root, collapsed, counts) = self.write(move |conn| {
             let (root, collapsed) = roots::add_collapsing(conn, &path)?;
             roots::set_access(conn, root.id, &FsProbe.probe(&root.path))?;
-            Ok((roots::get(conn, root.id)?, collapsed))
+            let counts = files::count_indexed_by_root(conn)?;
+            Ok((roots::get(conn, root.id)?, collapsed, counts))
         })?;
         for id in collapsed {
             self.unwatch(id);
         }
         let root = self.watch(root)?;
         let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
-        Ok(root.into())
+        Ok(RootStatus::new(root, &counts))
     }
 
     /// Stops watching a root and purges everything indexed under it (item 12).
@@ -532,10 +534,7 @@ impl StatusSource {
             skipped: count(FileState::Skipped),
             errors: count(FileState::Error),
             current_file: current_file.map(|p| p.to_string_lossy().into_owned()),
-            roots: roots::list(&conn)?
-                .into_iter()
-                .map(RootStatus::from)
-                .collect(),
+            roots: root_statuses(&conn)?,
         })
     }
 }
@@ -543,6 +542,15 @@ impl StatusSource {
 /// Sends the status to every subscriber whenever it changes. The database is
 /// read only after the writer applied something, or the pause or scan state
 /// flipped, so an idle engine costs a few atomic loads twice a second.
+/// Every root, with its indexed-file count.
+pub(crate) fn root_statuses(conn: &Connection) -> Result<Vec<RootStatus>> {
+    let counts = files::count_indexed_by_root(conn)?;
+    Ok(roots::list(conn)?
+        .into_iter()
+        .map(|root| RootStatus::new(root, &counts))
+        .collect())
+}
+
 fn status_thread(source: &StatusSource, subscribers: &Subscribers, closed: &Receiver<()>) {
     let mut seen = None;
     let mut last = None;
