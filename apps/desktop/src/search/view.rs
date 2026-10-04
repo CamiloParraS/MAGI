@@ -64,6 +64,8 @@ pub struct Live {
     /// A shortcut that could not be registered (another app or the OS has
     /// it); settings asks for a different one.
     pub hotkey_conflict: Option<String>,
+    /// The search window is open; onboarding says the hotkey closes it.
+    pub search_open: bool,
 }
 
 impl Live {
@@ -76,6 +78,7 @@ impl Live {
             dismissed: Vec::new(),
             hotkey_presses: 0,
             hotkey_conflict: None,
+            search_open: false,
         }
     }
 }

@@ -42,6 +42,13 @@ pub enum AppEvent {
 
 pub type Events = async_channel::Sender<AppEvent>;
 
+/// Asks the shell to register `spec` in place of the hotkey (FR-7
+/// conflict detection); true when it did, and the caller then saves it.
+pub async fn register_hotkey(events: &Events, spec: String) -> bool {
+    let (reply, registered) = async_channel::bounded(1);
+    events.send(AppEvent::Hotkey(spec, reply)).await.is_ok() && registered.recv().await == Ok(true)
+}
+
 /// Starts the engine host and GPUI; returns when the app quits. `first` is
 /// `None` for a launch at login, which opens no window.
 pub fn run(
@@ -357,7 +364,12 @@ impl Shell {
         match gpui_kit::open_window(options, cx, move |window, cx| {
             cx.new(|cx| SearchView::new(host, live, events, backdrop, opened_at, window, cx))
         }) {
-            Ok((handle, _)) => {
+            Ok((handle, view)) => {
+                // However it closes (hotkey, Esc, opening a file).
+                set_search_open(&self.live, true, cx);
+                let live = self.live.clone();
+                cx.observe_release(&view, move |_, cx| set_search_open(&live, false, cx))
+                    .detach();
                 if matches!(backdrop, theme::Backdrop::Blurred { .. }) {
                     clear_root_background(handle, cx);
                 }
@@ -432,6 +444,13 @@ fn set_launch_at_login(on: bool) {
     if let Err(error) = done {
         tracing::warn!(%error, on, "could not change the launch at login");
     }
+}
+
+fn set_search_open(live: &Entity<Live>, open: bool, cx: &mut App) {
+    live.update(cx, |live, cx| {
+        live.search_open = open;
+        cx.notify();
+    });
 }
 
 /// Brings a window forward; false when it is not open (never opened, or

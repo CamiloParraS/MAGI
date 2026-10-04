@@ -198,6 +198,7 @@ pub const STRINGS: Strings = Strings {
     ob_background_note: "Magi waits in the tray and keeps the index up to date as files change.",
     ob_search_with: "Open search any time with",
     ob_hotkey_works: "It works. Press it again to close search.",
+    ob_hotkey_worked: "It works.",
     ob_done: "You're all set",
     ob_done_note: "You can start searching now. Magi keeps getting to know your files in the background, so results get better over the next few minutes.",
     ob_try_hotkey: "Open search from anywhere with",

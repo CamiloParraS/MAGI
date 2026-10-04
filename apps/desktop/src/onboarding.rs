@@ -270,6 +270,9 @@ pub struct OnboardingView {
     /// user trying the hotkey.
     hotkey_presses: u32,
     focus: FocusHandle,
+    /// Focused while the finish step's shortcut recorder waits for keys.
+    recorder: FocusHandle,
+    recording: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -316,6 +319,8 @@ impl OnboardingView {
             forward: true,
             hotkey_presses,
             focus: cx.focus_handle(),
+            recorder: cx.focus_handle(),
+            recording: false,
             _subscriptions: subscriptions,
         };
         window.focus(&view.focus, cx);
@@ -662,7 +667,7 @@ impl OnboardingView {
                         .gap_2()
                         .text_color(p.tone(Tone::Ok))
                         .child(Icon::new(IconName::Check).size(px(14.)))
-                        .child(s.ob_hotkey_works),
+                        .child(self.works(s, cx)),
                     "hotkey-works",
                 )
             }))
@@ -670,6 +675,57 @@ impl OnboardingView {
 
     fn hotkey_tried(&self, cx: &App) -> bool {
         self.live.read(cx).hotkey_presses > self.hotkey_presses
+    }
+
+    /// "Press it again to close" only while search is open.
+    fn works(&self, s: &Strings, cx: &App) -> &'static str {
+        if self.live.read(cx).search_open {
+            s.ob_hotkey_works
+        } else {
+            s.ob_hotkey_worked
+        }
+    }
+
+    /// The finish step's Change: the recorder takes the next shortcut, as
+    /// in settings; the shell registers it before it is saved (FR-7).
+    pub fn record(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(spec) = crate::hotkey::from_keystroke(k) else {
+            return;
+        };
+        self.recording = false;
+        cx.notify();
+        let (host, events) = (self.host.clone(), self.events.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            if !crate::app::register_hotkey(&events, spec.clone()).await {
+                return;
+            }
+            let saved = cx
+                .background_executor()
+                .spawn(async move { save_step(&host, json!({ "hotkey": spec })) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match saved {
+                    Ok(ui) => {
+                        view.hotkey = ui.hotkey.clone();
+                        let _ = view.events.try_send(AppEvent::Ui(ui));
+                    }
+                    Err(error) => view.error = Some(ErrorCode::from(&error)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn toggle_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.recording = !self.recording;
+        if self.recording {
+            self.error = None;
+            window.focus(&self.recorder, cx);
+        } else {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
     }
 
     /// The finish line: setup is done, so it leads with the shortcut and
@@ -722,22 +778,57 @@ impl OnboardingView {
                     .text_sm()
                     .text_color(p.tone(Tone::Ok))
                     .child(Icon::new(IconName::Check).size(px(14.)))
-                    .child(s.ob_hotkey_works),
+                    .child(self.works(s, cx)),
                 "done-hotkey-works",
             )
             .into_any_element()
         } else {
             note(p).mt_0().child(s.ob_try_it).into_any_element()
         };
+        let conflict = live.hotkey_conflict.is_some().then(|| {
+            note(p)
+                .mt_0()
+                .text_color(p.warn)
+                .child(format!("{}. {}", s.shortcut_taken, s.shortcut_taken_note))
+        });
+        let recording = self.recording;
         let shortcut = card(p)
             .w_full()
             .flex_col()
             .items_center()
             .gap(px(14.))
             .py(px(24.))
+            .track_focus(&self.recorder)
+            .when(recording, |d| {
+                d.border_color(p.accent).on_key_down(cx.listener(
+                    |this, e: &KeyDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.record(&e.keystroke, window, cx);
+                    },
+                ))
+            })
             .child(div().text_color(p.mute).child(s.ob_try_hotkey))
-            .child(keys)
-            .child(try_it);
+            .child(if recording {
+                note(p)
+                    .mt_0()
+                    .child(s.shortcut_recording)
+                    .into_any_element()
+            } else {
+                keys.into_any_element()
+            })
+            .children((!recording).then_some(try_it))
+            .children(conflict)
+            .child(
+                Button::new("change-hotkey")
+                    .small()
+                    .ghost()
+                    .label(if recording {
+                        s.cancel
+                    } else {
+                        s.shortcut_change
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_recording(window, cx))),
+            );
         let sentence = match ready {
             Readiness::Ready => s.ob_ready.to_string(),
             Readiness::Preparing(Some(feature)) => s
@@ -849,8 +940,17 @@ impl Render for OnboardingView {
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Next, window, cx| this.next(window, cx)))
-            .on_action(cx.listener(|this, _: &Back, _, cx| {
+            // Bindings run before the recorder's keys: while it waits, Enter
+            // does nothing and Esc cancels it.
+            .on_action(cx.listener(|this, _: &Next, window, cx| {
+                if !this.recording {
+                    this.next(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Back, window, cx| {
+                if this.recording {
+                    return this.toggle_recording(window, cx);
+                }
                 if let Some(step) = this.step.back().filter(|_| !this.busy) {
                     this.go(step, cx);
                 }

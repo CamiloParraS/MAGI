@@ -228,6 +228,8 @@ pub struct Strings {
     pub ob_search_with: &'static str,
     /// After the hotkey is pressed on the background step.
     pub ob_hotkey_works: &'static str,
+    /// The same once search is closed again.
+    pub ob_hotkey_worked: &'static str,
     /// The last step's title: setup is done.
     pub ob_done: &'static str,
     pub ob_done_note: &'static str,

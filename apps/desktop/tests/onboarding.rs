@@ -85,5 +85,19 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
     assert!(last.launch_at_login);
     assert_eq!(last.onboarding, Onboarding::Done);
     assert_eq!(saved(), Onboarding::Done);
+
+    // The finish step's Change: registered by the shell, then saved.
+    let key = gpui_kit::Keystroke::parse("ctrl-alt-j").unwrap();
+    window
+        .update(cx, |view, w, cx| view.record(&key, w, cx))
+        .unwrap();
+    cx.run_until_parked();
+    let Ok(AppEvent::Hotkey(spec, reply)) = rx.try_recv() else {
+        panic!("the shell was not asked to register it");
+    };
+    assert_eq!(spec, "Ctrl+Alt+J");
+    reply.try_send(true).unwrap();
+    cx.run_until_parked();
+    assert_eq!(host.settings().unwrap().ui.hotkey, "Ctrl+Alt+J");
     host.shutdown();
 }

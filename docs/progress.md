@@ -2370,6 +2370,8 @@ Hotkey recorder and conflict detection (FR-7, FR-9, SPEC §6.2, 2026-10-04):
 - Conflict detection: the shell registers the new shortcut before anything is saved (`AppEvent::Hotkey`, `hotkey::Hotkey::set`); if another app or the OS holds it, or it is Alt+Space / Cmd/Win+Space (`hotkey::reserved`, which register but belong to the OS), the old one stays registered, nothing is saved, and a warning box under it says "Another app or the system uses this shortcut · Pick a different combination." with the combination. A shortcut that fails to register at startup shows the same box. A change applies at once, no restart.
 - Tests: `hotkey::tests` (keystroke → setting, what is not a shortcut, reserved combos), `tests/settings.rs` (Esc and Shift+K send nothing; Ctrl+Alt+K asks the shell; a refusal saves nothing, an accept saves it).
 - Not tried by hand: recording in the running app (key events reaching the box) and a real conflict with another app's shortcut.
+- Onboarding's finish step has the same Change under the keycaps (user request): Esc cancels and Enter does nothing while it waits (the step's Enter/Esc bindings run before key listeners); a refused shortcut shows the conflict line in the card. Test: `tests/onboarding.rs` records Ctrl+Alt+J, the shell accepts, it is saved.
+- "It works. Press it again to close search." stayed after search closed (user report): the shell now tracks whether the search window is open (`Live::search_open`, cleared when its view is released, however it closed), and onboarding says just "It works." once it is closed. Not checked by hand.
 
 Open:
 

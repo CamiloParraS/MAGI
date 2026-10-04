@@ -631,12 +631,11 @@ impl SettingsView {
         };
         self.recording = false;
         cx.notify();
-        let (reply, registered) = async_channel::bounded(1);
-        let _ = self.events.try_send(AppEvent::Hotkey(spec.clone(), reply));
+        let events = self.events.clone();
         cx.spawn_in(window, async move |this, cx| {
             // ponytail: a failed save leaves the new hotkey registered until
             // restart; re-register the old one if that ever matters.
-            if registered.recv().await == Ok(true) {
+            if crate::app::register_hotkey(&events, spec.clone()).await {
                 let _ = this.update_in(cx, |view, window, cx| {
                     if spec != view.ui.hotkey {
                         view.save(
