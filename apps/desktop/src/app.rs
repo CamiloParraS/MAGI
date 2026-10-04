@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use gpui_kit::*;
-use magi_core::config::UiConfig;
+use magi_core::config::{Onboarding, UiConfig};
 use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
@@ -18,8 +18,8 @@ use crate::theme;
 use crate::tray::{Tray, TrayAction};
 
 pub enum AppEvent {
-    /// A plain launch: onboarding while no folder is configured (FR-10),
-    /// else the settings window; or bring either forward. The app stays
+    /// A plain launch: onboarding until it is done (FR-10), else the
+    /// settings window; or bring either forward. The app stays
     /// usable without a tray (SPEC.md §6.3).
     Show,
     /// Open the settings window, or bring it forward (the search window's
@@ -173,11 +173,11 @@ impl Shell {
                 if activate(self.onboarding, cx) || activate(self.settings, cx) {
                     return ControlFlow::Continue(());
                 }
-                // ponytail: a DB read on the main thread, once per launch,
-                // as the settings window's own.
-                match self.host.list_roots() {
-                    Ok(roots) if roots.is_empty() => self.open_onboarding(cx),
-                    _ => self.open_settings(cx),
+                // Onboarding saves its progress; until it is done it resumes.
+                if self.ui.onboarding == Onboarding::Done {
+                    self.open_settings(cx);
+                } else {
+                    self.open_onboarding(cx);
                 }
             }
             AppEvent::Settings | AppEvent::Tray(TrayAction::OpenSettings) => {

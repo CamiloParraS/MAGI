@@ -61,7 +61,9 @@ doesn't exist on disk, and `ui.transparency_intensity` outside 0.40–0.95.
 M6 adds `[features] meaning = true, image_text = true, image_visual = false`
 (desired state only) and `ui.language` (`system|en|es`),
 `ui.transparency_mode` (`match_system|always|never`) and
-`ui.transparency_intensity` (default 0.75). Unknown enum values fail to parse.
+`ui.transparency_intensity` (default 0.75), and `ui.onboarding`
+(`folders|features|background|done`, default `folders`): the onboarding step
+to resume at, saved as each step completes. Unknown enum values fail to parse.
 The default `exclude_globs` also skip Unity's regenerated `Library` caches,
 `*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
 apply only when the config file is first written: an existing config keeps
@@ -629,4 +631,4 @@ subscriber wired up yet. Deferred to Plan 5.
 
 ### Desktop app (M6 Plan 3)
 
-`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. A plain launch (first or forwarded) opens onboarding while no root is configured (FR-10), else settings. `magi --background` is the launch at login's command line (`auto-launch`, registered per user while `ui.launch_at_login` is true; the shell applies a change of it): it starts in the tray and opens no window, and exits at once if magi is already running. Logs go to the file set up in `logging.rs`.
+`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. A plain launch (first or forwarded) opens onboarding until `ui.onboarding` is `done` (FR-10), resuming at the saved step, else settings; the search window's gear and the tray open settings. `magi --background` is the launch at login's command line (`auto-launch`, registered per user while `ui.launch_at_login` is true; the shell applies a change of it): it starts in the tray and opens no window, and exits at once if magi is already running. Logs go to the file set up in `logging.rs`.

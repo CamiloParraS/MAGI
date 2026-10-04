@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::{AppContext as _, TestAppContext};
+use magi_core::config::Onboarding;
 use magi_core::features::Feature;
 use magi_core::host::{Host, HostPaths};
 use magi_desktop::app::AppEvent;
@@ -38,12 +39,20 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
         live.features = host.features().status().unwrap();
         live
     });
-    let window =
-        cx.add_window(|window, cx| OnboardingView::new(host.clone(), live, tx, window, cx));
-    let step = |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.step()).unwrap();
-    assert_eq!(step(cx), Step::Folders);
-    window.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
+    let open = |cx: &mut TestAppContext| {
+        let (host, live, tx) = (host.clone(), live.clone(), tx.clone());
+        cx.add_window(|window, cx| OnboardingView::new(host, live, tx, window, cx))
+    };
+    let saved = || host.settings().unwrap().ui.onboarding;
+    let first = open(cx);
+    assert_eq!(first.update(cx, |v, _, _| v.step()).unwrap(), Step::Folders);
+    first.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
     cx.run_until_parked();
+    assert_eq!(saved(), Onboarding::Features, "a completed step is saved");
+
+    // Left early: the next onboarding resumes where this one stopped.
+    let window = open(cx);
+    let step = |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.step()).unwrap();
     assert_eq!(step(cx), Step::Features);
 
     // Unchecking both defaults: keyword search only, nothing downloaded.
@@ -56,6 +65,7 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
         .unwrap();
     cx.run_until_parked();
     assert_eq!(step(cx), Step::Background);
+    assert_eq!(saved(), Onboarding::Background);
     let features = host.settings().unwrap().features;
     assert!(!features.meaning && !features.image_text && !features.image_visual);
 
@@ -64,10 +74,16 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
     window.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
     cx.run_until_parked();
     assert_eq!(step(cx), Step::Indexing);
-    match rx.try_recv() {
-        Ok(AppEvent::Ui(ui)) => assert!(ui.launch_at_login),
-        _ => panic!("the shell got no ui settings"),
-    }
-    assert!(host.settings().unwrap().ui.launch_at_login);
+    // Every saved step reaches the shell; the last one finishes onboarding.
+    let last = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::Ui(ui) => Some(ui),
+            _ => None,
+        })
+        .last()
+        .expect("the shell got no ui settings");
+    assert!(last.launch_at_login);
+    assert_eq!(last.onboarding, Onboarding::Done);
+    assert_eq!(saved(), Onboarding::Done);
     host.shutdown();
 }

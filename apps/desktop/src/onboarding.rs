@@ -1,7 +1,9 @@
 //! First-run onboarding (FR-10): folders, with each one's status as the
 //! permission check → search features, with consent to download → start with
-//! the computer → the first index's progress. Opened by a plain launch while
-//! no folder is configured; closing it at any step leaves the app running.
+//! the computer → the first index's progress. Each step saves the next one to
+//! `ui.onboarding` when it completes; a plain launch opens onboarding until
+//! the background step saves `done`, and it resumes at the saved step.
+//! Closing it at any step leaves the app running.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -9,8 +11,9 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::config::UiConfig;
+use magi_core::config::{Onboarding, UiConfig};
 use magi_core::dto::{ErrorCode, FeatureStatus, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
@@ -32,6 +35,18 @@ pub enum Step {
     Features,
     Background,
     Indexing,
+}
+
+/// The saved resume point; `Done` only shows if a window was already open.
+impl From<Onboarding> for Step {
+    fn from(saved: Onboarding) -> Self {
+        match saved {
+            Onboarding::Folders => Self::Folders,
+            Onboarding::Features => Self::Features,
+            Onboarding::Background => Self::Background,
+            Onboarding::Done => Self::Indexing,
+        }
+    }
 }
 
 const STEPS: [Step; 4] = [
@@ -110,6 +125,12 @@ pub fn download_total(features: &[FeatureStatus], chosen: &[Feature]) -> u64 {
         .sum()
 }
 
+/// Saves `ui` settings, a step's completion among them; the shell gets the
+/// result (it routes the next plain launch and applies launch at login).
+fn save_step(host: &Host, ui: serde_json::Value) -> magi_core::Result<UiConfig> {
+    host.update_settings(&json!({ "ui": ui })).map(|c| c.ui)
+}
+
 pub struct OnboardingView {
     host: Host,
     live: Entity<Live>,
@@ -141,10 +162,11 @@ impl OnboardingView {
         cx: &mut Context<Self>,
     ) -> Self {
         // ponytail: small reads on the main thread, as the settings window's.
-        let hotkey = host
+        let ui = host
             .settings()
-            .map(|c| c.ui.hotkey)
-            .unwrap_or_else(|_| UiConfig::default().hotkey);
+            .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
+            .map(|c| c.ui)
+            .unwrap_or_default();
         let opening_roots = host
             .list_roots()
             .inspect_err(|error| tracing::warn!(%error, "could not list the roots"))
@@ -162,11 +184,11 @@ impl OnboardingView {
             host,
             live,
             events,
-            step: Step::Folders,
+            step: ui.onboarding.into(),
             chosen: None,
             launch_at_login: true,
             opening_roots,
-            hotkey,
+            hotkey: ui.hotkey,
             busy: false,
             error: None,
             dark: false,
@@ -229,7 +251,11 @@ impl OnboardingView {
             return;
         }
         match self.step {
-            Step::Folders => self.go(Step::Features, cx),
+            Step::Folders => self.apply(
+                Step::Features,
+                |host| save_step(host, json!({ "onboarding": Onboarding::Features })),
+                cx,
+            ),
             Step::Features => {
                 let changes = feature_changes(&self.live.read(cx).features, &self.chosen(cx));
                 self.apply(
@@ -242,23 +268,28 @@ impl OnboardingView {
                                 host.set_feature_enabled(feature, false)?;
                             }
                         }
-                        Ok(None)
+                        save_step(host, json!({ "onboarding": Onboarding::Background }))
                     },
                     cx,
                 );
             }
             Step::Background => {
-                let patch = json!({ "ui": { "launch_at_login": self.launch_at_login } });
-                self.apply(
-                    Step::Indexing,
-                    move |host| host.update_settings(&patch).map(|c| Some(c.ui)),
-                    cx,
-                );
+                let ui = json!({
+                    "launch_at_login": self.launch_at_login,
+                    "onboarding": Onboarding::Done,
+                });
+                self.apply(Step::Indexing, move |host| save_step(host, ui), cx);
             }
-            Step::Indexing => {
-                window.remove_window();
-                let _ = self.events.try_send(AppEvent::Toggle);
-            }
+            Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
+        }
+    }
+
+    /// Closes onboarding, then opens what the user picked (search or
+    /// settings).
+    fn leave(&self, then: Option<AppEvent>, window: &mut Window) {
+        window.remove_window();
+        if let Some(event) = then {
+            let _ = self.events.try_send(event);
         }
     }
 
@@ -274,7 +305,7 @@ impl OnboardingView {
     fn apply(
         &mut self,
         then: Step,
-        job: impl FnOnce(&Host) -> magi_core::Result<Option<UiConfig>> + Send + 'static,
+        job: impl FnOnce(&Host) -> magi_core::Result<UiConfig> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
         let host = self.host.clone();
@@ -288,9 +319,7 @@ impl OnboardingView {
                 view.busy = false;
                 match done {
                     Ok(ui) => {
-                        if let Some(ui) = ui {
-                            let _ = view.events.try_send(AppEvent::Ui(ui));
-                        }
+                        let _ = view.events.try_send(AppEvent::Ui(ui));
                         view.go(then, cx);
                     }
                     Err(error) => {
@@ -590,7 +619,25 @@ impl Render for OnboardingView {
                     .py(px(16.))
                     .border_t_1()
                     .border_color(p.line)
+                    // The last step: the onboarding is saved, any way out is fine.
+                    .when(self.step == Step::Indexing, |bar| {
+                        bar.child(
+                            Button::new("open-settings")
+                                .ghost()
+                                .label(s.open_settings)
+                                .on_click(cx.listener(|this, _, window, _| {
+                                    this.leave(Some(AppEvent::Settings), window)
+                                })),
+                        )
+                    })
                     .child(div().flex_1())
+                    .when(self.step == Step::Indexing, |bar| {
+                        bar.child(
+                            Button::new("close").ghost().label(s.close).on_click(
+                                cx.listener(|this, _, window, _| this.leave(None, window)),
+                            ),
+                        )
+                    })
                     .children(self.step.back().map(|step| {
                         Button::new("back")
                             .ghost()

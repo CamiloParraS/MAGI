@@ -143,6 +143,17 @@ pub enum TransparencyMode {
     Never,
 }
 
+/// The first-run onboarding step to resume at (FR-10); each step saves the
+/// next when it completes, the background step saves `Done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Onboarding {
+    Folders,
+    Features,
+    Background,
+    Done,
+}
+
 /// Allowed `ui.transparency_intensity`: below it text over a busy wallpaper
 /// stops being readable; above it the effect is invisible.
 pub const TRANSPARENCY_INTENSITY: std::ops::RangeInclusive<f32> = 0.40..=0.95;
@@ -158,6 +169,7 @@ pub struct UiConfig {
     pub transparency_mode: TransparencyMode,
     /// Alpha of the tint drawn over the native effect.
     pub transparency_intensity: f32,
+    pub onboarding: Onboarding,
 }
 
 impl Default for UiConfig {
@@ -170,6 +182,7 @@ impl Default for UiConfig {
             language: Language::System,
             transparency_mode: TransparencyMode::MatchSystem,
             transparency_intensity: 0.75,
+            onboarding: Onboarding::Folders,
         }
     }
 }
@@ -413,6 +426,11 @@ file_types = [\"text\", \"pdfs\"]
         assert_eq!(c.ui.language, Language::System);
         assert_eq!(c.ui.transparency_mode, TransparencyMode::MatchSystem);
         assert_eq!(c.ui.transparency_intensity, 0.75);
+        assert_eq!(
+            c.ui.onboarding,
+            Onboarding::Folders,
+            "a first run starts onboarding"
+        );
     }
 
     #[test]
@@ -428,6 +446,7 @@ image_text = false
 language = \"es\"
 transparency_mode = \"never\"
 transparency_intensity = 0.4
+onboarding = \"background\"
 ",
         )
         .unwrap();
@@ -436,6 +455,7 @@ transparency_intensity = 0.4
         assert!(!c.features.image_text && c.features.image_visual);
         assert_eq!(c.ui.language, Language::Es);
         assert_eq!(c.ui.transparency_mode, TransparencyMode::Never);
+        assert_eq!(c.ui.onboarding, Onboarding::Background);
         save_to(&path, &c).unwrap();
         assert_eq!(load_from(&path).unwrap(), c);
     }

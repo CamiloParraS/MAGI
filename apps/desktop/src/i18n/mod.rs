@@ -220,6 +220,7 @@ pub struct Strings {
     pub ob_search_with: &'static str,
     pub ob_indexing: &'static str,
     pub ob_indexing_note: &'static str,
+    pub open_settings: &'static str,
 }
 
 impl Strings {

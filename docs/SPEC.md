@@ -411,6 +411,7 @@ launch_at_login = false            # onboarding offers it checked (ADR-0010)
 language = "system"                # system | en | es; system = es-* → es, else en
 transparency_mode = "match_system" # match_system | always | never (search window only)
 transparency_intensity = 0.75      # 0.40–0.95, alpha of the tint over the native effect
+onboarding = "folders"             # folders | features | background | done; the step onboarding resumes at
 
 [features]                         # desired state; install state is on disk (ADR-0010)
 meaning = true                     # e5

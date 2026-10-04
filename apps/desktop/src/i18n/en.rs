@@ -194,4 +194,5 @@ pub const STRINGS: Strings = Strings {
     ob_search_with: "Open search any time with",
     ob_indexing: "Magi is reading your files",
     ob_indexing_note: "You can close this window; indexing continues in the background.",
+    open_settings: "Open settings",
 };
