@@ -211,7 +211,7 @@ pub const STRINGS: Strings = Strings {
     ob_download_failed: "No se pudo descargar {name}. Puedes intentarlo de nuevo más tarde en Configuración.",
     ob_start_searching: "Empezar a buscar",
     ob_done_note_ready: "Ya puedes empezar a buscar.",
-    key_shift: "Mayús",
+    key_shift: "Shift",
     key_space: "Espacio",
     open_settings: "Abrir configuración",
 };

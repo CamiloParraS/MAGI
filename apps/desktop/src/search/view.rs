@@ -66,6 +66,8 @@ pub struct Live {
     pub hotkey_conflict: Option<String>,
     /// The search window is open; onboarding says the hotkey closes it.
     pub search_open: bool,
+    /// The last query typed; the next window opens with it selected.
+    pub last_query: String,
 }
 
 impl Live {
@@ -79,6 +81,7 @@ impl Live {
             hotkey_presses: 0,
             hotkey_conflict: None,
             search_open: false,
+            last_query: String::new(),
         }
     }
 }
@@ -166,7 +169,24 @@ impl SearchView {
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
+        view.restore_query(window, cx);
         view
+    }
+
+    /// Reopens on the last query, selected so typing replaces it.
+    /// `set_value` emits no `Change`, so the search is started here.
+    fn restore_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.live.read(cx).last_query.clone();
+        if text.is_empty() {
+            return;
+        }
+        self.input.update(cx, |input, cx| {
+            input.set_value(text.clone(), window, cx);
+            input.select_all(window, cx);
+        });
+        if let Some(query) = self.state.set_query(&text) {
+            self.run(query, Duration::ZERO, cx);
+        }
     }
 
     pub fn state(&self) -> &SearchState {
@@ -190,6 +210,7 @@ impl SearchView {
         match event {
             InputEvent::Change => {
                 let text = input.read(cx).value().to_string();
+                self.live.update(cx, |live, _| live.last_query.clone_from(&text));
                 self.pending = None;
                 // Leading edge: a keystroke while idle searches at once; only
                 // the ones that follow while a search is pending wait.
