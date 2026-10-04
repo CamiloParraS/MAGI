@@ -187,6 +187,7 @@ pub enum Field {
     Battery,
     Excludes,
     Feature(Feature),
+    LaunchAtLogin,
     Language,
     Results,
     Theme,
@@ -608,26 +609,17 @@ impl SettingsView {
 
     /// The native folder picker (FR-1), then `add_root`.
     fn add_folder(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |this, cx| match picked.await {
-            Ok(Ok(Some(mut paths))) => {
-                if let Some(path) = paths.pop() {
-                    let _ = this.update(cx, |view, cx| {
-                        view.run(
-                            Field::AddFolder,
-                            move |host| host.engine()?.add_root(&path).map(drop),
-                            cx,
-                        );
-                    });
-                }
+        let picked = pick_folder(cx);
+        cx.spawn(async move |this, cx| {
+            if let Some(path) = picked.await {
+                let _ = this.update(cx, |view, cx| {
+                    view.run(
+                        Field::AddFolder,
+                        move |host| host.engine()?.add_root(&path).map(drop),
+                        cx,
+                    );
+                });
             }
-            Ok(Err(error)) => tracing::warn!(%error, "the folder picker failed"),
-            _ => {}
         })
         .detach();
     }
@@ -1094,6 +1086,28 @@ impl SettingsView {
             )
             .child(
                 self.setting(
+                    Field::LaunchAtLogin,
+                    Some(IconName::Power),
+                    s.launch_at_login,
+                    Some(s.launch_at_login_note),
+                    Switch::new("launch-at-login")
+                        .checked(self.ui.launch_at_login)
+                        .color(p.accent)
+                        .accessibility_label(s.launch_at_login)
+                        .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                            this.save(
+                                Field::LaunchAtLogin,
+                                json!({ "ui": { "launch_at_login": on } }),
+                                window,
+                                cx,
+                            );
+                        })),
+                    s,
+                    p,
+                ),
+            )
+            .child(
+                self.setting(
                     Field::Language,
                     Some(IconName::Globe),
                     s.language,
@@ -1417,16 +1431,36 @@ impl Render for SettingsView {
     }
 }
 
+/// The native folder picker (FR-1): the folder chosen, if any.
+pub(crate) fn pick_folder(cx: &App) -> impl Future<Output = Option<std::path::PathBuf>> + use<> {
+    let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: None,
+    });
+    async move {
+        match picked.await {
+            Ok(Ok(Some(mut paths))) => paths.pop(),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "the folder picker failed");
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
 /// The space between boxes (the variant A mockup's 6 px).
 const STACK_GAP: Pixels = px(6.);
 
-fn stack() -> Div {
+pub(crate) fn stack() -> Div {
     div().flex().flex_col().gap(STACK_GAP)
 }
 
 /// A settings box, as in the variant A mockup. Fields inside it take
 /// `p.solid` so they stand out from the box.
-fn card(p: &Palette) -> Div {
+pub(crate) fn card(p: &Palette) -> Div {
     div()
         .flex()
         .items_center()
@@ -1440,11 +1474,11 @@ fn card(p: &Palette) -> Div {
 }
 
 /// A setting's second line.
-fn note(p: &Palette) -> Div {
+pub(crate) fn note(p: &Palette) -> Div {
     div().mt(px(2.)).text_xs().text_color(p.mute)
 }
 
-fn heading(text: &'static str) -> Div {
+pub(crate) fn heading(text: &'static str) -> Div {
     div()
         .mb(px(18.))
         .text_size(px(26.))

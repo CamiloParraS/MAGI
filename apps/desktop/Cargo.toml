@@ -14,6 +14,7 @@ magi-core = { path = "../../crates/magi-core" }
 gpui-kit = { workspace = true }
 tray-icon = { workspace = true }
 global-hotkey = { workspace = true }
+auto-launch = { workspace = true }
 interprocess = { workspace = true }
 async-channel = { workspace = true }
 icu_locale_core = { workspace = true }

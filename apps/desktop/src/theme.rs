@@ -121,9 +121,15 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
     };
     Theme::change(mode, Some(window), cx);
     // gpui-component's primary is black/white; the mockup's is the accent.
-    let accent = Palette::new(dark).accent;
+    let palette = Palette::new(dark);
+    let accent = palette.accent;
     let on_accent = if dark { black() } else { white() };
     Theme::update(cx, |t| {
+        // Unchecked checkboxes and field borders; the dark default is
+        // nearly invisible on a box.
+        if dark {
+            t.input = palette.mute.opacity(0.6);
+        }
         t.primary = accent;
         t.primary_hover = accent.opacity(0.9);
         t.primary_active = accent.opacity(0.8);

@@ -196,6 +196,30 @@ pub struct Strings {
     pub feature_updating: Plural,
     /// `{n}` is a count.
     pub clear_confirm_body: Plural,
+    pub launch_at_login: &'static str,
+    pub launch_at_login_note: &'static str,
+    /// The onboarding window's title.
+    pub welcome: &'static str,
+    /// `{n}` is the step, `{total}` the number of steps.
+    pub step_of: &'static str,
+    pub back: &'static str,
+    pub continue_: &'static str,
+    /// Continue when the chosen features download something.
+    pub download_and_continue: &'static str,
+    pub ob_folders: &'static str,
+    pub ob_folders_note: &'static str,
+    pub ob_features: &'static str,
+    /// The download consent (FR-10): nothing else goes over the network.
+    pub ob_features_note: &'static str,
+    /// `{size}` is the total download.
+    pub ob_download_total: &'static str,
+    pub ob_nothing_to_download: &'static str,
+    pub ob_background: &'static str,
+    pub ob_background_note: &'static str,
+    /// Followed by the hotkey.
+    pub ob_search_with: &'static str,
+    pub ob_indexing: &'static str,
+    pub ob_indexing_note: &'static str,
 }
 
 impl Strings {

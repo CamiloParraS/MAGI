@@ -11,14 +11,19 @@ use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::i18n::Lang;
+use crate::onboarding::{self, OnboardingView};
 use crate::search::view::{self, Live, SearchView};
 use crate::settings::view::{self as settings, SettingsView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
 
 pub enum AppEvent {
-    /// A plain launch: open the settings window, or bring it forward. The
-    /// app stays usable without a tray (SPEC.md §6.3).
+    /// A plain launch: onboarding while no folder is configured (FR-10),
+    /// else the settings window; or bring either forward. The app stays
+    /// usable without a tray (SPEC.md §6.3).
+    Show,
+    /// Open the settings window, or bring it forward (the search window's
+    /// gear).
     Settings,
     /// Close the search window if it is open, else open it.
     Toggle,
@@ -30,8 +35,12 @@ pub enum AppEvent {
 
 pub type Events = async_channel::Sender<AppEvent>;
 
-/// Starts the engine host and GPUI; returns when the app quits.
-pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>)) -> ExitCode {
+/// Starts the engine host and GPUI; returns when the app quits. `first` is
+/// `None` for a launch at login, which opens no window.
+pub fn run(
+    first: Option<AppEvent>,
+    (tx, rx): (Events, async_channel::Receiver<AppEvent>),
+) -> ExitCode {
     let host_tx = tx.clone();
     let host = match Host::start(HostPaths::default(), move |event| {
         let _ = host_tx.send_blocking(AppEvent::Host(event));
@@ -43,7 +52,14 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
         }
     };
     let ui = host.settings().map(|c| c.ui).unwrap_or_default();
-    let _ = tx.send_blocking(first);
+    // Re-registered at every start: the command follows a moved or updated
+    // executable.
+    if ui.launch_at_login {
+        set_launch_at_login(true);
+    }
+    if let Some(first) = first {
+        let _ = tx.send_blocking(first);
+    }
     gpui_kit::application()
         .with_assets(AppAssets)
         .run(move |cx| {
@@ -75,6 +91,7 @@ pub fn run(first: AppEvent, (tx, rx): (Events, async_channel::Receiver<AppEvent>
             live,
             window: None,
             settings: None,
+            onboarding: None,
             events: tx.clone(),
             _hotkey: hotkey,
             tray,
@@ -98,6 +115,7 @@ struct Shell {
     live: Entity<Live>,
     window: Option<AnyWindowHandle>,
     settings: Option<AnyWindowHandle>,
+    onboarding: Option<AnyWindowHandle>,
     /// For windows that report back to the shell (settings).
     events: Events,
     /// Dropping the manager unregisters the hotkey.
@@ -136,6 +154,9 @@ impl Shell {
                 }
             }
             AppEvent::Ui(ui) => {
+                if ui.launch_at_login != self.ui.launch_at_login {
+                    set_launch_at_login(ui.launch_at_login);
+                }
                 let lang = Lang::current(ui.language);
                 if let Some(tray) = &mut self.tray {
                     tray.set_lang(lang, self.live.read(cx).status.as_ref());
@@ -147,6 +168,17 @@ impl Shell {
                 });
                 // The search window reads the rest when it next opens.
                 self.ui = ui;
+            }
+            AppEvent::Show => {
+                if activate(self.onboarding, cx) || activate(self.settings, cx) {
+                    return ControlFlow::Continue(());
+                }
+                // ponytail: a DB read on the main thread, once per launch,
+                // as the settings window's own.
+                match self.host.list_roots() {
+                    Ok(roots) if roots.is_empty() => self.open_onboarding(cx),
+                    _ => self.open_settings(cx),
+                }
             }
             AppEvent::Settings | AppEvent::Tray(TrayAction::OpenSettings) => {
                 if !activate(self.settings, cx) {
@@ -222,6 +254,34 @@ impl Shell {
         }
     }
 
+    /// A solid window (SPEC M6: only search and settings see through).
+    fn open_onboarding(&mut self, cx: &mut App) {
+        let options = WindowOptions {
+            titlebar: Some(TitlebarOptions {
+                title: Some(self.live.read(cx).lang.strings().welcome.into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                None,
+                onboarding::SIZE,
+                cx,
+            ))),
+            focus: true,
+            show: true,
+            ..Default::default()
+        };
+        let (host, live, events) = (self.host.clone(), self.live.clone(), self.events.clone());
+        match gpui_kit::open_window(options, cx, move |window, cx| {
+            cx.new(|cx| OnboardingView::new(host, live, events, window, cx))
+        }) {
+            Ok((handle, _)) => {
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
+                self.onboarding = Some(handle);
+            }
+            Err(error) => tracing::error!(%error, "could not open the onboarding window"),
+        }
+    }
+
     fn open_window(&mut self, cx: &mut App) {
         let opened_at = Instant::now();
         let backdrop = theme::backdrop(
@@ -268,7 +328,7 @@ impl Shell {
 
 // The default bundle embeds only the component icons; these are the
 // settings sidebar's and rows' extras.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Sparkles, ChartColumn, Keyboard, Trash]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Sparkles, ChartColumn, Keyboard, Trash, Power]);
 
 struct AppAssets;
 
@@ -286,6 +346,31 @@ impl AssetSource for AppAssets {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+}
+
+/// Registers or removes the launch at login (`ui.launch_at_login`); the
+/// login launch passes `--background`, which opens no window. Per user,
+/// never system-wide.
+fn set_launch_at_login(on: bool) {
+    let done = std::env::current_exe()
+        .map_err(anyhow::Error::from)
+        .and_then(|exe| {
+            let launch = auto_launch::AutoLaunchBuilder::new()
+                .set_app_name("Magi")
+                .set_app_path(&exe.to_string_lossy())
+                .set_args(&[crate::BACKGROUND_ARG])
+                .set_windows_enable_mode(auto_launch::WindowsEnableMode::CurrentUser)
+                .build()?;
+            if on {
+                launch.enable()
+            } else {
+                launch.disable()
+            }
+            .map_err(anyhow::Error::from)
+        });
+    if let Err(error) = done {
+        tracing::warn!(%error, on, "could not change the launch at login");
     }
 }
 

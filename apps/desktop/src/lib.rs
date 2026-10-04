@@ -6,6 +6,7 @@ pub mod hotkey;
 pub mod i18n;
 pub mod instance;
 mod logging;
+pub mod onboarding;
 pub mod search;
 pub mod settings;
 pub mod theme;
@@ -15,19 +16,25 @@ use std::process::ExitCode;
 
 use app::AppEvent;
 
+/// The launch at login's argument: start in the tray, open no window.
+pub const BACKGROUND_ARG: &str = "--background";
+
 pub fn run(args: Vec<String>) -> ExitCode {
     logging::init();
     let toggle = args.iter().any(|a| a == "--toggle");
+    let background = args.iter().any(|a| a == BACKGROUND_ARG);
     let event = |toggle| {
         if toggle {
             AppEvent::Toggle
         } else {
-            AppEvent::Settings
+            AppEvent::Show
         }
     };
     let name = instance::socket_name();
     let (tx, rx) = async_channel::unbounded();
     match instance::claim(&name) {
+        // Already running: a launch at login has nothing to show.
+        Ok(instance::Claim::Secondary) if background => return ExitCode::SUCCESS,
         Ok(instance::Claim::Secondary) => {
             let message = if toggle { "toggle" } else { "show" };
             return match instance::forward(&name, message) {
@@ -46,5 +53,5 @@ pub fn run(args: Vec<String>) -> ExitCode {
         }
         Err(error) => tracing::warn!(%error, "running without single-instance"),
     }
-    app::run(event(toggle), (tx, rx))
+    app::run((!background).then(|| event(toggle)), (tx, rx))
 }

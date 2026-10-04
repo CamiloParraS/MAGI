@@ -87,6 +87,8 @@ gpui-kit = "0.7"
 tray-icon = "0.25.1"
 # System-wide hotkey; GPUI has none (ADR-0011).
 global-hotkey = "0.8.0"
+# Launch at login (FR-10), per user; GPUI has none (ADR-0011).
+auto-launch = "0.6.0"
 # Single-instance + `--toggle` over a named pipe / Unix socket, never TCP (SPEC section 6.3, NFR-9).
 interprocess = "2.4.4"
 # Carries tray/hotkey/host/instance events from their threads to GPUI's main thread.

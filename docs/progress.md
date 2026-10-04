@@ -2352,10 +2352,21 @@ Sixth round, from the user's light-mode / Spanish review (2026-09-30):
 - The results footer's Up/Down hint was dropped again: in Spanish it cut the status to "Indexando, f…".
 - Checked by screenshot: light + Spanish (Folders, Save before and after an edit, search window), dark + Spanish (Search features).
 
+Onboarding and launch at login (FR-10, 2026-10-03):
+
+- `onboarding.rs`, four steps in a solid 640×560 window: choose folders (native picker; each folder's status badge and explanation is the permission check, Continue needs one folder) → search features with the download consent (each feature's exact size, the total for the checked ones, "nothing else ever goes over the internet"; the config's defaults are preselected, `meaning` and `image_text` = 148 MB) → "Keep Magi available in the background ☑ Start with your computer" (checked) → the first index's progress (bar, status line, downloads and failed downloads), "You can close this window", and Open search. Leaving the features step enables-and-downloads the checked features and turns off the unchecked ones (only what differs); leaving the third saves `ui.launch_at_login`.
+- A plain launch, first or forwarded, opens onboarding while no folder is configured, else settings; the tray's Settings always opens settings. Closing onboarding early leaves the app running; with no folder, the next plain launch shows it again. With a folder it does not come back: features are then offered by Settings and the search hint (each stating its size), and launch at login by Settings › General. Removing every folder shows onboarding again, with Start with your computer checked whatever was saved.
+- Launch at login: `auto-launch` 0.6 (ADR-0011), per user (`HKCU\…\Run` on Windows, never system-wide), command `magi --background`, which opens no window (and exits at once if magi already runs). The shell registers or removes it when a saved `ui.launch_at_login` changes, and re-registers it at every start while it is on (a moved executable). A failure is logged only; the switch still shows the saved value. Settings › General has the same switch ("Start with your computer").
+- Dark mode: unchecked checkboxes and field borders use a visible border (`theme::sync` sets gpui-component's `input` color), which the consent step needs.
+- Tests: `onboarding::tests` (preselection, which features a confirm changes, the download total), `tests/onboarding.rs` (headless: folder → features unchecked → config has none enabled → background step saves `launch_at_login = true` and sends `AppEvent::Ui`).
+- Checked on Windows 11, isolated dev instance (dark, Spanish, fake embedder), by screenshot and scripted clicks: all four steps; Continue disabled without a folder; the native picker adds a folder shown as "Vigilando"; unchecking both defaults switches the button to Continue and the summary to "nothing to download", and the config gets `meaning = false`, `image_text = false`; with the box unchecked the config gets `launch_at_login = false`; the progress step shows the bar and "Indexando, faltan 133 archivos"; Open search closes onboarding and opens search; the next plain launch opens settings; `--background` starts with no window. Settings › General shows the switch.
+- Keyboard: buttons and checkboxes are gpui-component tab stops, as in settings; not tried by hand. The features step's Continue waits for the features to arrive, so the consent always lists what is applied.
+- Not tried by hand: a real feature download from onboarding, enabling launch at login (it writes the user's registry) and a real sign-in, macOS/Linux autostart, light mode and English. `get_permissions_report` in onboarding is M7.
+
 Open:
 
 - In light mode the see-through slider does nothing below 85 %.
-- Onboarding, autostart, the hotkey recorder, and the startup-failure dialog.
+- The hotkey recorder and the startup-failure dialog.
 - The Index section's unreadable list is read when the section opens and after its actions, not live.
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
 - In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
