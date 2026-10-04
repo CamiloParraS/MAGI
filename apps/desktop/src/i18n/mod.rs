@@ -236,8 +236,11 @@ pub struct Strings {
     pub ob_ready: &'static str,
     /// `{name}` is the feature.
     pub ob_download_failed: &'static str,
-    pub ob_tray_hint: &'static str,
     pub ob_start_searching: &'static str,
+    pub open_settings: &'static str,
+    /// Key names on a keycap, as printed on keyboards in that language.
+    pub key_shift: &'static str,
+    pub key_space: &'static str,
 }
 
 impl Strings {

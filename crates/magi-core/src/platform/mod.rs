@@ -319,6 +319,10 @@ pub fn backdrop_support() -> BackdropSupport {
     }
 }
 
+/// macOS shows modifier keys as symbols (⌘ ⌥ ⇧ ⌃); Windows and Linux by
+/// name (Ctrl, Alt, Shift).
+pub const SYMBOL_MODIFIERS: bool = cfg!(target_os = "macos");
+
 /// The user asked the OS for less motion: Windows' "Show animations" off,
 /// macOS "Reduce motion", GNOME animations off. `false` when unknown.
 pub fn reduce_motion() -> bool {

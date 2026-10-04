@@ -349,7 +349,21 @@ impl Shell {
 
 // The default bundle embeds only the component icons; these are the
 // settings sidebar's and rows' extras.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Sparkles, ChartColumn, Keyboard, Trash, Power]);
+gpui_kit::assets::icon_assets!(
+    ExtraIcons,
+    [
+        Sparkles,
+        ChartColumn,
+        Keyboard,
+        Trash,
+        Power,
+        // Keycaps (onboarding).
+        ArrowBigUp,
+        ChevronUp,
+        Command,
+        Option,
+    ]
+);
 
 struct AppAssets;
 

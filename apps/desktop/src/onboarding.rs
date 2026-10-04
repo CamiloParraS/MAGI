@@ -163,6 +163,70 @@ pub fn readiness(status: Option<&IndexStatus>, features: &[FeatureStatus]) -> Re
     }
 }
 
+/// One key of a shortcut, drawn as a keycap.
+pub struct Cap {
+    pub icon: Option<IconName>,
+    /// Empty when the icon says it all (macOS symbols).
+    pub label: String,
+    /// The space bar.
+    pub wide: bool,
+}
+
+/// `keystroke` as keycaps, modifiers first in the platform's order;
+/// `symbols` is [`magi_core::platform::SYMBOL_MODIFIERS`].
+pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
+    let cap = |icon, label: &str| Cap {
+        icon,
+        label: label.into(),
+        wide: false,
+    };
+    // Each modifier: its symbol on macOS, its name elsewhere.
+    let pick = |symbol, name| {
+        if symbols {
+            cap(Some(symbol), "")
+        } else {
+            cap(None, name)
+        }
+    };
+    let m = &keystroke.modifiers;
+    let mut caps = Vec::new();
+    if m.control {
+        caps.push(pick(IconName::ChevronUp, "Ctrl"));
+    }
+    if m.alt {
+        caps.push(pick(IconName::Option, "Alt"));
+    }
+    if m.shift {
+        // The arrow is printed on Shift keys everywhere.
+        caps.push(cap(
+            Some(IconName::ArrowBigUp),
+            if symbols { "" } else { s.key_shift },
+        ));
+    }
+    if m.platform {
+        caps.push(pick(IconName::Command, "Win"));
+    }
+    let key = keystroke.key.as_str();
+    caps.push(match key {
+        "space" => Cap {
+            icon: None,
+            label: s.key_space.into(),
+            wide: true,
+        },
+        // `k`, `f1`: as printed. `enter`, `tab`: capitalized.
+        _ if key.chars().count() <= 3 => cap(None, &key.to_uppercase()),
+        _ => {
+            let mut chars = key.chars();
+            let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
+            cap(
+                None,
+                &format!("{}{}", first.unwrap_or_default(), chars.as_str()),
+            )
+        }
+    });
+    caps
+}
+
 pub fn progress(st: &IndexStatus) -> Option<f32> {
     if st.state == IndexState::Scanning {
         return None;
@@ -341,10 +405,16 @@ impl OnboardingView {
                 });
                 self.apply(Step::Indexing, move |host| save_step(host, ui), cx);
             }
-            Step::Indexing => {
-                window.remove_window();
-                let _ = self.events.try_send(AppEvent::Toggle);
-            }
+            Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
+        }
+    }
+
+    /// Closes onboarding, then opens what the user picked (search or
+    /// settings).
+    fn leave(&self, then: Option<AppEvent>, window: &mut Window) {
+        window.remove_window();
+        if let Some(event) = then {
+            let _ = self.events.try_send(event);
         }
     }
 
@@ -605,37 +675,69 @@ impl OnboardingView {
     /// The finish line: setup is done, so it leads with the shortcut and
     /// says how far along the files are in one plain sentence, no counts
     /// (Settings › Index has those).
+    /// The finish line, centered: setup is done, so a check, the title, the
+    /// shortcut as keycaps, and one plain sentence on how far the files are,
+    /// no counts (Settings › Index has those).
     fn indexing(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
-        // The page's main element: Kbd's own size is a hint's.
-        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
-            .ok()
-            .map(|k| Kbd::new(k).outline().text_size(px(18.)).px_3().py(px(6.)));
+        let ready = readiness(live.status.as_ref(), &live.features);
+        // "Results get better" only while they still will.
+        let intro = match ready {
+            Readiness::Ready => s.ob_done_note_ready,
+            Readiness::Preparing(_) => s.ob_done_note,
+        };
+        let check = div()
+            .size(px(52.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(p.accent.opacity(0.14))
+            .child(
+                Icon::new(IconName::Check)
+                    .size(px(26.))
+                    .text_color(p.accent),
+            );
+        let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
+            .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS))
+            .unwrap_or_default();
+        let plus = !magi_core::platform::SYMBOL_MODIFIERS;
+        let keys =
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .children(caps.into_iter().enumerate().flat_map(|(ix, c)| {
+                    let sep = (plus && ix > 0)
+                        .then(|| div().text_color(p.mute).child("+").into_any_element());
+                    sep.into_iter().chain([keycap(c, p).into_any_element()])
+                }));
         let tried = self.hotkey_tried(cx);
+        let try_it = if tried {
+            theme::fade_in(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(p.tone(Tone::Ok))
+                    .child(Icon::new(IconName::Check).size(px(14.)))
+                    .child(s.ob_hotkey_works),
+                "done-hotkey-works",
+            )
+            .into_any_element()
+        } else {
+            note(p).mt_0().child(s.ob_try_it).into_any_element()
+        };
         let shortcut = card(p)
+            .w_full()
             .flex_col()
             .items_center()
-            .gap_2()
-            .py(px(22.))
+            .gap(px(14.))
+            .py(px(24.))
             .child(div().text_color(p.mute).child(s.ob_try_hotkey))
-            .children(hotkey)
-            .child(if tried {
-                theme::fade_in(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_sm()
-                        .text_color(p.tone(Tone::Ok))
-                        .child(Icon::new(IconName::Check).size(px(14.)))
-                        .child(s.ob_hotkey_works),
-                    "done-hotkey-works",
-                )
-                .into_any_element()
-            } else {
-                note(p).child(s.ob_try_it).into_any_element()
-            });
-        let ready = readiness(live.status.as_ref(), &live.features);
+            .child(keys)
+            .child(try_it);
         let sentence = match ready {
             Readiness::Ready => s.ob_ready.to_string(),
             Readiness::Preparing(Some(feature)) => s
@@ -643,13 +745,22 @@ impl OnboardingView {
                 .replace("{name}", s.feature(feature).name),
             Readiness::Preparing(None) => s.ob_preparing.to_string(),
         };
+        let state_icon = match ready {
+            Readiness::Ready => Icon::new(IconName::Check)
+                .size(px(14.))
+                .text_color(p.ok)
+                .into_any_element(),
+            Readiness::Preparing(_) => p.dot(Tone::Busy).into_any_element(),
+        };
         // A thin bar while preparing; it has no numbers next to it.
         let bar = (ready != Readiness::Ready).then(|| {
             let bar = Progress::new("preparing").color(p.accent);
-            match live.status.as_ref().and_then(progress) {
-                Some(value) => bar.value(value),
-                None => bar.loading(true),
-            }
+            div()
+                .w(px(260.))
+                .child(match live.status.as_ref().and_then(progress) {
+                    Some(value) => bar.value(value),
+                    None => bar.loading(true),
+                })
         });
         let failed = live
             .features
@@ -661,26 +772,58 @@ impl OnboardingView {
                         .replace("{name}", s.feature(f.feature).name),
                 )
             });
-        // "Results get better" only while they still will.
-        let intro = match ready {
-            Readiness::Ready => s.ob_done_note_ready,
-            Readiness::Preparing(_) => s.ob_done_note,
-        };
-        stack()
-            .child(note(p).mt_0().mb(px(10.)).text_sm().child(intro))
-            .child(shortcut)
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .text_center()
+            .pt(px(8.))
+            .child(check)
+            .child(heading(s.ob_done).mt(px(14.)).mb(px(4.)))
+            .child(div().text_color(p.mute).max_w(px(460.)).child(intro))
+            .child(div().mt(px(22.)).w_full().child(shortcut))
             .child(
                 div()
-                    .mt(px(14.))
+                    .mt(px(18.))
                     .flex()
                     .flex_col()
+                    .items_center()
                     .gap_2()
-                    .child(sentence)
-                    .children(bar),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .child(state_icon)
+                            .child(sentence),
+                    )
+                    .children(bar)
+                    .children(failed),
             )
-            .children(failed)
-            .child(note(p).mt(px(14.)).child(s.ob_tray_hint))
     }
+}
+
+/// A key drawn as a keycap: a deeper bottom edge, like a real key.
+fn keycap(cap: Cap, p: &Palette) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(6.))
+        .h(px(42.))
+        .min_w(px(42.))
+        .px_3()
+        .when(cap.wide, |d| d.w(px(150.)))
+        .rounded(px(8.))
+        .border_1()
+        .border_b(px(3.))
+        .border_color(p.mute.opacity(0.45))
+        .bg(p.solid)
+        .text_size(px(16.))
+        .font_weight(FontWeight::MEDIUM)
+        .children(cap.icon.map(|i| Icon::new(i).size(px(17.))))
+        .when(!cap.label.is_empty(), |d| d.child(cap.label))
 }
 
 impl Render for OnboardingView {
@@ -737,7 +880,9 @@ impl Render for OnboardingView {
                             )
                         },
                     ))
-                    .child(heading(self.step.title(s)).mb(px(6.)))
+                    .when(self.step != Step::Indexing, |d| {
+                        d.child(heading(self.step.title(s)).mb(px(6.)))
+                    })
                     .children(
                         self.step
                             .intro(s)
@@ -767,7 +912,25 @@ impl Render for OnboardingView {
                                 .child(self.download_summary(s, cx)),
                         )
                     })
+                    // The last step: onboarding is saved, any way out is fine.
+                    .when(self.step == Step::Indexing, |bar| {
+                        bar.child(
+                            Button::new("open-settings")
+                                .ghost()
+                                .label(s.open_settings)
+                                .on_click(cx.listener(|this, _, window, _| {
+                                    this.leave(Some(AppEvent::Settings), window)
+                                })),
+                        )
+                    })
                     .child(div().flex_1())
+                    .when(self.step == Step::Indexing, |bar| {
+                        bar.child(
+                            Button::new("close").ghost().label(s.close).on_click(
+                                cx.listener(|this, _, window, _| this.leave(None, window)),
+                            ),
+                        )
+                    })
                     .children(self.step.back().map(|step| {
                         Button::new("back")
                             .ghost()
@@ -806,7 +969,11 @@ fn slide_in(body: Div, step: Step, forward: bool) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's prelude has its own `test` attribute.
-    use super::{Readiness, download_total, feature_changes, preselected, progress, readiness};
+    use super::{
+        Readiness, download_total, feature_changes, key_caps, preselected, progress, readiness,
+    };
+    use crate::i18n::Lang;
+    use gpui_kit::Keystroke;
     use magi_core::dto::{DownloadError, FeatureStatus, IndexState, IndexStatus, Install};
     use magi_core::features::Feature;
 
@@ -949,5 +1116,46 @@ mod tests {
             },
         )];
         assert_eq!(readiness(Some(&idle), &failed), Readiness::Ready);
+    }
+
+    #[test]
+    fn a_shortcut_becomes_keycaps_the_platform_way() {
+        let caps = |key: &str, symbols: bool| {
+            let k = Keystroke::parse(key).unwrap();
+            key_caps(&k, Lang::En.strings(), symbols)
+                .into_iter()
+                .map(|c| (c.label, c.icon.is_some(), c.wide))
+                .collect::<Vec<_>>()
+        };
+        let cap = |label: &str, icon, wide| (label.to_string(), icon, wide);
+        // Windows and Linux: names, Shift with its arrow, a wide Space.
+        assert_eq!(
+            caps("ctrl-shift-space", false),
+            vec![
+                cap("Ctrl", false, false),
+                cap("Shift", true, false),
+                cap("Space", false, true)
+            ]
+        );
+        // macOS: the symbols alone, in its ⌃⌥⇧⌘ order.
+        assert_eq!(
+            caps("cmd-alt-k", true),
+            vec![
+                cap("", true, false),
+                cap("", true, false),
+                cap("K", false, false)
+            ]
+        );
+        assert_eq!(
+            caps("alt-f1", false),
+            vec![cap("Alt", false, false), cap("F1", false, false)]
+        );
+        // Spanish keyboards say Mayús and Espacio.
+        let k = Keystroke::parse("ctrl-shift-space").unwrap();
+        let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(es, ["Ctrl", "Mayús", "Espacio"]);
     }
 }

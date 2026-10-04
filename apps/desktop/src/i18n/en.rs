@@ -202,7 +202,9 @@ pub const STRINGS: Strings = Strings {
     ob_preparing_feature: "Getting {name} ready…",
     ob_ready: "All your files are ready.",
     ob_download_failed: "{name} couldn't download. You can try again later in Settings.",
-    ob_tray_hint: "You can change any of this from the Magi icon next to the clock.",
     ob_start_searching: "Start searching",
     ob_done_note_ready: "You can start searching now.",
+    key_shift: "Shift",
+    key_space: "Space",
+    open_settings: "Open settings",
 };
