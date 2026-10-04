@@ -183,6 +183,8 @@ pub const STRINGS: Strings = Strings {
     },
     launch_at_login: "Start with your computer",
     launch_at_login_note: "Magi opens quietly in the tray when you sign in.",
+    quit_app: "Quit Magi",
+    quit_app_note: "Closing this window keeps Magi running. Quitting stops indexing and the shortcut until you open Magi again.",
     welcome: "Welcome to Magi",
     step_of: "Step {n} of {total}",
     back: "Back",

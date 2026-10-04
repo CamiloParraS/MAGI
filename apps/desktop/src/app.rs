@@ -38,6 +38,9 @@ pub enum AppEvent {
     /// The settings recorder's new hotkey: register it in place of the
     /// current one and reply whether that worked, before it is saved.
     Hotkey(String, async_channel::Sender<bool>),
+    /// The tray's Quit, or Settings › General's for when there is no tray
+    /// (SPEC.md §6.3).
+    Quit,
 }
 
 pub type Events = async_channel::Sender<AppEvent>;
@@ -251,7 +254,7 @@ impl Shell {
                     })
                     .detach();
             }
-            AppEvent::Tray(TrayAction::Quit) => {
+            AppEvent::Quit | AppEvent::Tray(TrayAction::Quit) => {
                 self.close_window(cx);
                 // Blocks until the engine stops; quitting during the startup
                 // walk waits for it (M6 Plan 2 known gap).

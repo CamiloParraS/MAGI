@@ -2373,6 +2373,11 @@ Hotkey recorder and conflict detection (FR-7, FR-9, SPEC §6.2, 2026-10-04):
 - Onboarding's finish step has the same Change under the keycaps (user request): Esc cancels and Enter does nothing while it waits (the step's Enter/Esc bindings run before key listeners); a refused shortcut shows the conflict line in the card. Test: `tests/onboarding.rs` records Ctrl+Alt+J, the shell accepts, it is saved.
 - "It works. Press it again to close search." stayed after search closed (user report): the shell now tracks whether the search window is open (`Live::search_open`, cleared when its view is released, however it closed), and onboarding says just "It works." once it is closed. Not checked by hand.
 
+Quit without a tray (SPEC §6.3, 2026-10-04):
+
+- Settings › General ends with "Quit Magi" ("Closing this window keeps Magi running…") and a Quit button; it sends `AppEvent::Quit`, the same path as the tray's Quit (engine shutdown, then exit). With no tray (GNOME without AppIndicator) the app is now fully usable: a plain launch opens settings, the hotkey or `--toggle` opens search, and settings quits.
+- No test: the button only sends the event the tray's Quit already sends. Not checked by hand.
+
 Open:
 
 - In light mode the see-through slider does nothing below 85 %.
@@ -2381,7 +2386,6 @@ Open:
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
 - In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
-- No quit without a tray: closing settings leaves the app running and only the tray quits (SPEC §6.3 "fully usable without a tray").
 - Remove has no confirmation; after a parent collapsed its children, one Remove purges all of them.
 - In dark mode the off switch has low contrast (gpui-component's default thumb).
 - A switched-off root always reads "Paused, not searched", even if its last health was a problem (it is not probed while off).

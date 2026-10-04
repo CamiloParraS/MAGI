@@ -183,6 +183,8 @@ pub const STRINGS: Strings = Strings {
     },
     launch_at_login: "Iniciar con el equipo",
     launch_at_login_note: "Magi se abre en silencio en la bandeja al iniciar sesión.",
+    quit_app: "Salir de Magi",
+    quit_app_note: "Cerrar esta ventana deja Magi abierto. Al salir se detienen la indexación y el atajo hasta que vuelvas a abrir Magi.",
     welcome: "Te damos la bienvenida a Magi",
     step_of: "Paso {n} de {total}",
     back: "Atrás",

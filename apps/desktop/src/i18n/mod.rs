@@ -206,6 +206,9 @@ pub struct Strings {
     pub clear_confirm_body: Plural,
     pub launch_at_login: &'static str,
     pub launch_at_login_note: &'static str,
+    /// Settings › General: the way to quit without a tray (SPEC.md §6.3).
+    pub quit_app: &'static str,
+    pub quit_app_note: &'static str,
     /// The onboarding window's title.
     pub welcome: &'static str,
     /// `{n}` is the step, `{total}` the number of steps.

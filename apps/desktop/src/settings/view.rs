@@ -196,6 +196,7 @@ pub enum Field {
     SeeThrough,
     Unreadable,
     Clear,
+    Quit,
 }
 
 pub struct SettingsView {
@@ -1219,6 +1220,21 @@ impl SettingsView {
                             .bg(p.solid)
                             .accessibility_label(s.results_shown),
                     ),
+                    s,
+                    p,
+                ),
+            )
+            .child(
+                self.setting(
+                    Field::Quit,
+                    None,
+                    s.quit_app,
+                    Some(s.quit_app_note),
+                    Button::new("quit").label(s.tray_quit).on_click(cx.listener(
+                        |this, _, _, _| {
+                            let _ = this.events.try_send(AppEvent::Quit);
+                        },
+                    )),
                     s,
                     p,
                 ),
