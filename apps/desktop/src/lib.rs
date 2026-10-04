@@ -21,14 +21,20 @@ pub const BACKGROUND_ARG: &str = "--background";
 
 pub fn run(args: Vec<String>) -> ExitCode {
     logging::init();
-    let toggle = args.iter().any(|a| a == "--toggle");
-    let background = args.iter().any(|a| a == BACKGROUND_ARG);
-    let event = |toggle| {
-        if toggle {
-            AppEvent::Toggle
-        } else {
-            AppEvent::Show
-        }
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let background = has(BACKGROUND_ARG);
+    // What this launch asks for, as forwarded to a running instance.
+    let message = if has("--toggle") {
+        "toggle"
+    } else if has("--onboarding") {
+        "onboarding"
+    } else {
+        "show"
+    };
+    let event = |message: &str| match message {
+        "toggle" => AppEvent::Toggle,
+        "onboarding" => AppEvent::Onboarding,
+        _ => AppEvent::Show,
     };
     let name = instance::socket_name();
     let (tx, rx) = async_channel::unbounded();
@@ -36,7 +42,6 @@ pub fn run(args: Vec<String>) -> ExitCode {
         // Already running: a launch at login has nothing to show.
         Ok(instance::Claim::Secondary) if background => return ExitCode::SUCCESS,
         Ok(instance::Claim::Secondary) => {
-            let message = if toggle { "toggle" } else { "show" };
             return match instance::forward(&name, message) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
@@ -48,10 +53,10 @@ pub fn run(args: Vec<String>) -> ExitCode {
         Ok(instance::Claim::Primary(listener)) => {
             let tx = tx.clone();
             instance::serve(listener, move |message| {
-                let _ = tx.send_blocking(event(message == "toggle"));
+                let _ = tx.send_blocking(event(&message));
             });
         }
         Err(error) => tracing::warn!(%error, "running without single-instance"),
     }
-    app::run((!background).then(|| event(toggle)), (tx, rx))
+    app::run((!background).then(|| event(message)), (tx, rx))
 }

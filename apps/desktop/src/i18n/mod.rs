@@ -52,6 +52,8 @@ pub struct Strings {
     pub copy_path: &'static str,
     /// Replaces [`copy_path`](Self::copy_path) for a moment after a copy.
     pub copied: &'static str,
+    /// Shown on the copied result's row, by its date.
+    pub row_copied: &'static str,
     pub move_selection: &'static str,
     pub close: &'static str,
     pub today: &'static str,
@@ -218,9 +220,24 @@ pub struct Strings {
     pub ob_background_note: &'static str,
     /// Followed by the hotkey.
     pub ob_search_with: &'static str,
-    pub ob_indexing: &'static str,
-    pub ob_indexing_note: &'static str,
-    pub open_settings: &'static str,
+    /// After the hotkey is pressed on the background step.
+    pub ob_hotkey_works: &'static str,
+    /// The last step's title: setup is done.
+    pub ob_done: &'static str,
+    pub ob_done_note: &'static str,
+    /// [`ob_done_note`](Self::ob_done_note) once every file is read.
+    pub ob_done_note_ready: &'static str,
+    /// Above the shortcut on the last step.
+    pub ob_try_hotkey: &'static str,
+    pub ob_try_it: &'static str,
+    pub ob_preparing: &'static str,
+    /// `{name}` is the feature downloading.
+    pub ob_preparing_feature: &'static str,
+    pub ob_ready: &'static str,
+    /// `{name}` is the feature.
+    pub ob_download_failed: &'static str,
+    pub ob_tray_hint: &'static str,
+    pub ob_start_searching: &'static str,
 }
 
 impl Strings {

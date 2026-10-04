@@ -16,6 +16,10 @@ setup:
 dev:
     cargo run -p magi-desktop
 
+# Run the desktop app with onboarding reset to its first step (folders and features stay)
+onboarding:
+    cargo run -p magi-desktop -- --onboarding
+
 # Run formatting, lints and all tests
 check:
     cargo fmt --all -- --check

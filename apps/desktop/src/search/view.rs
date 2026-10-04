@@ -29,15 +29,18 @@ use crate::tray::{status_line, status_tone};
 actions!(magi_search, [SelectUp, SelectDown, Close, OpenSettings]);
 
 const CONTEXT: &str = "SearchWindow";
+/// The wait after a keystroke typed while a search is still pending.
 pub const DEBOUNCE: Duration = Duration::from_millis(150);
 /// A search shows it is loading only once it has run this long, so fast ones
 /// never flash the bar or dim the list.
 const SLOW: Duration = Duration::from_millis(150);
 /// How long "Path copied" replaces "Copy path".
 const COPIED: Duration = Duration::from_millis(1200);
+/// The footer's copy hint, whose label becomes "Path copied".
+const COPY_KEY: &str = "secondary-c";
 /// How long the copied row's highlight takes to fade.
 const COPY_FLASH: Duration = Duration::from_millis(600);
-pub const WIDTH: Pixels = px(680.);
+pub const WIDTH: Pixels = px(820.);
 /// The tallest the window gets. It opens with its top where a window this
 /// tall would be centered, then fits its content, growing downward.
 pub const MAX_HEIGHT: Pixels = px(560.);
@@ -56,6 +59,8 @@ pub struct Live {
     /// ponytail: hints closed this session only; persist in config if a
     /// hint that returns after a restart annoys anyone.
     pub dismissed: Vec<Feature>,
+    /// Hotkey presses this run; onboarding confirms one it sees.
+    pub hotkey_presses: u32,
 }
 
 impl Live {
@@ -66,6 +71,7 @@ impl Live {
             status: None,
             features: Vec::new(),
             dismissed: Vec::new(),
+            hotkey_presses: 0,
         }
     }
 }
@@ -87,8 +93,9 @@ pub struct SearchView {
     /// The search has run past [`SLOW`]; see [`dimmed`](Self::dimmed).
     slow: bool,
     slow_timer: Option<Task<()>>,
-    /// Set while the footer says the path was copied; its task clears it.
-    copied: Option<Task<()>>,
+    /// The copied result's `file_id`, set while the footer says the path was
+    /// copied; its task clears it.
+    copied: Option<(i64, Task<()>)>,
     /// Copies so far; keys the row flash so each copy replays it.
     copies: u64,
     _subscriptions: Vec<Subscription>,
@@ -177,8 +184,15 @@ impl SearchView {
             InputEvent::Change => {
                 let text = input.read(cx).value().to_string();
                 self.pending = None;
+                // Leading edge: a keystroke while idle searches at once; only
+                // the ones that follow while a search is pending wait.
+                let delay = if self.state.is_loading() {
+                    DEBOUNCE
+                } else {
+                    Duration::ZERO
+                };
                 match self.state.set_query(&text) {
-                    Some(query) => self.run(query, DEBOUNCE, cx),
+                    Some(query) => self.run(query, delay, cx),
                     None => cx.notify(),
                 }
             }
@@ -266,13 +280,17 @@ impl SearchView {
             Some(result) if !text_selected => {
                 cx.write_to_clipboard(ClipboardItem::new_string(result.path.clone()));
                 self.copies += 1;
-                self.copied = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(COPIED).await;
-                    let _ = this.update(cx, |view, cx| {
-                        view.copied = None;
-                        cx.notify();
-                    });
-                }));
+                let file_id = result.file_id;
+                self.copied = Some((
+                    file_id,
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(COPIED).await;
+                        let _ = this.update(cx, |view, cx| {
+                            view.copied = None;
+                            cx.notify();
+                        });
+                    }),
+                ));
                 cx.notify();
             }
             _ => cx.propagate(),
@@ -390,9 +408,20 @@ impl SearchView {
         let dimmed = self.dimmed();
         let reduce_motion = self.copied.is_some() && magi_core::platform::reduce_motion();
         let rows = results.iter().enumerate().map(|(ix, r)| {
-            let flash = (selected == Some(ix) && self.copied.is_some()).then_some(self.copies);
-            let (accent, selection) = (p.accent, p.selection);
-            row(ix, r, selected == Some(ix), p, lang, today)
+            // The row that was copied, not the selection: it may have moved on.
+            let flash = self
+                .copied
+                .as_ref()
+                .filter(|(id, _)| *id == r.file_id)
+                .map(|_| self.copies);
+            // The flash settles to the row's own background: the selection
+            // color, or none once the selection has moved off it.
+            let accent = p.accent;
+            let base = match selected == Some(ix) {
+                true => p.selection,
+                false => p.selection.opacity(0.),
+            };
+            row(ix, r, selected == Some(ix), flash, p, lang, today)
                 // Mouse move, not hover: keyboard scrolling slides rows under a
                 // still cursor and must not steal the selection.
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -405,18 +434,18 @@ impl SearchView {
                     this.state.select_at(ix);
                     this.act(false, window, cx);
                 }))
-                // The copied row flashes the accent, then settles back to the
-                // selection color. A new copy changes the id and replays it.
-                // Under reduced motion it is a steady tint while "Path copied" shows.
+                // The copied row flashes the accent, then settles back. A new
+                // copy changes the id and replays it. Under reduced motion it
+                // is a steady tint while "Path copied" shows.
                 .map(move |row| match flash {
-                    Some(_) if reduce_motion => row
-                        .bg(selection.blend(accent.opacity(0.2)))
-                        .into_any_element(),
+                    Some(_) if reduce_motion => {
+                        row.bg(copy_tint(base, accent, 0.5)).into_any_element()
+                    }
                     Some(n) => row
                         .with_animation(
                             ("copied", n),
                             Animation::new(COPY_FLASH).with_easing(ease_out_quint()),
-                            move |row, t| row.bg(selection.blend(accent.opacity(0.4 * (1. - t)))),
+                            move |row, t| row.bg(copy_tint(base, accent, 0.8 * (1. - t))),
                         )
                         .into_any_element(),
                     None => row.into_any_element(),
@@ -548,7 +577,7 @@ impl SearchView {
                 ("enter", s.open),
                 ("secondary-enter", s.reveal),
                 (
-                    "secondary-c",
+                    COPY_KEY,
                     if self.copied.is_some() {
                         s.copied
                     } else {
@@ -579,7 +608,10 @@ impl SearchView {
                     })),
             )
             .child(div().flex_1().min_w_0().children(status))
-            .child(keys(pairs))
+            .child(keys(
+                pairs,
+                self.copied.is_some().then_some((self.copies, p)),
+            ))
     }
 }
 
@@ -662,10 +694,22 @@ impl Render for SearchView {
     }
 }
 
+/// A row's background (the selection color, maybe fully transparent) pulled
+/// toward the accent by `k` (0..=1), and more opaque: `blend` alone keeps
+/// the base's alpha, which would barely show.
+fn copy_tint(base: Hsla, accent: Hsla, k: f32) -> Hsla {
+    Hsla {
+        a: base.a + (0.5 - base.a) * k,
+        ..base.blend(accent.opacity(k))
+    }
+}
+
 fn row(
     ix: usize,
     r: &SearchResult,
     selected: bool,
+    // `Some(copies)` while "Copied" shows in place of the match sources.
+    copied: Option<u64>,
     p: &Palette,
     lang: Lang,
     today: NaiveDate,
@@ -756,8 +800,22 @@ fn row(
                 .text_xs()
                 .text_color(p.mute)
                 .child(date)
-                .when(selected && !sources.is_empty(), |d| {
-                    d.child(div().text_color(p.accent).child(sources))
+                .map(|d| match copied {
+                    // Where the eyes are when copying; replays per copy.
+                    Some(n) => d.child(theme::fade_in(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_color(p.accent)
+                            .child(Icon::new(IconName::Check).size(px(12.)))
+                            .child(s.row_copied),
+                        ("row-copied", n),
+                    )),
+                    None if selected && !sources.is_empty() => {
+                        d.child(div().text_color(p.accent).child(sources))
+                    }
+                    None => d,
                 }),
         )
 }
@@ -777,7 +835,11 @@ fn icon(r: &SearchResult) -> AnyElement {
 
 /// Key hints; `keys` are GPUI keystrokes (`secondary` is Ctrl, or Cmd on
 /// macOS), shown the platform's way.
-fn keys(pairs: &[(&str, &'static str)]) -> Div {
+///
+/// `copied` is `Some((copies, palette))` while "Path copied" shows: that
+/// label starts in the accent color and settles to the others' with the
+/// row flash; a new copy replays it.
+fn keys(pairs: &[(&str, &'static str)], copied: Option<(u64, &Palette)>) -> Div {
     div()
         .flex()
         .flex_none()
@@ -787,8 +849,24 @@ fn keys(pairs: &[(&str, &'static str)]) -> Div {
             let kbd = Keystroke::parse(key)
                 .ok()
                 .map(|k| Kbd::new(k).into_any_element());
-            let label =
-                (!label.is_empty()).then(|| div().mr(px(6.)).child(label).into_any_element());
+            let label = (!label.is_empty()).then(|| {
+                let label = div().mr(px(6.)).child(label);
+                match copied {
+                    Some((n, p)) if key == COPY_KEY => {
+                        let (accent, mute) = (p.accent, p.mute);
+                        label
+                            .with_animation(
+                                ("copied-label", n),
+                                Animation::new(COPY_FLASH).with_easing(ease_out_quint()),
+                                move |label, t| {
+                                    label.text_color(mute.blend(accent.opacity(1. - t)))
+                                },
+                            )
+                            .into_any_element()
+                    }
+                    _ => label.into_any_element(),
+                }
+            });
             kbd.into_iter().chain(label)
         }))
 }

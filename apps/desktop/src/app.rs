@@ -25,6 +25,9 @@ pub enum AppEvent {
     /// Open the settings window, or bring it forward (the search window's
     /// gear).
     Settings,
+    /// `magi --onboarding`: onboarding again from its first step (a reset
+    /// for trying it; folders and features stay).
+    Onboarding,
     /// Close the search window if it is open, else open it.
     Toggle,
     Host(HostEvent),
@@ -65,6 +68,7 @@ pub fn run(
         .run(move |cx| {
         gpui_kit::init(cx);
         SearchView::bind_keys(cx);
+        onboarding::bind_keys(cx);
         // `with_animation` then renders each animation's static state.
         cx.set_reduce_motion(magi_core::platform::reduce_motion());
         // The app lives in the tray; closing the search window never quits.
@@ -128,6 +132,10 @@ impl Shell {
     fn handle(&mut self, event: AppEvent, cx: &mut App) -> ControlFlow<()> {
         match event {
             AppEvent::Toggle => {
+                self.live.update(cx, |live, cx| {
+                    live.hotkey_presses += 1;
+                    cx.notify();
+                });
                 if !self.close_window(cx) {
                     self.open_window(cx);
                 }
@@ -179,6 +187,19 @@ impl Shell {
                 } else {
                     self.open_onboarding(cx);
                 }
+            }
+            AppEvent::Onboarding => {
+                if let Some(open) = self.onboarding.take() {
+                    let _ = open.update(cx, |_, window, _| window.remove_window());
+                }
+                // The window opens at the saved step.
+                match self.host.update_settings(&serde_json::json!({
+                    "ui": { "onboarding": Onboarding::Folders }
+                })) {
+                    Ok(config) => self.ui = config.ui,
+                    Err(error) => tracing::warn!(%error, "could not reset the onboarding"),
+                }
+                self.open_onboarding(cx);
             }
             AppEvent::Settings | AppEvent::Tray(TrayAction::OpenSettings) => {
                 if !activate(self.settings, cx) {

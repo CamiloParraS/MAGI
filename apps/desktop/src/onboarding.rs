@@ -14,20 +14,33 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{Onboarding, UiConfig};
-use magi_core::dto::{ErrorCode, FeatureStatus, Install, RootStatus};
+use magi_core::dto::{ErrorCode, FeatureStatus, IndexState, IndexStatus, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use serde_json::json;
+use std::time::Duration;
 
 use crate::app::{AppEvent, Events};
 use crate::i18n::Strings;
 use crate::search::view::{Live, turn_on};
 use crate::settings::view::{card, heading, note, pick_folder, stack};
-use crate::settings::{download_error_label, error_text, hotkey_keystroke, root_state};
+use crate::settings::{error_text, hotkey_keystroke, root_state};
 use crate::theme::{self, Palette, Tone};
-use crate::tray::{status_line, status_tone};
 
 pub const SIZE: Size<Pixels> = size(px(640.), px(560.));
+
+actions!(magi_onboarding, [Next, Back]);
+
+const CONTEXT: &str = "OnboardingWindow";
+
+/// Enter and Escape on the window itself; a focused button or checkbox
+/// takes them first (its context is deeper).
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("enter", Next, Some(CONTEXT)),
+        KeyBinding::new("escape", Back, Some(CONTEXT)),
+    ]);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -66,7 +79,7 @@ impl Step {
             Self::Folders => s.ob_folders,
             Self::Features => s.ob_features,
             Self::Background => s.ob_background,
-            Self::Indexing => s.ob_indexing,
+            Self::Indexing => s.ob_done,
         }
     }
 
@@ -75,6 +88,7 @@ impl Step {
             Self::Folders => Some(s.ob_folders_note),
             Self::Features => Some(s.ob_features_note),
             Self::Background => Some(s.ob_background_note),
+            // Depends on how far the files are: `indexing` says it.
             Self::Indexing => None,
         }
     }
@@ -125,6 +139,42 @@ pub fn download_total(features: &[FeatureStatus], chosen: &[Feature]) -> u64 {
         .sum()
 }
 
+/// The first index's percentage; `None` (an indeterminate bar) while the
+/// scan is still finding files, since each one found would push it back.
+#[derive(Debug, PartialEq)]
+pub enum Readiness {
+    /// Files still being read, or this feature downloading.
+    Preparing(Option<Feature>),
+    Ready,
+}
+
+/// What the last step says, in one plain sentence and no counts. A failed
+/// download is not "preparing": it is reported on its own.
+pub fn readiness(status: Option<&IndexStatus>, features: &[FeatureStatus]) -> Readiness {
+    if let Some(f) = features
+        .iter()
+        .find(|f| matches!(f.install, Install::Downloading { .. }))
+    {
+        return Readiness::Preparing(Some(f.feature));
+    }
+    match status {
+        Some(st) if st.state == IndexState::Idle => Readiness::Ready,
+        _ => Readiness::Preparing(None),
+    }
+}
+
+pub fn progress(st: &IndexStatus) -> Option<f32> {
+    if st.state == IndexState::Scanning {
+        return None;
+    }
+    let total = st.indexed + st.queued;
+    Some(if total == 0 {
+        100.
+    } else {
+        st.indexed as f32 * 100. / total as f32
+    })
+}
+
 /// Saves `ui` settings, a step's completion among them; the shell gets the
 /// result (it routes the next plain launch and applies launch at login).
 fn save_step(host: &Host, ui: serde_json::Value) -> magi_core::Result<UiConfig> {
@@ -150,6 +200,12 @@ pub struct OnboardingView {
     /// The last change that failed, until the next one.
     error: Option<ErrorCode>,
     dark: bool,
+    /// Which way the last step change went; the new step slides in from it.
+    forward: bool,
+    /// `hotkey_presses` when the window opened: a press after it is the
+    /// user trying the hotkey.
+    hotkey_presses: u32,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -180,6 +236,7 @@ impl OnboardingView {
                 this.sync_appearance(window, cx);
             }),
         ];
+        let hotkey_presses = live.read(cx).hotkey_presses;
         let mut view = Self {
             host,
             live,
@@ -192,8 +249,12 @@ impl OnboardingView {
             busy: false,
             error: None,
             dark: false,
+            forward: true,
+            hotkey_presses,
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
+        window.focus(&view.focus, cx);
         view.sync_appearance(window, cx);
         view
     }
@@ -280,20 +341,15 @@ impl OnboardingView {
                 });
                 self.apply(Step::Indexing, move |host| save_step(host, ui), cx);
             }
-            Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
-        }
-    }
-
-    /// Closes onboarding, then opens what the user picked (search or
-    /// settings).
-    fn leave(&self, then: Option<AppEvent>, window: &mut Window) {
-        window.remove_window();
-        if let Some(event) = then {
-            let _ = self.events.try_send(event);
+            Step::Indexing => {
+                window.remove_window();
+                let _ = self.events.try_send(AppEvent::Toggle);
+            }
         }
     }
 
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
+        self.forward = step.index() > self.step.index();
         self.step = step;
         self.error = None;
         cx.notify();
@@ -406,6 +462,22 @@ impl OnboardingView {
                             .children(explain.map(|e| note(p).child(e))),
                     )
                     .child(p.status(badge, tone))
+                    // A rescan probes each root again: a fixed permission or
+                    // a reconnected drive clears the badge.
+                    .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
+                        row.child(
+                            Button::new(("retry-root", id as u64))
+                                .ghost()
+                                .small()
+                                .label(s.try_again)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.run_root(
+                                        |host| host.engine().map(|e| drop(e.rescan())),
+                                        cx,
+                                    );
+                                })),
+                        )
+                    })
                     .child(
                         Button::new(("remove-root", id as u64))
                             .ghost()
@@ -419,9 +491,11 @@ impl OnboardingView {
                     )
             }))
         });
+        let none_yet = self.roots(cx).is_none_or(|roots| roots.is_empty());
         stack().children(rows).child(
             div().mt(px(6.)).flex().child(
                 Button::new("add-folder")
+                    .when(none_yet, |b| b.primary())
                     .small()
                     .icon(IconName::Plus)
                     .label(s.add_folder)
@@ -463,15 +537,19 @@ impl OnboardingView {
                     .child(note(p).pl(px(24.)).child(size)),
             )
         });
-        let total = download_total(&live.features, &chosen);
-        let summary = if total > 0 {
-            s.ob_download_total.replace("{size}", &lang.size(total))
+        stack().children(rows)
+    }
+
+    /// Beside "Download and continue": the size is read as it is agreed to.
+    fn download_summary(&self, s: &Strings, cx: &App) -> String {
+        let live = self.live.read(cx);
+        let total = download_total(&live.features, &self.chosen(cx));
+        if total > 0 {
+            s.ob_download_total
+                .replace("{size}", &live.lang.size(total))
         } else {
             s.ob_nothing_to_download.into()
-        };
-        stack()
-            .children(rows)
-            .child(note(p).mt(px(8.)).text_color(p.ink).child(summary))
+        }
     }
 
     fn background(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -505,52 +583,103 @@ impl OnboardingView {
                     .child(s.ob_search_with)
                     .children(hotkey),
             )
-    }
-
-    fn indexing(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let live = self.live.read(cx);
-        let lang = live.lang;
-        let progress = live.status.as_ref().map(|st| {
-            let total = st.indexed + st.queued;
-            stack()
-                .child(
-                    Progress::new("indexing")
-                        .color(p.accent)
-                        .value(st.indexed as f32 * 100. / total.max(1) as f32),
-                )
-                .child(
+            .children(self.hotkey_tried(cx).then(|| {
+                theme::fade_in(
                     note(p)
+                        .mt(px(6.))
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(p.dot(status_tone(st)))
-                        .child(status_line(st, lang)),
+                        .text_color(p.tone(Tone::Ok))
+                        .child(Icon::new(IconName::Check).size(px(14.)))
+                        .child(s.ob_hotkey_works),
+                    "hotkey-works",
                 )
-        });
-        // The downloads the features step started.
-        let downloads = live.features.iter().filter_map(|f| {
-            let name = s.feature(f.feature).name;
-            match f.install {
-                Install::Downloading { bytes, total } => Some(
-                    note(p).child(
-                        s.downloading
-                            .replace("{name}", name)
-                            .replace("{done}", &lang.size(bytes))
-                            .replace("{total}", &lang.size(total)),
-                    ),
-                ),
-                Install::Failed { code } => Some(
-                    note(p)
-                        .text_color(p.warn)
-                        .child(format!("{name}: {}", download_error_label(code, s))),
-                ),
-                _ => None,
+            }))
+    }
+
+    fn hotkey_tried(&self, cx: &App) -> bool {
+        self.live.read(cx).hotkey_presses > self.hotkey_presses
+    }
+
+    /// The finish line: setup is done, so it leads with the shortcut and
+    /// says how far along the files are in one plain sentence, no counts
+    /// (Settings › Index has those).
+    fn indexing(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        // The page's main element: Kbd's own size is a hint's.
+        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
+            .ok()
+            .map(|k| Kbd::new(k).outline().text_size(px(18.)).px_3().py(px(6.)));
+        let tried = self.hotkey_tried(cx);
+        let shortcut = card(p)
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .py(px(22.))
+            .child(div().text_color(p.mute).child(s.ob_try_hotkey))
+            .children(hotkey)
+            .child(if tried {
+                theme::fade_in(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(p.tone(Tone::Ok))
+                        .child(Icon::new(IconName::Check).size(px(14.)))
+                        .child(s.ob_hotkey_works),
+                    "done-hotkey-works",
+                )
+                .into_any_element()
+            } else {
+                note(p).child(s.ob_try_it).into_any_element()
+            });
+        let ready = readiness(live.status.as_ref(), &live.features);
+        let sentence = match ready {
+            Readiness::Ready => s.ob_ready.to_string(),
+            Readiness::Preparing(Some(feature)) => s
+                .ob_preparing_feature
+                .replace("{name}", s.feature(feature).name),
+            Readiness::Preparing(None) => s.ob_preparing.to_string(),
+        };
+        // A thin bar while preparing; it has no numbers next to it.
+        let bar = (ready != Readiness::Ready).then(|| {
+            let bar = Progress::new("preparing").color(p.accent);
+            match live.status.as_ref().and_then(progress) {
+                Some(value) => bar.value(value),
+                None => bar.loading(true),
             }
         });
+        let failed = live
+            .features
+            .iter()
+            .filter(|f| matches!(f.install, Install::Failed { .. }))
+            .map(|f| {
+                note(p).text_color(p.warn).child(
+                    s.ob_download_failed
+                        .replace("{name}", s.feature(f.feature).name),
+                )
+            });
+        // "Results get better" only while they still will.
+        let intro = match ready {
+            Readiness::Ready => s.ob_done_note_ready,
+            Readiness::Preparing(_) => s.ob_done_note,
+        };
         stack()
-            .children(progress)
-            .children(downloads)
-            .child(note(p).mt(px(12.)).child(s.ob_indexing_note))
+            .child(note(p).mt_0().mb(px(10.)).text_sm().child(intro))
+            .child(shortcut)
+            .child(
+                div()
+                    .mt(px(14.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(sentence)
+                    .children(bar),
+            )
+            .children(failed)
+            .child(note(p).mt(px(14.)).child(s.ob_tray_hint))
     }
 }
 
@@ -571,10 +700,18 @@ impl Render for OnboardingView {
             {
                 s.download_and_continue
             }
-            Step::Indexing => s.tray_open,
+            Step::Indexing => s.ob_start_searching,
             _ => s.continue_,
         };
         div()
+            .key_context(CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &Next, window, cx| this.next(window, cx)))
+            .on_action(cx.listener(|this, _: &Back, _, cx| {
+                if let Some(step) = this.step.back().filter(|_| !this.busy) {
+                    this.go(step, cx);
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -589,20 +726,24 @@ impl Render for OnboardingView {
                     .overflow_y_scroll()
                     .px(px(32.))
                     .pt(px(24.))
-                    .child(
-                        div().mb(px(4.)).text_xs().text_color(p.mute).child(
-                            s.step_of
-                                .replace("{n}", &(self.step.index() + 1).to_string())
-                                .replace("{total}", &STEPS.len().to_string()),
-                        ),
-                    )
+                    // The last step is a finish line, not a step to do.
+                    .child(div().mb(px(4.)).text_xs().text_color(p.mute).when(
+                        self.step != Step::Indexing,
+                        |d| {
+                            d.child(
+                                s.step_of
+                                    .replace("{n}", &(self.step.index() + 1).to_string())
+                                    .replace("{total}", &(STEPS.len() - 1).to_string()),
+                            )
+                        },
+                    ))
                     .child(heading(self.step.title(s)).mb(px(6.)))
                     .children(
                         self.step
                             .intro(s)
                             .map(|text| note(&p).mb(px(16.)).text_sm().child(text)),
                     )
-                    .child(body)
+                    .child(slide_in(body, self.step, self.forward))
                     .children(self.error.as_ref().map(|error| {
                         note(&p)
                             .mt(px(10.))
@@ -619,25 +760,14 @@ impl Render for OnboardingView {
                     .py(px(16.))
                     .border_t_1()
                     .border_color(p.line)
-                    // The last step: the onboarding is saved, any way out is fine.
-                    .when(self.step == Step::Indexing, |bar| {
+                    .when(self.step == Step::Features, |bar| {
                         bar.child(
-                            Button::new("open-settings")
-                                .ghost()
-                                .label(s.open_settings)
-                                .on_click(cx.listener(|this, _, window, _| {
-                                    this.leave(Some(AppEvent::Settings), window)
-                                })),
+                            note(&p)
+                                .text_color(p.ink)
+                                .child(self.download_summary(s, cx)),
                         )
                     })
                     .child(div().flex_1())
-                    .when(self.step == Step::Indexing, |bar| {
-                        bar.child(
-                            Button::new("close").ghost().label(s.close).on_click(
-                                cx.listener(|this, _, window, _| this.leave(None, window)),
-                            ),
-                        )
-                    })
                     .children(self.step.back().map(|step| {
                         Button::new("back")
                             .ghost()
@@ -649,18 +779,35 @@ impl Render for OnboardingView {
                         Button::new("next")
                             .primary()
                             .label(next_label)
-                            .disabled(!can_continue)
+                            .loading(self.busy)
+                            .disabled(!can_continue && !self.busy)
                             .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                     ),
             )
     }
 }
 
+/// How long a step takes to slide in; onboarding is seen once, so a little
+/// longer than [`theme::FADE`].
+const STEP_IN: Duration = Duration::from_millis(220);
+
+/// A step's body fades in from 8px toward where it came from: forward from
+/// the right, back from the left. Under reduced motion GPUI shows the end
+/// state.
+fn slide_in(body: Div, step: Step, forward: bool) -> impl IntoElement {
+    let from = if forward { 8. } else { -8. };
+    body.relative().with_animation(
+        ("step", step.index()),
+        Animation::new(STEP_IN).with_easing(ease_out_quint()),
+        move |el, t| el.opacity(t).left(px(from * (1. - t))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's prelude has its own `test` attribute.
-    use super::{download_total, feature_changes, preselected};
-    use magi_core::dto::{DownloadError, FeatureStatus, Install};
+    use super::{Readiness, download_total, feature_changes, preselected, progress, readiness};
+    use magi_core::dto::{DownloadError, FeatureStatus, IndexState, IndexStatus, Install};
     use magi_core::features::Feature;
 
     fn feature(feature: Feature, enabled: bool, install: Install) -> FeatureStatus {
@@ -752,5 +899,55 @@ mod tests {
             download_total(&some, &[Meaning, ImageText, ImageVisual]),
             100
         );
+    }
+
+    fn status(state: IndexState, indexed: u64, queued: u64) -> IndexStatus {
+        IndexStatus {
+            state,
+            queued,
+            indexed,
+            skipped: 0,
+            errors: 0,
+            current_file: None,
+            roots: vec![],
+        }
+    }
+
+    #[test]
+    fn the_bar_has_no_value_while_the_total_is_still_growing() {
+        // Scanning keeps adding to `queued`: a percentage would go backwards.
+        assert_eq!(progress(&status(IndexState::Scanning, 10, 5)), None);
+        assert_eq!(progress(&status(IndexState::Indexing, 25, 75)), Some(25.));
+        assert_eq!(progress(&status(IndexState::Idle, 0, 0)), Some(100.));
+        assert_eq!(progress(&status(IndexState::Paused, 50, 50)), Some(50.));
+    }
+
+    #[test]
+    fn the_last_step_says_ready_only_when_nothing_is_left() {
+        let idle = status(IndexState::Idle, 10, 0);
+        assert_eq!(readiness(Some(&idle), &first_run()), Readiness::Ready);
+        // Before the first status, and while scanning or reading.
+        assert_eq!(readiness(None, &[]), Readiness::Preparing(None));
+        let busy = status(IndexState::Indexing, 5, 5);
+        assert_eq!(readiness(Some(&busy), &[]), Readiness::Preparing(None));
+        // A download names its feature, even with the files done.
+        let downloading = [feature(
+            Feature::Meaning,
+            true,
+            Install::Downloading { bytes: 1, total: 2 },
+        )];
+        assert_eq!(
+            readiness(Some(&idle), &downloading),
+            Readiness::Preparing(Some(Feature::Meaning))
+        );
+        // A failed download is reported on its own, not as preparing.
+        let failed = [feature(
+            Feature::Meaning,
+            true,
+            Install::Failed {
+                code: DownloadError::DownloadNetworkError,
+            },
+        )];
+        assert_eq!(readiness(Some(&idle), &failed), Readiness::Ready);
     }
 }
