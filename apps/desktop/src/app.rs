@@ -10,6 +10,7 @@ use magi_core::config::{Onboarding, UiConfig};
 use magi_core::dto::IndexState;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
+use crate::hotkey::{self, Hotkey};
 use crate::i18n::Lang;
 use crate::onboarding::{self, OnboardingView};
 use crate::search::view::{self, Live, SearchView};
@@ -34,6 +35,9 @@ pub enum AppEvent {
     Tray(TrayAction),
     /// The settings window saved new `ui` settings; apply them live.
     Ui(UiConfig),
+    /// The settings recorder's new hotkey: register it in place of the
+    /// current one and reply whether that worked, before it is saved.
+    Hotkey(String, async_channel::Sender<bool>),
 }
 
 pub type Events = async_channel::Sender<AppEvent>;
@@ -74,16 +78,20 @@ pub fn run(
         // The app lives in the tray; closing the search window never quits.
         cx.set_quit_mode(QuitMode::Explicit);
         let hotkey_tx = tx.clone();
-        let hotkey = crate::hotkey::register(&ui.hotkey, move || {
+        let mut hotkey = Hotkey::new(move || {
             let _ = hotkey_tx.send_blocking(AppEvent::Toggle);
         })
-        .inspect_err(|error| {
-            tracing::warn!(%error, hotkey = %ui.hotkey, "hotkey not registered; `magi --toggle` still works")
-        })
+        .inspect_err(|error| tracing::warn!(%error, "no hotkey; `magi --toggle` still works"))
         .ok();
+        let mut live = Live::new(Lang::current(ui.language), ui.theme.clone());
+        if let Some(Err(error)) = hotkey.as_mut().map(|h| h.set(&ui.hotkey)) {
+            tracing::warn!(%error, hotkey = %ui.hotkey, "hotkey not registered; `magi --toggle` still works");
+            // Settings asks for another shortcut (SPEC.md §6.2).
+            live.hotkey_conflict = Some(ui.hotkey.clone());
+        }
         let tray_tx = tx.clone();
-        let lang = Lang::current(ui.language);
-        let live = cx.new(|_| Live::new(lang, ui.theme.clone()));
+        let lang = live.lang;
+        let live = cx.new(|_| live);
         let tray = Tray::new(lang, move |action| {
             let _ = tray_tx.send_blocking(AppEvent::Tray(action));
         })
@@ -97,7 +105,7 @@ pub fn run(
             settings: None,
             onboarding: None,
             events: tx.clone(),
-            _hotkey: hotkey,
+            hotkey,
             tray,
             paused: false,
         };
@@ -122,8 +130,7 @@ struct Shell {
     onboarding: Option<AnyWindowHandle>,
     /// For windows that report back to the shell (settings).
     events: Events,
-    /// Dropping the manager unregisters the hotkey.
-    _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
+    hotkey: Option<Hotkey>,
     tray: Option<Tray>,
     paused: bool,
 }
@@ -176,6 +183,24 @@ impl Shell {
                 });
                 // The search window reads the rest when it next opens.
                 self.ui = ui;
+            }
+            AppEvent::Hotkey(spec, reply) => {
+                let set = if hotkey::reserved(&spec) {
+                    Err("reserved by the system".to_owned())
+                } else {
+                    self.hotkey
+                        .as_mut()
+                        .ok_or_else(|| "no hotkey manager".to_owned())
+                        .and_then(|h| h.set(&spec))
+                };
+                if let Err(error) = &set {
+                    tracing::warn!(%error, hotkey = %spec, "hotkey change refused");
+                }
+                self.live.update(cx, |live, cx| {
+                    live.hotkey_conflict = set.is_err().then_some(spec);
+                    cx.notify();
+                });
+                let _ = reply.try_send(set.is_ok());
             }
             AppEvent::Show => {
                 if activate(self.onboarding, cx) || activate(self.settings, cx) {

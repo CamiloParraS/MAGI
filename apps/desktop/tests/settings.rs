@@ -60,5 +60,35 @@ fn a_saved_setting_reaches_the_shell_and_a_rejected_one_its_box(cx: &mut TestApp
     assert_eq!(failed, Some(Field::Excludes));
     assert_eq!(host.settings().unwrap().indexing.exclude_globs, globs);
     assert!(rx.try_recv().is_err(), "nothing to apply");
+
+    // The hotkey recorder: the shell registers a shortcut before it is saved.
+    let record = |key: &str, cx: &mut TestAppContext| {
+        let key = gpui_kit::Keystroke::parse(key).unwrap();
+        window
+            .update(cx, |view, window, cx| view.record(&key, window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        rx.try_recv().ok()
+    };
+    assert!(record("escape", cx).is_none());
+    assert!(record("shift-k", cx).is_none(), "not a shortcut");
+    let Some(AppEvent::Hotkey(spec, reply)) = record("ctrl-alt-k", cx) else {
+        panic!("the shell was not asked to register it");
+    };
+    assert_eq!(spec, "Ctrl+Alt+K");
+    let default = host.settings().unwrap().ui.hotkey;
+    reply.try_send(false).unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        host.settings().unwrap().ui.hotkey,
+        default,
+        "taken: not saved"
+    );
+    let Some(AppEvent::Hotkey(_, reply)) = record("ctrl-alt-k", cx) else {
+        panic!("no second try");
+    };
+    reply.try_send(true).unwrap();
+    cx.run_until_parked();
+    assert_eq!(host.settings().unwrap().ui.hotkey, "Ctrl+Alt+K");
     host.shutdown();
 }

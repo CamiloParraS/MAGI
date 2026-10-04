@@ -180,6 +180,7 @@ fn count_choices(lang: Lang, current: u32) -> Vec<Choice<u32>> {
 /// Where a failed change is shown: inside the box it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
+    Hotkey,
     AddFolder,
     Root(i64),
     FileTypes,
@@ -221,6 +222,9 @@ pub struct SettingsView {
     see_through: Entity<SliderState>,
     /// The slider takes no keys; this wrapper moves it with Left/Right (NFR-10).
     see_through_focus: FocusHandle,
+    /// Focused while the shortcut recorder waits for keys.
+    recorder: FocusHandle,
+    recording: bool,
     /// Back to the top on every section change.
     pane_scroll: ScrollHandle,
     dark: bool,
@@ -367,6 +371,8 @@ impl SettingsView {
             support: magi_core::platform::backdrop_support(),
             see_through,
             see_through_focus: cx.focus_handle().tab_stop(true),
+            recorder: cx.focus_handle(),
+            recording: false,
             pane_scroll: ScrollHandle::new(),
             dark: false,
             opening_roots,
@@ -605,6 +611,45 @@ impl SettingsView {
         self.see_through
             .update(cx, |slider, cx| slider.set_value(value, window, cx));
         self.save_intensity(value, window, cx);
+    }
+
+    /// The recorder's keys: Esc cancels; a usable shortcut is registered by
+    /// the shell first, and saved only if that worked. Anything else (a
+    /// modifier still held, plain typing) keeps waiting.
+    fn record_hotkey(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.record(&event.keystroke, window, cx);
+    }
+
+    pub fn record(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        if k.key == "escape" && !k.modifiers.modified() {
+            self.recording = false;
+            return cx.notify();
+        }
+        let Some(spec) = crate::hotkey::from_keystroke(k) else {
+            return;
+        };
+        self.recording = false;
+        cx.notify();
+        let (reply, registered) = async_channel::bounded(1);
+        let _ = self.events.try_send(AppEvent::Hotkey(spec.clone(), reply));
+        cx.spawn_in(window, async move |this, cx| {
+            // ponytail: a failed save leaves the new hotkey registered until
+            // restart; re-register the old one if that ever matters.
+            if registered.recv().await == Ok(true) {
+                let _ = this.update_in(cx, |view, window, cx| {
+                    if spec != view.ui.hotkey {
+                        view.save(
+                            Field::Hotkey,
+                            json!({ "ui": { "hotkey": spec } }),
+                            window,
+                            cx,
+                        );
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     /// The native folder picker (FR-1), then `add_root`.
@@ -1063,27 +1108,70 @@ impl SettingsView {
     }
 
     fn general(&self, p: &Palette, cx: &Context<Self>) -> Div {
-        let s = self.live.read(cx).lang.strings();
-        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.ui.hotkey))
-            .ok()
-            .map(Kbd::new);
+        let live = self.live.read(cx);
+        let s = live.lang.strings();
+        let kbd = |spec: &str| Keystroke::parse(&hotkey_keystroke(spec)).ok().map(Kbd::new);
+        let recording = self.recording;
+        let conflict = live.hotkey_conflict.as_deref().map(|taken| {
+            card(p)
+                .border_color(p.warn)
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .size(px(16.))
+                        .text_color(p.warn),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_color(p.warn).child(s.shortcut_taken))
+                        .child(note(p).child(s.shortcut_taken_note)),
+                )
+                .children(kbd(taken))
+        });
         stack()
             .child(
-                card(p)
+                self.card(Field::Hotkey, p)
+                    .track_focus(&self.recorder)
+                    .when(recording, |d| {
+                        d.border_color(p.accent)
+                            .on_key_down(cx.listener(Self::record_hotkey))
+                    })
                     .child(
                         Icon::new(IconName::Keyboard)
                             .size(px(16.))
                             .text_color(p.mute),
                     )
+                    .child(self.labelled(
+                        s.shortcut,
+                        Some(if recording {
+                            s.shortcut_recording
+                        } else {
+                            s.shortcut_note
+                        }),
+                        Field::Hotkey,
+                        s,
+                        p,
+                    ))
+                    .children((!recording).then(|| kbd(&self.ui.hotkey)).flatten())
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(s.shortcut)
-                            .child(note(p).child(s.shortcut_note)),
-                    )
-                    .children(hotkey),
+                        Button::new("change-hotkey")
+                            .label(if recording {
+                                s.cancel
+                            } else {
+                                s.shortcut_change
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.recording = !this.recording;
+                                if this.recording {
+                                    this.error = None;
+                                    window.focus(&this.recorder, cx);
+                                }
+                                cx.notify();
+                            })),
+                    ),
             )
+            .children(conflict)
             .child(
                 self.setting(
                     Field::LaunchAtLogin,
@@ -1383,6 +1471,7 @@ impl Render for SettingsView {
                     )
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.recording = false;
                         this.section = section;
                         this.error = None;
                         this.pane_scroll.set_offset(Point::default());

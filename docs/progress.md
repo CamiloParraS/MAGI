@@ -2364,10 +2364,17 @@ Onboarding and launch at login (FR-10, 2026-10-03):
 - Keyboard: buttons and checkboxes are gpui-component tab stops, as in settings; not tried by hand. The features step's Continue waits for the features to arrive, so the consent always lists what is applied.
 - Not tried by hand: a real feature download from onboarding, enabling launch at login (it writes the user's registry) and a real sign-in, macOS/Linux autostart, light mode and English. `get_permissions_report` in onboarding is M7.
 
+Hotkey recorder and conflict detection (FR-7, FR-9, SPEC §6.2, 2026-10-04):
+
+- Settings › General › Open search has Change: the box waits for keys (accent border, "Press Ctrl, Alt or the Windows/Cmd key with another key. Esc cancels."). A combination with Ctrl, Alt or Cmd/Win and a key `global-hotkey` knows becomes `ui.hotkey` (`Ctrl+Alt+K`, `hotkey::from_keystroke`); a modifier still held or plain typing keeps waiting.
+- Conflict detection: the shell registers the new shortcut before anything is saved (`AppEvent::Hotkey`, `hotkey::Hotkey::set`); if another app or the OS holds it, or it is Alt+Space / Cmd/Win+Space (`hotkey::reserved`, which register but belong to the OS), the old one stays registered, nothing is saved, and a warning box under it says "Another app or the system uses this shortcut · Pick a different combination." with the combination. A shortcut that fails to register at startup shows the same box. A change applies at once, no restart.
+- Tests: `hotkey::tests` (keystroke → setting, what is not a shortcut, reserved combos), `tests/settings.rs` (Esc and Shift+K send nothing; Ctrl+Alt+K asks the shell; a refusal saves nothing, an accept saves it).
+- Not tried by hand: recording in the running app (key events reaching the box) and a real conflict with another app's shortcut.
+
 Open:
 
 - In light mode the see-through slider does nothing below 85 %.
-- The hotkey recorder and the startup-failure dialog.
+- The startup-failure dialog.
 - The Index section's unreadable list is read when the section opens and after its actions, not live.
 - The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
 - In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).

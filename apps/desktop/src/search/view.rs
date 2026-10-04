@@ -61,6 +61,9 @@ pub struct Live {
     pub dismissed: Vec<Feature>,
     /// Hotkey presses this run; onboarding confirms one it sees.
     pub hotkey_presses: u32,
+    /// A shortcut that could not be registered (another app or the OS has
+    /// it); settings asks for a different one.
+    pub hotkey_conflict: Option<String>,
 }
 
 impl Live {
@@ -72,6 +75,7 @@ impl Live {
             features: Vec::new(),
             dismissed: Vec::new(),
             hotkey_presses: 0,
+            hotkey_conflict: None,
         }
     }
 }

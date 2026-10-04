@@ -166,6 +166,12 @@ pub struct Strings {
     pub general: &'static str,
     pub shortcut: &'static str,
     pub shortcut_note: &'static str,
+    pub shortcut_change: &'static str,
+    /// While the recorder waits for keys.
+    pub shortcut_recording: &'static str,
+    /// The shortcut could not be registered (FR-7 conflict).
+    pub shortcut_taken: &'static str,
+    pub shortcut_taken_note: &'static str,
     pub results_shown: &'static str,
     pub results_shown_note: &'static str,
     pub theme: &'static str,
