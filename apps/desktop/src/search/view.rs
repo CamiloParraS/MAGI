@@ -210,7 +210,8 @@ impl SearchView {
         match event {
             InputEvent::Change => {
                 let text = input.read(cx).value().to_string();
-                self.live.update(cx, |live, _| live.last_query.clone_from(&text));
+                self.live
+                    .update(cx, |live, _| live.last_query.clone_from(&text));
                 self.pending = None;
                 // Leading edge: a keystroke while idle searches at once; only
                 // the ones that follow while a search is pending wait.

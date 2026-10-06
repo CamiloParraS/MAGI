@@ -1250,12 +1250,12 @@ mod tests {
             caps("alt-f1", false),
             vec![cap("Alt", false, false), cap("F1", false, false)]
         );
-        // Spanish keyboards say Mayús and Espacio.
+        // Spanish says Espacio; Shift stays Shift (eadfe73).
         let k = Keystroke::parse("ctrl-shift-space").unwrap();
         let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false)
             .into_iter()
             .map(|c| c.label)
             .collect();
-        assert_eq!(es, ["Ctrl", "Mayús", "Espacio"]);
+        assert_eq!(es, ["Ctrl", "Shift", "Espacio"]);
     }
 }

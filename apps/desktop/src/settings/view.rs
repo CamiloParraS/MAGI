@@ -231,8 +231,11 @@ pub struct SettingsView {
     dark: bool,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
-    /// Read when the Index section opens and after its actions.
+    /// Read when the Index section opens, after its actions, and when the
+    /// error count changes.
     unreadable: Option<Vec<FileError>>,
+    /// The status's error count when `unreadable` was read.
+    errors_listed: Option<u64>,
     /// The last change that failed and where, until the next change or a
     /// section switch.
     error: Option<(Field, ErrorCode)>,
@@ -289,6 +292,11 @@ impl SettingsView {
                 }
                 if theme != this.theme {
                     this.sync_appearance(window, cx);
+                }
+                // A file failed or a retry worked: the list follows.
+                let errors = live.read(cx).status.as_ref().map(|st| st.errors);
+                if this.section == Section::Index && errors != this.errors_listed {
+                    this.load_unreadable(cx);
                 }
                 cx.notify();
             }),
@@ -349,6 +357,16 @@ impl SettingsView {
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
             }),
+            // "Transparency effects" is switched in the OS settings, so it
+            // is read again when the user comes back.
+            cx.observe_window_activation(window, |this, window, cx| {
+                let support = magi_core::platform::backdrop_support();
+                if window.is_window_active() && support != this.support {
+                    this.support = support;
+                    this.sync_controls(window, cx);
+                    cx.notify();
+                }
+            }),
         ];
         let opening_roots = host
             .list_roots()
@@ -378,6 +396,7 @@ impl SettingsView {
             dark: false,
             opening_roots,
             unreadable: None,
+            errors_listed: None,
             error: None,
             _subscriptions: subscriptions,
         };
@@ -494,10 +513,10 @@ impl SettingsView {
         .detach();
     }
 
-    /// ponytail: refreshed only when the section opens or acts; poll it if a
-    /// stale list ever confuses anyone. A failed read leaves `None`, which
-    /// shows no list rather than "every file was read".
+    /// A failed read leaves `None`, which shows no list rather than "every
+    /// file was read".
     fn load_unreadable(&mut self, cx: &mut Context<Self>) {
+        self.errors_listed = self.live.read(cx).status.as_ref().map(|st| st.errors);
         let host = self.host.clone();
         cx.spawn(async move |this, cx| {
             let listed = cx
@@ -694,6 +713,34 @@ impl SettingsView {
         });
     }
 
+    /// Asks first: removing forgets the folder's index, and the folders
+    /// collapsed into it when it was added go with it.
+    fn confirm_remove(&mut self, id: i64, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let s = self.live.read(cx).lang.strings();
+        let body: SharedString = s.remove_confirm_body.replace("{path}", path).into();
+        let view = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .title(s.remove_confirm_title)
+                .description(body.clone())
+                .ok_text(s.remove)
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text(s.cancel)
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        view.run(
+                            Field::Root(id),
+                            move |host| host.engine()?.remove_root(id),
+                            cx,
+                        );
+                    });
+                    true
+                })
+        });
+    }
+
     /// The box showing a failed change, if any.
     pub fn failed(&self) -> Option<Field> {
         self.error.as_ref().map(|(field, _)| *field)
@@ -847,13 +894,12 @@ impl SettingsView {
                     .icon(IconName::Trash)
                     .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run(
-                            Field::Root(id),
-                            move |host| host.engine()?.remove_root(id),
-                            cx,
-                        );
-                    })),
+                    .on_click({
+                        let path = root.path.clone();
+                        cx.listener(move |this, _, window, cx| {
+                            this.confirm_remove(id, &path, window, cx)
+                        })
+                    }),
             )
     }
 

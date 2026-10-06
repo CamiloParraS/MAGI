@@ -2378,14 +2378,28 @@ Quit without a tray (SPEC §6.3, 2026-10-04):
 - Settings › General ends with "Quit Magi" ("Closing this window keeps Magi running…") and a Quit button; it sends `AppEvent::Quit`, the same path as the tray's Quit (engine shutdown, then exit). With no tray (GNOME without AppIndicator) the app is now fully usable: a plain launch opens settings, the hotkey or `--toggle` opens search, and settings quits.
 - No test: the button only sends the event the tray's Quit already sends. Not checked by hand.
 
+Smaller open items closed (2026-10-05):
+
+- Remove asks first ("Stop searching this folder?"), saying that the folders inside it go too (children collapsed into a parent are purged with it).
+- Light mode: the slider's range is squeezed into 85–100 % tint instead of clamping at 85 %, so every step shows. Test: `theme::tests::light_mode_keeps_a_readable_tint`.
+- The unreadable list reloads when the status's error count changes while Settings › Index is open.
+- The settings window re-reads "Transparency effects" when it is activated again (the user changes it in the OS settings and comes back).
+- Dark mode: the off switch has a visible track and a light thumb (`theme::sync`). The radio item was dropped: the app uses no radios.
+- None of these were checked by hand yet: `docs/qa-checklist.md` rows 13 and 18–21.
+
+QA checklist: `docs/qa-checklist.md` (2026-10-05), Windows only for now; macOS and Linux columns are empty until a machine for each is available. Results already known are filled in from the rounds above.
+
+Exceptions the owner accepted (M6):
+
+1. **Typing → results < 400 ms is not met on the first search after the text model idle-unloads** (0.98–1.86 s, 2026-09-30); warm searches pass (154–214 ms). Accepted 2026-10-05: minimal resource use while the app is not in use matters more, so the model is not warmed when the window opens (SPEC §3 lazy loading, NFR-1).
+
+Startup-failure window (2026-10-05):
+
+- When `Host::start` fails (database unopenable, manifest unreadable, …) the app used to log and exit, invisible in a release build. It now opens a small solid window, titled and worded in the saved language and theme (`config::load`, else the system's): "Magi couldn't start", "Your files are fine…", the error as it is, Show log (reveals `magi.log`) and Quit; closing it quits too (`QuitMode::LastWindowClosed`).
+- No test: a static window with no logic beyond the log path.
+- Checked on Windows 11 (dark, Spanish, debug build) with a folder where `magi.db` should be: the window shows the error, wrapped; closing it and clicking Salir (scripted) both end the process. Show log and light/English not tried by hand.
+
 Open:
 
-- In light mode the see-through slider does nothing below 85 %.
-- The startup-failure dialog.
-- The Index section's unreadable list is read when the section opens and after its actions, not live.
-- The settings window reads the OS reduce-transparency preference when it opens; a change while it is open leaves the slider's enabled state stale until reopened.
-- In dark mode the unchecked radio circles have low contrast, like the switch (gpui-component defaults).
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
-- Remove has no confirmation; after a parent collapsed its children, one Remove purges all of them.
-- In dark mode the off switch has low contrast (gpui-component's default thumb).
 - A switched-off root always reads "Paused, not searched", even if its last health was a problem (it is not probed while off).

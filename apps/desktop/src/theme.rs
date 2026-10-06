@@ -10,7 +10,7 @@ use gpui_kit::{
     WindowBackgroundAppearance, div, ease_out_quint, px, relative, rgb, rgba,
 };
 use gpui_kit::{black, white};
-use magi_core::config::TransparencyMode;
+use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::discovery::Kind;
 use magi_core::platform::BackdropSupport;
 
@@ -127,8 +127,11 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
     Theme::update(cx, |t| {
         // Unchecked checkboxes and field borders; the dark default is
         // nearly invisible on a box.
+        // The off switch is a dark thumb on a dark track by default.
         if dark {
             t.input = palette.mute.opacity(0.6);
+            t.switch = palette.mute.opacity(0.6);
+            t.switch_thumb = palette.ink;
         }
         t.primary = accent;
         t.primary_hover = accent.opacity(0.9);
@@ -143,9 +146,8 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
 }
 
 /// Light text colors wash out over a blurred backdrop with a dark window
-/// behind it, so light mode keeps at least this much tint.
-/// ponytail: the see-through slider does nothing below it in light mode;
-/// make the slider's range depend on the theme if anyone notices.
+/// behind it, so light mode keeps at least this much tint: the slider's
+/// range is squeezed into `LIGHT_MIN_TINT..=1`.
 pub const LIGHT_MIN_TINT: f32 = 0.85;
 
 /// Variant A "Pane" colors (M6 visual direction, `docs/screenshots/m6-variant-a/`).
@@ -255,7 +257,14 @@ impl Palette {
     pub fn tint_alpha(&self, backdrop: Backdrop) -> f32 {
         match backdrop {
             Backdrop::Blurred { tint_alpha } if self.dark => tint_alpha,
-            Backdrop::Blurred { tint_alpha } => tint_alpha.max(LIGHT_MIN_TINT),
+            Backdrop::Blurred { tint_alpha } => {
+                let (lo, hi) = (
+                    *TRANSPARENCY_INTENSITY.start(),
+                    *TRANSPARENCY_INTENSITY.end(),
+                );
+                let t = ((tint_alpha - lo) / (hi - lo)).clamp(0., 1.);
+                LIGHT_MIN_TINT + t * (1. - LIGHT_MIN_TINT)
+            }
             Backdrop::Solid => 1.0,
         }
     }
@@ -345,8 +354,17 @@ mod tests {
     fn light_mode_keeps_a_readable_tint() {
         let blur = |a| Backdrop::Blurred { tint_alpha: a };
         let (light, dark) = (Palette::new(false), Palette::new(true));
-        assert_eq!(light.tint_alpha(blur(0.5)), LIGHT_MIN_TINT);
-        assert_eq!(light.tint_alpha(blur(0.9)), 0.9);
+        let (lo, hi) = (
+            *TRANSPARENCY_INTENSITY.start(),
+            *TRANSPARENCY_INTENSITY.end(),
+        );
+        assert_eq!(light.tint_alpha(blur(lo)), LIGHT_MIN_TINT);
+        assert_eq!(light.tint_alpha(blur(hi)), 1.0);
+        let (a, b) = (light.tint_alpha(blur(0.5)), light.tint_alpha(blur(0.6)));
+        assert!(
+            LIGHT_MIN_TINT < a && a < b,
+            "every slider step shows in light mode"
+        );
         assert_eq!(
             dark.tint_alpha(blur(0.5)),
             0.5,

@@ -204,6 +204,15 @@ pub struct Strings {
     pub feature_updating: Plural,
     /// `{n}` is a count.
     pub clear_confirm_body: Plural,
+    /// `{path}` is the folder. Removing a folder also drops the folders
+    /// that were folded into it when it was added.
+    pub remove_confirm_title: &'static str,
+    pub remove_confirm_body: &'static str,
+    /// The window shown when the engine cannot start; the error itself
+    /// follows, untranslated.
+    pub start_failed: &'static str,
+    pub start_failed_note: &'static str,
+    pub show_log: &'static str,
     pub launch_at_login: &'static str,
     pub launch_at_login_note: &'static str,
     /// Settings › General: the way to quit without a tray (SPEC.md §6.3).
