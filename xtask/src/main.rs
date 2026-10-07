@@ -1,6 +1,5 @@
-//! Cross-platform dev tasks (fetch-pdfium, fetch-onnxruntime, fetch-models,
-//! bench-corpus now; gen-bindings lands with the milestone that needs it —
-//! see SPEC.md §5.1).
+//! Cross-platform dev tasks: fetch-pdfium, fetch-onnxruntime, fetch-models,
+//! bench-corpus (SPEC.md §5.1).
 
 mod bench_corpus;
 

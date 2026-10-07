@@ -38,6 +38,9 @@ pub enum Error {
     #[error("root id {0} not found")]
     RootIdNotFound(i64),
 
+    #[error("file id {0} not found")]
+    FileIdNotFound(i64),
+
     #[error("extraction of {} timed out after {seconds}s", .path.display())]
     ExtractionTimeout { path: PathBuf, seconds: u64 },
 
@@ -73,6 +76,27 @@ pub enum Error {
 
     #[error("engine error: {0}")]
     Engine(String),
+
+    #[error("unknown search feature {0:?} (expected meaning, image_text or image_visual)")]
+    UnknownFeature(String),
+
+    #[error("invalid setting {field}: {reason}")]
+    InvalidSetting { field: &'static str, reason: String },
+
+    #[error("download cancelled")]
+    DownloadCancelled,
+
+    #[error("network error downloading {url}: {reason}")]
+    Network { url: String, reason: String },
+
+    #[error("checksum mismatch for {file} (deleted; retry to re-download)")]
+    ChecksumMismatch { file: String },
+
+    #[error("{} is downloading", .0.as_str())]
+    DownloadInProgress(crate::features::Feature),
+
+    #[error("the engine is starting")]
+    EngineStarting,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

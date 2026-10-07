@@ -261,6 +261,61 @@ the builds interleaved so machine load hits all of them alike:
   interleaved comparisons are meaningful. Two back-to-back runs of the same
   build gave medians of 3,718 ms and 4,835 ms.
 
+## M6 — NFR-8 search while indexing, 2026-09-26
+
+Reference machine (above). `crates/magi-core/tests/nfr8.rs`
+(`search_latency_while_indexing`), run with the real models from the dev data
+directory (`just models`, already present):
+
+```
+cargo test -p magi-core --release --test nfr8 -- --ignored --nocapture
+```
+
+```
+NFR-8 while indexing: n 201 p50 185.502ms p95 278.3645ms max 3.340383s
+NFR-8 idle, warm:     n 5 p50 138.1647ms p95 144.1232ms max 144.1232ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 84.41s
+```
+
+Peak working set / private bytes of the test process, sampled every 2 s with
+PowerShell `Get-Process -Name 'nfr8-*'` for the whole run: **1,762 MB working
+set, 1,800 MB private** (`image_visual` enabled, so this includes SigLIP 2's
+vision tower alongside e5 and PaddleOCR while the fixture corpus indexes).
+
+SPEC.md §2.2's NFR-8 ("Background politeness") is: "Indexing threads run at
+low OS priority; ONNX intra-op threads capped; search is never blocked
+behind an indexing batch for more than one small batch." ("Search stays
+responsive" is the M8 QA checklist's phrasing, SPEC.md:1019, not the NFR
+itself.)
+
+Graded against that: p95 278 ms while busy against p95 144 ms idle is good
+evidence that a search is usually not stuck behind an indexing batch at
+all — `EngineHandle::search_pending`/`SearchGuard` stops a *new* batch from
+starting while a search is pending, so most searches land between batches.
+But the recorded **max of 3.34 s while busy is not explained by that
+mechanism**: a `SearchGuard` cannot interrupt a batch already in flight
+(`engine::MAX_YIELD`, 5 s, only bounds how long the guard makes *indexing*
+wait, not how long a search waits behind an in-progress batch), and this
+benchmark did not record each embed batch's own duration, chunk count, or
+which queries landed mid-batch. So the "never blocked ... for more than one
+small batch" bound is **not verified by this measurement** — it is
+plausible the 3.34 s outlier *is* one batch's worth of blocking, but that
+has not been shown, only asserted. **Status: p95 recorded and looks good;
+the max-latency / one-batch bound is unverified** (see docs/progress.md).
+
+## M6 — idle footprint (GPUI), 2026-09-29
+
+Manual, read by the user from Task Manager (column not recorded), Windows 11,
+`magi-desktop` build, real models:
+
+| State                                         | Memory   | Budget                 |
+| --------------------------------------------- | -------- | ---------------------- |
+| Idle: models unloaded, window closed (NFR-1)  | ~24 MB   | ≤ 150 MB, pass         |
+| After a search, models still loaded           | ~380 MB  | ≤ 900 MB (NFR-12), pass |
+
+Single readings, not the plan's `PrivateUsage` + working-set pair; CPU not
+recorded.
+
 ## Reproducing
 
 ```

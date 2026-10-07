@@ -1189,6 +1189,7 @@ deletion on re-index, and reclaiming timed-out extraction threads.
 - [x] **Peak RSS measured:** OCR adds ~310 MB (885 MB with OCR vs. 576 MB
       for the same image pipeline without it; 7 fixtures incl. 12 MP HEICs).
       The 1.5 GB NFR-11 check with all models is still owed (needs SigLIP).
+      *(Superseded, see M6 Plan 2: NFR-11 measured.)*
 - [x] **Receipt and phone-photo CER:** receipt 0.773, 12 MP portrait 0.401,
       landscape 0.463 - the Python reference pipeline gets 0.784 / 0.339 /
       0.451, so this is the model's limit on hard photos, not a port bug. Not
@@ -1991,17 +1992,28 @@ engine test now also checks `add_root` on a folder inside a root fails with
       check. It now resumes only above 1.25 GiB (`memory_low`, unit test; item
       17 test still green).
 - [x] **NFR-11 peak RSS with the engine running:** 1,215–1,337 MB on
-      `fixtures/corpus` (≤ 1.5 GB, pass). A search during the first index was
-      not measured and would go over. See docs/benchmarks.md, "M5 — peak memory".
+      `fixtures/corpus` (≤ 1.5 GB, pass) for indexing alone. A search during
+      the first index is now measured (M6 Plan 2's NFR-8 benchmark,
+      `image_visual` on): **1,762–1,800 MB, which exceeds the 1.5 GB NFR-11
+      budget** by roughly 260–300 MB. Not a pass for that scenario — see
+      docs/benchmarks.md, "M5 — peak memory" and "M6 — NFR-8 search while
+      indexing", and the known gap in the M6 Plan 2 section below.
 - [x] **NFR-12 peak memory, hybrid search only:** 842–848 MB (≤ 900 MB, pass),
       down from 1,272 MB. `magi-cli search` frees e5 before the SigLIP text
       tower loads (`OneShotQuery`, unit test; about +0.5 s per search,
       accepted), and SigLIP builds its session before parsing its tokenizer.
       mimalloc tried, not adopted. See docs/benchmarks.md, "M5 — peak memory".
-- [ ] **Pending: search latency while indexing (NFR-8).** Not measured: it
-      needs indexing and search in one process, which arrives with the desktop
-      app (M6). The same goes for peak memory with a search during the first
-      index. Deferred by the owner, 2026-09-25.
+- [x] **Search latency while indexing (NFR-8):** measured in M6 Plan 2, once
+      the desktop host put indexing and search in one process — p95 278 ms
+      busy vs. 144 ms idle, which is good evidence search is usually
+      responsive. **The NFR itself ("never blocked behind an indexing batch
+      for more than one small batch", SPEC.md §2.2) is not fully verified**:
+      the recorded max of 3.34 s while busy is not shown to be bounded by
+      one batch. See docs/benchmarks.md, "M6 — NFR-8 search while indexing"
+      and the M6 Plan 2 section below. The same run measured peak memory
+      with a search during the first index: 1,762–1,800 MB with
+      `image_visual` on, which **exceeds** the NFR-11 1.5 GB budget (see the
+      NFR-11 line above and the known gap below).
 - [x] ADR-0008 (runtime and threading) and ADR-0009 (watchers and
       reconciliation) written.
 - [x] CI green on all three OSes (confirmed by the owner, 2026-09-25).
@@ -2033,9 +2045,459 @@ Windows, Ubuntu 22.04 and macOS 14.
 | 16     | Windows locked file retried, indexed after release     | `a_locked_file_is_retried_and_indexed_after_release` (Windows only)                                                                                                    |
 | 17     | Memory pressure pauses and unloads the image model     | `memory_pressure_pauses_indexing_and_unloads_the_image_model`                                                                                                          |
 | Manual | Idle CPU under 1% after the first index                | 0.05–0.37% over ~80 min; **exception accepted:** 232 files, not 20k+ (docs/benchmarks.md, "M5 — idle cost")                                                            |
-| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB (docs/benchmarks.md, "M5 — peak memory")                                                                                                                |
+| NFR-11 | Peak memory while indexing ≤ 1.5 GB                    | 1,215–1,337 MB indexing alone, pass (docs/benchmarks.md, "M5 — peak memory"); **1,762–1,800 MB with a concurrent search (M6), exceeds the budget** — "M6 — NFR-8 search while indexing" |
 | NFR-12 | Peak memory, hybrid search only ≤ 900 MB               | 842–848 MB (same section)                                                                                                                                              |
-| NFR-8  | Search latency while indexing                          | **Pending**, deferred to M6 (above)                                                                                                                                    |
+| NFR-8  | Search latency while indexing                          | p95 recorded (278 ms busy vs. 144 ms idle) in M6 Plan 2; **max-latency / one-batch bound unverified** (docs/benchmarks.md, "M6 — NFR-8 search while indexing")       |
 | ADRs   | Runtime and threading; watchers and reconciliation     | ADR-0008, ADR-0009                                                                                                                                                     |
 
-M5 is done, with the NFR-8 latency check carried over to M6.
+M5 is done. The NFR-8 latency check was carried over to M6 and is now
+measured (M6 Plan 2, below) — p95 recorded, but the max-latency / one-batch
+bound is not yet verified, and that same measurement shows NFR-11 exceeding
+its budget when a search runs during the first index.
+
+## M6 — Plan 1 (optional search features)
+
+Plan: `docs/superpowers/plans/2026-09-25-m6-plan1-optional-features.md`;
+ADR-0010. Core and CLI only; the Tauri host follows in Plan 2.
+
+| Behavior | Test |
+| --- | --- |
+| Config defaults for features and M6 UI settings | `config::tests::feature_and_ui_defaults_match_adr_0010` |
+| Features and UI fields round-trip with wire names | `config::tests::features_and_ui_fields_round_trip_with_their_wire_names` |
+| Transparency intensity outside 0.40–0.95 rejected | `config::tests::transparency_intensity_outside_its_range_is_rejected` |
+| Unknown language rejected | `config::tests::an_unknown_language_is_rejected_at_load` |
+| Feature wire names, bits and slots | `features::tests::features_round_trip_through_their_wire_names`, `each_feature_has_its_own_bit_and_slot` |
+| Installed means every file at manifest size | `features::tests::a_slot_with_every_file_at_its_manifest_size_is_installed`, `a_wrong_size_file_is_not_installed` |
+| Downloads report cumulative progress | `features::tests::download_entry_installs_every_file_and_reports_cumulative_progress` |
+| Download failures map to stable codes; cancel is not a failure | `features::tests::download_failures_map_to_stable_codes`, `a_cancelled_download_is_its_own_error_not_a_failure_code` |
+| Remove deletes only that slot | `features::tests::removing_a_download_deletes_only_that_slot_and_tolerates_absence` |
+| No features: keyword and filename search work | `tests/features.rs` `with_no_features_files_are_found_by_keyword_and_name` |
+| Turning OCR off keeps OCR text, re-reads nothing | `tests/features.rs` `turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing` |
+| Hybrid search without meaning uses keywords only | `search::tests::hybrid_search_without_a_text_embedder_uses_keywords_only` |
+| Files record the features they miss | `tests/features.rs` `files_indexed_without_a_feature_record_it`, `images_whose_content_is_not_extracted_do_not_miss_image_features` |
+| Enabling meaning embeds only the files missing it | `tests/features.rs` `enabling_meaning_embeds_only_the_files_missing_it` |
+| Backfill progress counts down, ignores errors, survives restart; skipped files are backfilled too | `index::tests::backfill_progress_counts_down_and_ignores_failed_files`, `a_feature_that_is_not_running_queues_nothing`, `skipped_files_missing_a_feature_are_backfilled_too` |
+| Complete status; download, failure, cancel, remove, set_enabled | `features::tests::status_reports_desire_availability_and_size_separately`, `a_download_reports_progress_then_installed`, `a_checksum_mismatch_is_failed_and_never_installed`, `cancel_clears_the_queue_and_a_later_download_works`, `remove_is_refused_while_downloading_and_deletes_only_the_download`, `set_enabled_persists_the_desire_and_leaves_the_install_alone` |
+| Backfill progress shows in status events | `features::tests::a_running_backfill_shows_in_status_and_events` |
+| Nothing loads for a feature that is off | `features::tests::nothing_loads_for_a_feature_that_is_off_or_not_installed` |
+| CLI lists, disables and persists; unknown feature names the valid ones | `magi-cli/tests/features.rs` `disabling_and_enabling_a_feature_is_listed_and_persisted`, `an_unknown_feature_is_an_error_naming_the_valid_ones` |
+
+## M6 — Plan 2 (Tauri host and IPC)
+
+Plan: `docs/superpowers/plans/2026-09-26-m6-plan2-tauri-host.md`. Puts `magi-core`'s
+engine and features behind one `host::Host` (SPEC.md §5.3 "Desktop host";
+docs/architecture.md, "Desktop host (M6 Plan 2)"), then hosts it in Tauri
+with typed commands, events and least-privilege capabilities.
+
+| Behavior | Test |
+| --- | --- |
+| Root health crosses IPC under its database name (`Health`'s wire name) | `dto::tests::root_health_crosses_ipc_as_its_database_name` |
+| Snippet highlights are UTF-16 ranges; brackets in plain text are never mistaken for highlights | `dto::tests::snippet_highlights_are_utf16_ranges_and_brackets_stay_text`, `search::fts::tests::brackets_in_text_are_not_highlights` |
+| The best-matching chunk's source and page reach the search hit | `search::tests::the_best_chunks_source_and_page_reach_the_hit` |
+| A settings patch merges into the current config; typos, bad values and protected sections are rejected | `config::tests::a_settings_patch_merges_into_the_current_config`, `config::tests::a_settings_patch_rejects_typos_bad_values_and_protected_sections` |
+| Errors cross IPC as a stable code plus parameters | `dto::tests::errors_cross_ipc_as_codes_with_parameters` |
+| A failure records its error code; a clean re-index of the file clears the code | `db::files::tests::a_failure_records_its_code_and_a_clean_index_clears_it` |
+| File error codes classify each failure and keep one wire name | `dto::tests::file_error_codes_classify_failures_and_keep_one_name` |
+| The host forwards engine status and feature state as they arrive | `tests/host.rs` `the_host_forwards_engine_status_and_feature_state` |
+| Disabling a feature restarts the engine without it | `tests/host.rs` `disabling_a_feature_restarts_the_engine_without_it` |
+| Download/backfill progress counts never count as an engine-input change (only `(enabled, installed)` does) | `host::tests::progress_and_backfill_do_not_change_engine_inputs` |
+| `Host::shutdown` stops the engine and the supervisor thread | `tests/host.rs` `shutdown_stops_the_engine` |
+| A search hit whose file was deleted after ranking is dropped, not the whole search | `host::tests::a_hit_whose_file_is_gone_is_dropped` |
+| A file's path resolves by id for `open_file`/`reveal_file` | `db::files::tests::paths_are_resolved_by_id` |
+| Search returns metadata, highlights and match sources through the host | `tests/host.rs` `search_returns_metadata_highlights_and_sources` |
+| Search falls back to keywords (no `EngineStarting` failure) while the engine is down | `tests/host.rs` `search_falls_back_to_keywords_while_the_engine_is_down` |
+| Settings persist; an indexing change applies at once (restart) | `tests/host.rs` `settings_persist_and_an_indexing_change_applies_at_once` |
+| A feature toggle and a settings patch made at the same time lose no update | `tests/host.rs` `feature_toggles_and_settings_patches_at_once_lose_no_update` |
+| `clear_index` empties the index and keeps roots, config and models | `tests/host.rs` `clear_index_empties_the_index_and_keeps_roots` |
+| Queued restarts, clears and stops fold into one (Stop > Clear > Restart); every folded clear gets a reply | `host::tests::queued_controls_fold_into_the_strongest` |
+| Search clamps the webview's limit to 1..=500 | `tests/host.rs` `search_clamps_the_requested_limit` |
+| `list_roots` reads the database, so it answers while the engine is down | `tests/host.rs` `list_roots_reads_the_database_while_the_engine_is_down` |
+| Commands send the camelCase argument names Tauri expects | `apps/desktop/src/lib/ipc.test.ts` "commands send the camelCase argument names Tauri expects" |
+| Thumbnails go through the asset protocol; absent ones stay absent | `apps/desktop/src/lib/ipc.test.ts` "thumbnails go through the asset protocol, absent ones stay absent" |
+
+Task 5's review found that `supervise` compared feature inputs read *after*
+`start_engine` returned, so a feature change landing during that blocking
+call was folded into `inputs` as if already running and never triggered a
+restart. Fixed by reading `inputs` before `start_engine` (commit `60d03c5`);
+this is a timing-dependent race, so it has no dedicated regression test —
+the fix was reviewed by reading `host::supervise` rather than by a test that
+can reliably land in the window.
+
+**NFR-8 (search latency while indexing), carried over from M5:** now
+measured — p95 278 ms while indexing vs. 144 ms idle, good evidence of
+typical responsiveness. The NFR's actual criterion (SPEC.md §2.2:
+"search is never blocked behind an indexing batch for more than one small
+batch") is **not verified**: the recorded max of 3.34 s has not been shown
+to be bounded by one batch's duration (no per-batch timing was recorded).
+See docs/benchmarks.md, "M6 — NFR-8 search while indexing", and the M5
+sign-off table above (updated in place rather than duplicated).
+
+**`just eval` (M6 Plan Task 2): pending — run before merge.** It needs a release build with the
+real models loaded through the full desktop/CLI search path, and the
+ranking code this plan touches is unchanged from M5 (only metadata around a
+hit changed: page, source, `thumb_path`, `modified_at`). **Pending — run
+before merge.**
+
+**Task 8 Step 7 manual in-app console checks — NOT run (need a human at a
+running `just dev`).** Each is **pending — needs a manual run in `just dev`**:
+
+- [ ] `get_status` returns an `IndexStatus`.
+- [ ] `open_file` with `fileId -1` rejects with `{code: "FileIdNotFound", file_id: -1}`.
+- [ ] `plugin:opener|open_path` is denied (not in the `main` window's capability).
+- [ ] `plugin:fs|read_text_file` is denied (no filesystem permission is granted to the webview).
+- [ ] No CSP violations in the console, and `engine://status` events arrive.
+- [ ] Closing the window exits the process without hanging.
+- [ ] Quitting during a large startup scan exits (see the startup-walk gap below).
+
+**The M6 Plan 2 milestone is NOT fully verified until those seven manual
+checks pass.** Everything else in this plan (Tasks 1–7, 9) is done and
+covered by the tests above, `just check` and `just bindings`.
+
+**Known gap, deferred to Plan 5:** if `Host::start` fails inside Tauri's
+`setup` hook, the app panics with no window, dialog or log — release builds
+set `windows_subsystem = "windows"` and `apps/desktop/src-tauri` has no
+`tracing` subscriber wired up, so there is nowhere for the panic message to
+go. Likewise, if the engine fails to start after setup, `Host::engine()`
+returns `EngineStarting` forever and the error is dropped for the same
+reason (no subscriber). Plan 5 (shell integration) is the right place to add
+one.
+
+**Known gap: `Engine::start` blocks for the whole startup reconciliation
+walk.** During launch and every restart, `get_status`/`pause`/`add_root`
+return `EngineStarting`, no `engine://status` events arrive, search is
+keyword-only, and quitting waits for the walk to finish. Fix: a stop flag
+for the walk, or move the startup scan off `start`.
+
+**Note:** `open_file` opens any indexed file, executables included, through
+the OS shell. That is intended: it is what double-clicking the file does.
+
+**Known gap: NFR-11 exceeds its budget with a concurrent search.** The
+NFR-8 benchmark's peak-memory sample (1,762–1,800 MB, `image_visual` on)
+is also the first real measurement of "peak memory while indexing, search
+running" and it is **over** NFR-11's 1.5 GB budget by roughly 260–300 MB —
+this scenario was previously unmeasured and assumed to fail (M5 sign-off);
+it is now confirmed to fail, not just assumed. No fix is scoped in this
+plan. Recorded as a gap for whichever plan takes on memory budget work.
+
+**Windows build note:** `pnpm tauri build` needed the Windows SDK's `rc.exe`
+on `PATH` (e.g. `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`);
+recorded in SPEC.md §4.3.
+
+## M6 — Plan 3 visual direction and GPUI shell evaluation (2026-09-28)
+
+**Visual direction chosen: variant A ("Pane")** from the throwaway prototype
+(commit `ee0dc90`, `apps/desktop/src/prototype/VariantA.tsx`): one translucent
+column, the snippet only under the selected row, settings as a sidebar plus
+grouped rows.
+
+**Paused for a shell evaluation:** moving from Tauri + React to GPUI is being
+evaluated on `feat/gpui-shell` with a Windows spike measured against a Tauri
+baseline. Decisions, go/no-go criteria and next steps:
+`docs/superpowers/specs/2026-09-28-gpui-shell-evaluation-design.md`. The
+pre-evaluation spec is frozen at `docs/SPEC-v1.1-tauri.md`; the Tauri work stays
+on `feat/User_Interface`.
+
+**2026-09-29: committed to GPUI** without a spike (ADR-0011, SPEC v1.2). The
+Tauri shell, React frontend and `ts-rs` bindings were removed from
+`feat/gpui-shell`; the Tauri implementation stays on `feat/User_Interface`.
+Plan 2's seven manual in-app console checks are void (they tested the
+webview's capabilities). Plan 2's `Host`-level tests all still apply. Next:
+M6 Plan 3, starting with the walking skeleton.
+
+**2026-09-29: `tests/host.rs` fixed on battery.** Six of its ten tests (every
+one that waits for a file to be indexed) timed out on Windows. Not the
+`Engine::start` known gap, not the shared `MAGI_DATA_DIR` (the tests fail run
+alone) and not the temp-dir roots: the laptop was on battery, and
+`Config::default()` has `indexing.pause_on_battery = true`, so the engine
+never indexed. The Plan 2 run was on AC power. `tests/host.rs` now sets
+`pause_on_battery = false`, as `incremental.rs`, `features.rs` and the
+`daemon` test already did; `nfr8.rs` too, since on battery it would measure
+search latency with indexing paused. Verified on battery (`PowerLineStatus:
+Offline`): `MAGI_FAKE_EMBEDDER=1 cargo test -p magi-core --test host`, 10
+passed. Confirmed on AC (`Online`): the unfixed `host.rs` passes 10/10 there
+too, so power state alone decided the outcome.
+
+## M6 — Plan 3 (GPUI walking skeleton)
+
+Tasks 1-7 are committed: byte-range highlights, backdrop, `SearchState`, app shell and logging, search window, single instance with `--toggle`, global hotkey, tray. Unit and headless tests pass; `cargo clippy --workspace --all-targets --all-features -D warnings` is clean.
+
+### Windows verification (Task 8, step 4)
+
+Run 2026-09-29 on Windows 11 (AMD Radeon 740M), release build, real models (`meaning`, `image_text` installed), from a shell with no one at the screen. Only what a script can observe was run.
+
+- ✅ **First frame < 150 ms:** `search window first frame elapsed=` 50.7 ms (cold start), then 16.4, 15.9, 17.3 ms via `magi --toggle`. 4 samples, max 50.7 ms, not the 10 the plan asks for and not triggered by the hotkey.
+- ✅ **`magi --toggle`** shows the window in the running instance (the log line above); the second launch exits. A plain second launch was not tried.
+- ✅ GPU path: Direct3D 11.1 on the AMD GPU, Segoe UI.
+Manual results from the user, same day:
+
+- ✅ `Esc` closes the window.
+- ❌ **Idle RSS ~380 MB** against NFR-1 ≤ 150 MB. Not a controlled measurement (unknown whether models had unloaded, index state unknown); needs the plan's procedure, and probably a real fix.
+  - Clarified by the user 2026-09-29: ~380 MB was with models loaded after a search, not idle. With models unloaded and the window closed, ~24 MB: ✅ NFR-1 passes (docs/benchmarks.md, "M6 — idle footprint (GPUI)"). CPU not recorded.
+- ⚠️ **Search speed:** the first search takes "some seconds" (model load), later ones feel instant. Not measured; the < 400 ms target needs a log line or timer, and the cold first search is a likely miss unless models are warm.
+- ❌ **Mica:** the window has a solid background on Windows 11 (build 26200). Not yet known whether "Transparency effects" was on, or whether `ui.transparency_mode` resolves to solid; needs investigation.
+  - Investigated 2026-09-29 (debug build, `transparency_intensity = 0.4`, screenshots sampled per pixel). Root cause: gpui-component's root plugin paints `theme.tokens.background` (opaque white) over the whole window, hiding any backdrop; fixed by giving `Root` a transparent background (Root's own style applies after plugins). With that fixed, Mica rendered as DWM's flat fallback (`#202020`) on the frameless popup, and as faintly tinted real Mica only after `DwmExtendFrameIntoClientArea` — indistinguishable from solid. GPUI's `Blurred` shows the windows behind, needs no Win32 code, and was adopted (SPEC 1.2.1, ADR-0011 amended).
+  - ✅ Checked by the user 2026-09-29: Blurred works; colors behind bleed through slightly, about as much as in the Windows Start menu and quick settings. The light tint limits how much shows through.
+- ⚠️ **Deleted file, Reveal:** `magi.log` shows `Revealing path ...\VW_beetle.jpg in explorer: file not found (0x80070002)` and the window closes. The plan expected a logged warning with the window kept. `Host::file_path` succeeds from the stale index row, so only the OS call fails, and `act` closes the window regardless. Reveal on an existing file and Open were not tried.
+  - Fixed 2026-09-29: `Host::file_path` now also returns `FileIdNotFound` when the indexed path no longer exists (metadata check only), so `act` logs and keeps the window, as the plan intended. Test: `tests/host.rs` `search_returns_metadata_highlights_and_sources`. ✅ Re-run by the user the same day: with a result's file deleted, both Enter and Ctrl+Enter keep the window open. On an existing file, Open and Reveal both work.
+- The log also has repeated `ERROR : window not found` lines at window close (source not yet found), and indexing toggles `low_memory=true` pause.
+  - Source found 2026-09-29 (file/line logging, temporarily): `gpui-pre-0.3.7/src/window.rs:1914`, GPUI's active-status callback. Destroying a removed window delivers one last deactivation, and GPUI's `handle.update(...).log_err()` finds the window gone. One line per close, harmless, GPUI-internal (blank target because `util::log_err` derives it from a `crates/` path). Not suppressed: an empty target cannot be filtered with `EnvFilter`.
+- Hotkey default is `CmdOrCtrl+Shift+Space` (`ui.hotkey`); not yet tried.
+- Not run: typing→results < 400 ms measurement, tray, IME/dead keys, GPU-less VM, WSLg.
+
+Second round, 2026-09-29:
+
+- ✅ **CI green on Windows, macOS and Linux** (pushed by the user), which also verifies the Linux package list from Zed's `script/linux`.
+- ✅ **First frame < 150 ms, release build:** 10 samples via `magi --toggle` (fake embedder, empty index): 57.0 ms cold, then 19.0–28.6 ms; max 57.0 ms. Debug builds log 340–530 ms, which is where the slow numbers in the user's log came from.
+- ✅ **Hotkey** toggles the window (user).
+- ✅ **Frameless, on top, centered, closes on blur and `Esc`** (user).
+- ✅ **Transparency effects off** → the window is solid (user).
+- ✅ **IME / dead keys:** `canción` typed with `'` + `o` works; `ó` and `o` both highlight `cancion` (user).
+- ⚠️ **Tray:** the icon is there and "Open search" works; Pause/Resume, the status line and Quit were not confirmed (the user saw only a search entry).
+- ✅ **Tray** (user, third round): status line shows, "Indexing paused" → Resume works, Open search works, Quit exits.
+- **Typing → results < 400 ms** (`search results after typing stopped elapsed=`, last keystroke to reply, 150 ms debounce included; release build, real models, user's index, 2026-09-30):
+  - ✅ Models warm: every sample 154–214 ms (search itself ~5–65 ms).
+  - ❌ First search after idle unload: 1.86 s, 1.82 s, 0.98 s (text model load). Known cost of lazy loading (SPEC §3); whether to warm the model on window open is an open question for a later plan.
+- Search quality note (user's `random_names` copy of the corpus): photos with random names are unreachable because `image_visual` is off by default (only 77 stale `vec_image` rows from an earlier run exist); `walls-io-whiteboard.jpg` (noisy OCR), `FORMULARIOS` PDFs and a minified `main.*.js` surface on unrelated queries: RRF fuses by rank only, so nearest-but-irrelevant vectors fill the list. Candidate fix: a minimum similarity for vector hits, tuned with `just eval`.
+- Not run: GPU-less VM, WSLg.
+
+### Open for other OSes / CI
+
+- Linux package list in `ci.yml` and SPEC §4.3 came from a summary of Zed's `script/linux` at `1a28cff` and has not run on CI. macOS and Linux runs are unverified.
+
+## M6 — Plan 4 (search window, 2026-09-29)
+
+No separate plan document; scope is Plan 3's header line. Decided with the user: multi-monitor opens on the display under the cursor (Windows, macOS; Linux uses the primary display), and the hint's "Turn on (size)" enables and downloads at once (the stated size is the consent) until Plan 5's onboarding exists.
+
+Done (commits `cb1ae5d`..HEAD):
+
+- en/es string table (`apps/desktop/src/i18n/`), ICU4X numbers, plurals and dates; `ui.language = system` resolves `es-*` to Spanish; the tray uses it. Tests: `i18n::tests` (4), `tray::tests`.
+- `SearchState` loading and retry; the ADR-0010 hint rule (`search::hint`, 3 tests); snippet line flattening that keeps highlight offsets (`highlight::tests::one_line_keeps_byte_offsets`); `theme::is_dark` and the variant A palette.
+- `magi_core::platform::display_under_cursor` (Windows `MonitorFromPoint`, macOS CoreGraphics FFI).
+- The search window in variant A: glyph or thumbnail, name, page, folder, snippet and source labels on the selected row, relative/ICU dates; intro, loading, no match, error + Try again, "still indexing" footer, feature hint; `Ctrl/Cmd+C` copies the path; click opens; the window fits its content, top-anchored.
+- `cargo test --workspace` green, clippy and fmt clean.
+
+Checked by screenshot on Windows 11 (isolated dev instance: own socket name, temp data/config dirs, `fixtures/corpus` root):
+
+- ✅ Dark + Spanish (OS locale `es-*`): intro with indexed count and keys; results with a PDF thumbnail, `página 39`, snippet highlight, `Palabras, Significado`, footer "Indexando, faltan N archivos…".
+- ✅ Light + English (`ui.theme = "light"`, `ui.language = "en"`), keyword-only: "No files match “zzqxv”." with the "Search by meaning is off … Turn on (135 MB)" hint; the window grew to fit.
+- Fixed after the screenshots: snippet newlines made rows tall; the Spanish footer overflowed; the hint text did not wrap.
+
+Not run / open:
+
+- macOS `display_under_cursor` FFI compiles only on CI; multi-monitor placement not tried by hand (one monitor).
+- "Turn on" not clicked (it downloads a real model); error state and `Ctrl+C` not exercised by hand.
+- The "Turn on" button uses gpui-component's primary color, not the variant A accent.
+- Live language/theme switch without restart: `Live` carries both, but nothing changes them until the settings window (Plan 5 owns the live switch). OS light/dark changes are followed live.
+- Relative dates use the plural table ("3 days ago"), absolute dates ICU4X `YMD::medium`; ICU4X relative-time is still experimental.
+- Code review (Standards + Spec, 2026-09-29) follow-ups not done: move "enable, then download if missing" from the view into `Host`; extract the view's state/footer choice into tested functions; an enum for `ui.theme`; a single placeholder-fill helper. The false "Magi is restarting it" error text and the missing indexing hint on an empty query were fixed.
+
+Follow-up from the user, 2026-09-29:
+
+- Input text reduced to gpui-component's large input size (16 px). The 20 px text clipped descenders (`p`, `q`) because the input's line box is fixed at 1.25 rem.
+- The selected row's accent bar is now a quarter of the row's height, centered, instead of a full-height left border.
+- Focus: the window sometimes opened without keyboard focus. Opening a GPUI window on Windows only calls `SetWindowPlacement`, and the foreground lock can leave another app in front (e.g. after `magi --toggle` from a second process). The shell now calls `activate_window()` after opening; GPUI's activate simulates an Alt tap before `SetForegroundWindow`. ✅ Checked by screenshot: after two `magi --toggle` from a second process, typed text lands in the input. Hotkey and tray paths not re-checked by hand.
+
+## M6 — Plan 5 (settings, onboarding, shell integration; started 2026-09-30)
+
+No separate plan document yet; scope is Plan 3's header line. First slice: the settings window with its Folders section.
+
+Done:
+
+- Settings window in variant A (sidebar + grouped rows, solid, 900×620): the Folders section lists every root with its status line (watching, polling, paused, missing, permission denied; problems in the warning color), an enable switch, Remove, and Add folder through the native folder picker (FR-1, FR-11). Errors reach the view as `ErrorCode` and are localized; nested roots name both paths. Roots come from each status event, seeded from `Host::list_roots` when the window opens, because the engine sends no status during its startup walk.
+- Tray: a "Settings" item (FR-8). A plain launch, first or forwarded, now opens settings, and `--toggle` opens search (SPEC §6.3 "launcher opens settings").
+- en/es strings for all of it. Tests: `settings::tests` (status lines, error texts).
+
+Checked on Windows 11, isolated dev instance (own socket name, temp data/config dirs, fake embedder), by screenshot and scripted clicks: light/English and dark/Spanish render; the switch disables a root ("Paused, not searched"); Remove removes the missing root; Add folder opens the native picker, and choosing a subfolder of a root shows the nested-root message; `magi --toggle` still opens search.
+
+Second slice, Appearance (2026-09-30):
+
+- Sidebar with Folders and Appearance (keyboard-reachable buttons). Appearance: language (Same as system (…) / English / Español), search window background (Match system / Always see-through / Always solid), and the see-through amount slider ("More solid" ↔ "More transparent"), disabled with a note when the search window would be solid. Language and background are dropdowns (gpui-component `Select`, as in the prototype); a live language switch relabels their items, and after every save they show the saved values.
+- A saved change goes to the shell as `AppEvent::Ui`: `Live` gets the new language (the settings window retitles itself), the tray relabels every item, and the next search window uses the new background. No restart.
+- The slider saves on release, and Left/Right on its focused wrapper step it (gpui-component's slider takes no keys); after every save it shows the saved value, so a failed save does not leave an unsaved value on screen.
+- Tests: `settings::tests` (system-language label, when the amount is adjustable, slider ↔ `ui.transparency_intensity` staying inside its allowed range), `tests/settings.rs` (headless: a save writes `config.toml` and sends `AppEvent::Ui`).
+- Checked by one screenshot (dark, Spanish): the section renders; the sidebar labels were centered, fixed after (left-aligned via a filling child), not re-screenshotted. The live switch, the tray relabel and the slider keys were not tried by hand.
+
+Third slice, What to index (2026-09-30):
+
+- File types (a checkbox per kind; other files are found by name only), largest file to read (whole MB, saved on Enter or blur), and exclusion patterns (one per line, saved with Save). Every indexing save restarts the engine, which re-walks every root, so nothing is saved per keystroke and an unchanged value is not saved. A bad size is caught in the window; a bad pattern comes back from the core as `InvalidGlob` and is named in the message, and the text stays so it can be fixed.
+- Tests: `settings::tests` (kind toggling keeps order and drops kinds the window doesn't show, whole-MB parsing, one pattern per line, the two error texts).
+- Checked on screen (isolated instance, 2026-09-30): What to index renders in English and Spanish; an invalid size shows the error and is not saved; picking Español in the Language dropdown switched the title, sidebar, headings and dropdown labels live and wrote `language = "es"`. Fixed from the screenshots: the pattern box showed one line (`rows` does not size it; a height does), Save stretched full width, and the sidebar's accent bar overlapped the label (an absolute child is placed against its direct parent, the button's content row). The tray relabel was not looked at. The variant A mockup the user mentioned (`mockup/`) was empty when checked.
+
+Fourth round, from the user's mockup (`mockup/index.html`, local only), 2026-09-30:
+
+- A failed change shows inside the box it came from (`Field`), with a warning border, as the mockup's hotkey-conflict card does; a failed add, which has no row yet, gets its own box under the list.
+- Boxes as in the mockup: 1 px border, 8 px corners, 12/16 px padding, 6 px apart; the sidebar has its own tint and a chip for the selected item.
+- The settings window uses the search window's background, resolved the same way from `ui.transparency_mode` and the OS preference, and follows a change live (user decision; SPEC M6 amended). Over a blurred backdrop the window and sidebar colors take the tint's alpha; the boxes stay opaque.
+- Fields (size, patterns, dropdowns) take the window color (`solid`) so they stand out from the box, as the mockup's fields do (user request).
+- Test: `tests/settings.rs` also checks that a pattern the core rejects marks the patterns box and is not saved.
+- Checked by screenshot (light, English, blurred backdrop): all three sections; a bad size shows its message inside its box with a warning border.
+- The mockup groups sections differently (Folders with exclusions, file types and limits; General with shortcut, startup, language and results shown; Appearance with theme and background; icons in the sidebar, subheadings, status badges). Not adopted yet; asked the user.
+
+Fifth round, the mockup's layout adopted (user request, 2026-09-30):
+
+- Five sections with sidebar icons and the version at the bottom: Folders (searched folders with a status badge, switch and trash per root, Add folder beside the subheading; then what to index: file types, largest file, pause on battery, exclusions), Search features (per feature: installed size, download or backfill progress, failed download with its reason; Turn on (size), Try again, Remove download when off, and a switch), General (the hotkey, read-only; language; results shown), Appearance (theme, background, see-through amount) and Index (indexed / waiting / name-only / unreadable counts, the unreadable files with their reason, Retry all, Clear index behind a confirmation dialog).
+- Search window: the footer is always there, with a settings gear (also `Ctrl/Cmd+,`), the tray's status line and dot, and the keys that apply; "still indexing" moved into the empty-query intro (mockup B).
+- Four extra Lucide icons (sparkles, chart-column, keyboard, trash) come from `gpui_kit::assets::icon_assets!`; the default bundle embeds only the component icons.
+- Tests: `settings::tests` (root badge and note, the one action per feature state, hotkey → GPUI keystroke, result-count choices, a label per read error).
+- Checked on Windows 11, isolated dev instance (dark, English, fake embedder): every section by screenshot; the clear-index dialog opened and its OK cleared the dev index; the battery switch wrote `pause_on_battery = false`; `Ctrl+,` from search brought settings forward; search empty and results footers.
+- After a two-axis review: the unreadable list is read on the background executor and a failed read shows no list (not "every file was read"); the hotkey display accepts global-hotkey's other spellings (`Control`, `Option`, `Command`, `KeyK`, `Digit1`); a wanted-but-undownloaded feature keeps its switch so it can be turned off; the results footer shows Up/Down Move. Still open from it: the tray's colored state overlay and tooltip (mockup 03), `FileError.detail` is not shown, the list stops at 50 without "and N more", and "enable, then download" still lives in the desktop crate (`search::view::turn_on`) rather than `Host`.
+- Not adopted from the mockup: per-root file counts, chunk count and index size (no API yet), the hotkey recorder and Launch at login (no `auto-launch` yet), per-file Retry (the engine retries all), Retry / Open Settings on missing / denied roots. Not tried by hand: Turn on / Remove download (real downloads), Spanish, light mode.
+
+Sixth round, from the user's light-mode / Spanish review (2026-09-30):
+
+- The sidebar says "Búsqueda" in Spanish (the page keeps "Funciones de búsqueda"), which did not fit 210 px.
+- Light mode over a blurred backdrop: darker secondary text (#45474d) and at least 85 % tint (`theme::LIGHT_MIN_TINT`), so a dark window behind no longer washes the text out; dark mode keeps the slider's value. Test: `theme::tests::light_mode_keeps_a_readable_tint`.
+- Folder status: a colored dot and a short word (Watching / Checking / Paused / Not found / No access) instead of a pill.
+- Primary buttons, checkboxes and focus use the variant A accent instead of gpui-component's black/white. Save (exclusions) is primary and enabled only while the text differs from the saved patterns.
+- The results footer's Up/Down hint was dropped again: in Spanish it cut the status to "Indexando, f…".
+- Checked by screenshot: light + Spanish (Folders, Save before and after an edit, search window), dark + Spanish (Search features).
+
+Onboarding and launch at login (FR-10, 2026-10-03):
+
+- `onboarding.rs`, four steps in a solid 640×560 window: choose folders (native picker; each folder's status badge and explanation is the permission check, Continue needs one folder) → search features with the download consent (each feature's exact size, the total for the checked ones, "nothing else ever goes over the internet"; the config's defaults are preselected, `meaning` and `image_text` = 148 MB) → "Keep Magi available in the background ☑ Start with your computer" (checked) → the first index's progress (bar, status line, downloads and failed downloads), "You can close this window", and Open search. Leaving the features step enables-and-downloads the checked features and turns off the unchecked ones (only what differs); leaving the third saves `ui.launch_at_login`.
+- A plain launch, first or forwarded, opens onboarding until it is done, else settings; the tray's Settings and the search window's gear always open settings. Each step saves the next one to `ui.onboarding` (`folders|features|background|done`) when it completes, so leaving early brings onboarding back on the next plain launch, resumed at that step; the background step saves `done` with `launch_at_login` (user request, 2026-10-03). Removing every folder later does not reopen it. Existing configs without the key start at `folders`, with their folders listed. The last step has Open settings, Close and Open search.
+- Launch at login: `auto-launch` 0.6 (ADR-0011), per user (`HKCU\…\Run` on Windows, never system-wide), command `magi --background`, which opens no window (and exits at once if magi already runs). The shell registers or removes it when a saved `ui.launch_at_login` changes, and re-registers it at every start while it is on (a moved executable). A failure is logged only; the switch still shows the saved value. Settings › General has the same switch ("Start with your computer").
+- Dark mode: unchecked checkboxes and field borders use a visible border (`theme::sync` sets gpui-component's `input` color), which the consent step needs.
+- Tests: `onboarding::tests` (preselection, which features a confirm changes, the download total), `tests/onboarding.rs` (headless: folder → features unchecked → config has none enabled → background step saves `launch_at_login = true` and sends `AppEvent::Ui`).
+- Checked on Windows 11, isolated dev instance (dark, Spanish, fake embedder), by screenshot and scripted clicks: all four steps; Continue disabled without a folder; the native picker adds a folder shown as "Vigilando"; unchecking both defaults switches the button to Continue and the summary to "nothing to download", and the config gets `meaning = false`, `image_text = false`; with the box unchecked the config gets `launch_at_login = false`; the progress step shows the bar and "Indexando, faltan 133 archivos"; Open search closes onboarding and opens search; the next plain launch opens settings; `--background` starts with no window. Settings › General shows the switch.
+- The last step is a finish line, reworked after friends found it too technical (2026-10-04): "You're all set" with no step counter (the counter reads "of 3"), the shortcut large in the middle with "Try it now" / "It works", one plain sentence instead of the bar's numbers and the tray status line ("Getting your files ready…", "Getting Search by meaning ready…", "All your files are ready."; `onboarding::readiness`, tested), a failed download in words with where to retry, and Start searching. File counts stay in Settings › Index. Second pass, from the user (same day): Open settings and Close are back, the "icon next to the clock" line went, and the step is laid out centered (a check, the title, the shortcut card, the status line under it); the shortcut is drawn as keycaps (`onboarding::key_caps`, tested): Ctrl / ⇧ Mayús·Shift / a wide Espacio·Space with "+" on Windows and Linux, the ⌃⌥⇧⌘ symbols alone on macOS (`platform::SYMBOL_MODIFIERS`). Checked by screenshot: dark + Spanish and light + English, ready state; the preparing state was too short on the fixture corpus to capture.
+- Keyboard: buttons and checkboxes are gpui-component tab stops, as in settings; not tried by hand. The features step's Continue waits for the features to arrive, so the consent always lists what is applied.
+- Not tried by hand: a real feature download from onboarding, enabling launch at login (it writes the user's registry) and a real sign-in, macOS/Linux autostart, light mode and English. `get_permissions_report` in onboarding is M7.
+
+Hotkey recorder and conflict detection (FR-7, FR-9, SPEC §6.2, 2026-10-04):
+
+- Settings › General › Open search has Change: the box waits for keys (accent border, "Press Ctrl, Alt or the Windows/Cmd key with another key. Esc cancels."). A combination with Ctrl, Alt or Cmd/Win and a key `global-hotkey` knows becomes `ui.hotkey` (`Ctrl+Alt+K`, `hotkey::from_keystroke`); a modifier still held or plain typing keeps waiting.
+- Conflict detection: the shell registers the new shortcut before anything is saved (`AppEvent::Hotkey`, `hotkey::Hotkey::set`); if another app or the OS holds it, or it is Alt+Space / Cmd/Win+Space (`hotkey::reserved`, which register but belong to the OS), the old one stays registered, nothing is saved, and a warning box under it says "Another app or the system uses this shortcut · Pick a different combination." with the combination. A shortcut that fails to register at startup shows the same box. A change applies at once, no restart.
+- Tests: `hotkey::tests` (keystroke → setting, what is not a shortcut, reserved combos), `tests/settings.rs` (Esc and Shift+K send nothing; Ctrl+Alt+K asks the shell; a refusal saves nothing, an accept saves it).
+- Not tried by hand: recording in the running app (key events reaching the box) and a real conflict with another app's shortcut.
+- Onboarding's finish step has the same Change under the keycaps (user request): Esc cancels and Enter does nothing while it waits (the step's Enter/Esc bindings run before key listeners); a refused shortcut shows the conflict line in the card. Test: `tests/onboarding.rs` records Ctrl+Alt+J, the shell accepts, it is saved.
+- "It works. Press it again to close search." stayed after search closed (user report): the shell now tracks whether the search window is open (`Live::search_open`, cleared when its view is released, however it closed), and onboarding says just "It works." once it is closed. Not checked by hand.
+
+Quit without a tray (SPEC §6.3, 2026-10-04):
+
+- Settings › General ends with "Quit Magi" ("Closing this window keeps Magi running…") and a Quit button; it sends `AppEvent::Quit`, the same path as the tray's Quit (engine shutdown, then exit). With no tray (GNOME without AppIndicator) the app is now fully usable: a plain launch opens settings, the hotkey or `--toggle` opens search, and settings quits.
+- No test: the button only sends the event the tray's Quit already sends. Not checked by hand.
+
+Smaller open items closed (2026-10-05):
+
+- Remove asks first ("Stop searching this folder?"), saying that the folders inside it go too (children collapsed into a parent are purged with it).
+- Light mode: the slider's range is squeezed into 85–100 % tint instead of clamping at 85 %, so every step shows. Test: `theme::tests::light_mode_keeps_a_readable_tint`.
+- The unreadable list reloads when the status's error count changes while Settings › Index is open.
+- The settings window re-reads "Transparency effects" when it is activated again (the user changes it in the OS settings and comes back).
+- Dark mode: the off switch has a visible track and a light thumb (`theme::sync`). The radio item was dropped: the app uses no radios.
+- None of these were checked by hand yet: `docs/qa-checklist.md` rows 13 and 18–21.
+
+QA checklist: `docs/qa-checklist.md` (2026-10-05), Windows only for now; macOS and Linux columns are empty until a machine for each is available. Results already known are filled in from the rounds above.
+
+Intended, not open (decided 2026-10-05): a switched-off root always reads "Paused, not searched", even if its last health was a problem. It is not probed while off, so its stored health would be stale; switching it on probes it and shows the real state at once. Its files are out of search either way (`searchable_sql!`: enabled and not missing).
+
+Exceptions the owner accepted (M6):
+
+1. **Typing → results < 400 ms is not met on the first search after the text model idle-unloads** (0.98–1.86 s, 2026-09-30); warm searches pass (154–214 ms). Accepted 2026-10-05: minimal resource use while the app is not in use matters more, so the model is not warmed when the window opens (SPEC §3 lazy loading, NFR-1).
+
+Startup-failure window (2026-10-05):
+
+- When `Host::start` fails (database unopenable, manifest unreadable, …) the app used to log and exit, invisible in a release build. It now opens a small solid window, titled and worded in the saved language and theme (`config::load`, else the system's): "Magi couldn't start", "Your files are fine…", the error as it is, Show log (reveals `magi.log`) and Quit; closing it quits too (`QuitMode::LastWindowClosed`).
+- No test: a static window with no logic beyond the log path.
+- Checked on Windows 11 (dark, Spanish, debug build) with a folder where `magi.db` should be: the window shows the error, wrapped; closing it and clicking Salir (scripted) both end the process. Show log and light/English not tried by hand.
+
+Open:
+
+- Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
+
+## M6 sign-off (desktop app: search window, tray, settings, onboarding)
+
+**Not signed off yet.** Drafted 2026-10-05. This section collects every
+SPEC.md §7 M6 verification item with its evidence, and leaves room for the
+manual checks still to run. Only Windows can be tested for now; the macOS
+and Linux columns stay open, and M6 is not done until they are filled in
+(see this file's header). The manual steps are in `docs/qa-checklist.md`.
+Fill in a ☐ with ✅ / ❌ / ⚠️, the date, and a note or a link to the evidence.
+
+### Verification items
+
+| #   | SPEC.md item | Result | Evidence |
+| --- | ------------ | ------ | -------- |
+| 1   | `cargo test` on the desktop crate's pure logic: snippet highlight ranges, keyboard navigation, settings validation, transparency resolution, language resolution; `#[gpui::test]` smoke tests for the search window | **Pass.** 50 unit tests plus 4 headless GPUI tests. | `search::highlight::tests` (3), `search::state::tests` (8, incl. `selection_clamps_and_resets_on_new_results`), `settings::tests` (15), `theme::tests` (4), `i18n::tests` (4), `hotkey::tests` (5); `tests/headless.rs` `the_search_window_opens_empty_over_a_real_host`, `tests/settings.rs`, `tests/onboarding.rs`. `es` covering `en` is checked by the compiler. |
+| 2   | Core: search and indexing work with no features; enabling backfills only files missing its output; disabling keeps derived data; a failed or cancelled download never leaves an `Installed` asset | **Pass.** | M6 Plan 1 table: `with_no_features_files_are_found_by_keyword_and_name`, `enabling_meaning_embeds_only_the_files_missing_it`, `turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing`, `a_checksum_mismatch_is_failed_and_never_installed`, `cancel_clears_the_queue_and_a_later_download_works` |
+| 3   | `docs/qa-checklist.md` completed on all three OSes | **Windows: partly done** (see "Manual checks" below). macOS ☐ Linux ☐ | `docs/qa-checklist.md` |
+| 4   | Warm models: window visible < 150 ms after the hotkey; first results < 400 ms after typing stops | **Pass, with an accepted exception** for the first search after the model unloads (exception 1). Window: max 57 ms over 10 release-build samples. Results: 154–214 ms warm. macOS ☐ Linux ☐ | Plan 3 "Windows verification", second round |
+| 5   | Idle footprint with the window hidden meets NFR-1 (RSS ≤ 150 MB), recorded in `docs/benchmarks.md` | **Pass on Windows:** ~24 MB, models unloaded, window closed. CPU not recorded. macOS ☐ Linux ☐ | `docs/benchmarks.md`, "M6 — idle footprint (GPUI)" |
+| 6   | Renders on a GPU-less Windows VM and Linux VM, or the GPU requirement (§1) is documented as the reason it does not | Windows ☐ Linux ☐ | QA checklist row 12, "No GPU" |
+| 7   | IME and dead-key input in the search window on every OS | **Windows: dead keys pass** (`canción`, 2026-09-29). Windows IME ☐ macOS ☐ Linux ☐ | QA checklist row 7 |
+| 8   | CI builds the desktop app and runs its headless tests on all three OSes | **Pass.** `ci.yml` runs clippy and `cargo test --workspace` (which includes `magi-desktop`) on Windows, macOS and Linux; green, reported by the owner 2026-09-29. | Plan 3 "Windows verification", second round |
+
+### Manual checks (Windows)
+
+From `docs/qa-checklist.md`; the numbers match its rows. Already passed:
+1 hotkey toggle, 2 `--toggle`, 3 open and reveal, 4 hides on blur and Esc,
+9 first frame, 10 warm results, 11 idle RSS, 22 Spanish (2026-09-29/30),
+and 23 startup failure except Show log (2026-10-05).
+
+| Row | Check | Result | Date | Notes |
+| --- | ----- | ------ | ---- | ----- |
+| 5   | Multi-monitor placement (needs a second display) | ☐ | | |
+| 6   | HiDPI at 150 % and 200 % | ☐ | | |
+| 7   | IME (e.g. Japanese) composes in place | ☐ | | |
+| 12  | Software rendering (VirtualBox, 3D acceleration off) | ☐ | | |
+| 13  | Transparency effects switched while settings is open | ☐ | | |
+| 14  | Hotkey recorder in the running app (settings and onboarding) | ☐ | | |
+| 15  | Hotkey conflict: `Win+E`, a second Magi, another app, and at startup | ☐ | | |
+| 16  | Real feature download: turn on, network cut, remove download | ☐ | | |
+| 17  | Launch at login: registry value, sign out/in, switch off | ☐ | | |
+| 18  | Remove folder asks first | ☐ | | |
+| 19  | Unreadable list updates live | ☐ | | |
+| 20  | Light-mode see-through: every slider step shows | ☐ | | |
+| 21  | Dark-mode switch contrast | ☐ | | |
+| 22  | English, and the live language switch (tray included) | ☐ | | |
+| 23  | Startup failure: Show log reveals `magi.log` | ☐ | | |
+
+macOS and Linux: every row of `docs/qa-checklist.md`, plus row 8 (no tray,
+Linux GNOME without AppIndicator). ☐
+
+### Deliverables
+
+- Walking skeleton (GPUI, Host API, tray, hotkey, single instance, `--toggle`, blurred backdrop): done (Plan 3).
+- Search window (frameless, centered, on top, hides on blur/Esc, 150 ms debounce, results with thumbnail, page, date, snippet and sources, keyboard navigation, copy path, empty/loading/error states, indexing hint): done (Plan 4).
+- Tray menu (status line, Open search, Pause/Resume, Settings, Quit): done.
+- Global hotkey, configurable, with conflict detection: done (Plan 5); single instance and `--toggle`: done (Plan 3).
+- Optional search features (ADR-0010): done (Plan 1).
+- Settings window: done, except **fix actions for `missing` / `permission_denied` roots**, which need M7's permission guidance.
+- Onboarding (FR-10) with the download consent screen and "Start with your computer": done; `get_permissions_report` in onboarding is M7.
+- Search hint: done (Plan 4).
+- Localization (en/es, ICU4X, `ui.language`, live switch, tray): done.
+- Theme and window background, including the see-through amount (it visibly changes the window, so it stays): done.
+- Visual direction: variant A "Pane".
+- Files open and reveal only by `file_id` through `Host`: done (`Host::file_path`).
+- Not in SPEC's list, also done: the startup-failure window, quitting from settings when there is no tray, the last search query restored on reopen.
+
+### Exceptions the owner accepted
+
+1. Typing → results < 400 ms is not met on the first search after the text model idle-unloads (0.98–1.86 s); accepted 2026-10-05 in favor of minimal resource use while the app is not in use.
+
+### Intended behavior (decided, not open)
+
+- A switched-off folder reads "Paused, not searched" whatever its last health was; its files are out of search either way (2026-10-05).
+
+### Superseded
+
+- M6 Plan 2's seven manual Tauri console checks (CSP, capabilities, `engine://status`, …): the Tauri host was replaced by GPUI (ADR-0011), which has no webview and no IPC. What they guarded is now covered by `Host` tests (`FileIdNotFound` by id, `shutdown_stops_the_engine`) and the checks above.
+
+### Carried forward (none is an M6 verification item)
+
+- **NFR-8:** search p95 while indexing is recorded (278 ms), but the "never blocked behind more than one small batch" bound is unverified (max 3.34 s). M7 has its own NFR-8 item.
+- **NFR-11:** peak memory while indexing with a concurrent search is 1,762–1,800 MB against 1.5 GB (`image_visual` on). M7's 8 GB-machine item will hit it.
+- **`Engine::start` blocks for the startup walk:** no status, keyword-only search and a slow quit until it ends.
+- **`just eval`** with the real models through the desktop search path: pending before merging `feat/gpui-shell`.
+- A second launch that cannot reach the running Magi logs and exits with no window.
+- Search quality: nearest-but-irrelevant vectors fill the list (RRF fuses by rank only); candidate fix is a minimum similarity, tuned with `just eval`.
+
+### Sign-off
+
+- [ ] Windows manual checks above filled in, with no unexplained ❌
+- [ ] macOS: `docs/qa-checklist.md` complete
+- [ ] Linux: `docs/qa-checklist.md` complete, including row 8 (no tray)
+- [ ] Items 6 and 7 done on every OS (or the GPU requirement documented)
+- [ ] `just eval` run and recorded
+
+Signed off by: ______ Date: ______

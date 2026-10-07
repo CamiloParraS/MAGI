@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use crate::db::files::{self, FileRecord, FileState, StoredFile, upsert_file};
 use crate::db::roots;
 use crate::discovery::{self, Kind, WalkEntry, WalkOptions};
+use crate::dto::FileErrorCode;
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::extract::code::CodeExtractor;
@@ -17,8 +18,9 @@ use crate::extract::office::OfficeExtractor;
 use crate::extract::pdf::PdfExtractor;
 use crate::extract::text::TextExtractor;
 use crate::extract::{ExtractedDoc, Extractor, RawChunk};
+use crate::features::Feature;
 use crate::ocr::{NoOcr, OcrEngine};
-use crate::platform::{self, FsProbe, PermissionProbe, RootAccess};
+use crate::platform::{FsProbe, PermissionProbe, RootAccess};
 use crate::watch::reconcile::{next_scan_id, reconcile_root, remove_unseen};
 
 use super::change::{self, Found};
@@ -32,25 +34,36 @@ const LARGE_IMAGE_PIXELS: u64 = 12_000_000;
 
 /// What an indexing run needs beyond the walk options: the models.
 pub struct IndexContext {
-    /// `Arc` because the runtime shares the models between threads.
-    pub embedder: Arc<dyn TextEmbedder>,
+    /// `Arc` because the runtime shares the models between threads. `None`
+    /// when search by meaning is not running.
+    pub embedder: Option<Arc<dyn TextEmbedder>>,
     /// `Arc` because extraction runs on a detached thread that must own it.
-    pub ocr: Arc<dyn OcrEngine>,
+    /// `None` when reading text in images is not running.
+    pub ocr: Option<Arc<dyn OcrEngine>>,
     /// `None` leaves `vec_image` empty: images are still found by their text.
     pub image_embedder: Option<Arc<dyn ImageEmbedder>>,
     /// Bounds concurrent image decodes.
     pub image_gate: Arc<ImageGate>,
 }
 
-impl IndexContext {
-    /// A context with no OCR engine and no image embedder; images still get
-    /// QR payloads and a thumbnail.
-    pub fn new(embedder: Arc<dyn TextEmbedder>) -> Self {
+impl Default for IndexContext {
+    /// No feature running: keyword and filename indexing only.
+    fn default() -> Self {
         Self {
-            embedder,
-            ocr: Arc::new(NoOcr),
+            embedder: None,
+            ocr: None,
             image_embedder: None,
             image_gate: Arc::default(),
+        }
+    }
+}
+
+impl IndexContext {
+    /// Meaning on, OCR and visual off; images still get QR payloads and a thumbnail.
+    pub fn new(embedder: Arc<dyn TextEmbedder>) -> Self {
+        Self {
+            embedder: Some(embedder),
+            ..Self::default()
         }
     }
 }
@@ -140,9 +153,9 @@ pub fn index_root(
     requeue_on_model_change(
         conn,
         &ModelIds {
-            text: ctx.embedder.model_id(),
+            text: ctx.embedder.as_deref().map(|e| e.model_id()),
             image: ctx.image_embedder.as_deref().map(|e| e.model_id()),
-            ocr: ctx.ocr.engine_id(),
+            ocr: ctx.ocr.as_deref().map(|o| o.engine_id()),
         },
     )?;
 
@@ -252,8 +265,10 @@ pub(crate) enum Extracted {
     /// Read and extracted, ready to embed.
     Fresh(Box<Fresh>),
     /// Could not be read just now (I/O): try again later, with backoff.
-    /// `locked`: another program holds it open ([`platform::is_locked`]).
-    Retry { message: String, locked: bool },
+    Retry {
+        code: FileErrorCode,
+        message: String,
+    },
 }
 
 pub(crate) struct Fresh {
@@ -261,6 +276,8 @@ pub(crate) struct Fresh {
     /// Content chunks, filename chunk last.
     chunks: Vec<RawChunk>,
     thumb_key: Option<String>,
+    /// `Feature::bit`s of the search features this file is indexed without.
+    features_missing: i64,
 }
 
 impl Fresh {
@@ -271,7 +288,8 @@ impl Fresh {
 
 pub(crate) struct Embedded {
     fresh: Fresh,
-    embeddings: Vec<Vec<f32>>,
+    /// `None` when search by meaning is not running.
+    embeddings: Option<Vec<Vec<f32>>>,
 }
 
 /// Stage 1, extract: is it unchanged ([`change::keeps`])? Otherwise read,
@@ -280,11 +298,18 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
     let entry = &job.entry;
     let s = &job.stored;
     let unreadable = |e: std::io::Error| Extracted::Retry {
+        code: FileErrorCode::classify_io(&e),
         message: e.to_string(),
-        locked: platform::is_locked(&e),
     };
 
     let max_size_bytes = options.max_file_size_mb.saturating_mul(1024 * 1024);
+    let mut features_missing = if ctx.embedder.is_none() {
+        Feature::Meaning.bit()
+    } else {
+        0
+    };
+    // `Plan::Done` covers filename-only files and disabled kinds: they can
+    // only miss meaning.
     let mut outcome = match plan_entry(entry, max_size_bytes, options) {
         Plan::Unreadable(e) => return unreadable(e),
         Plan::Done(outcome) => {
@@ -314,6 +339,14 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
                     Err(e) => return unreadable(e),
                 }
             }
+            if kind == Kind::Image {
+                if ctx.ocr.is_none() {
+                    features_missing |= Feature::ImageText.bit();
+                }
+                if ctx.image_embedder.is_none() {
+                    features_missing |= Feature::ImageVisual.bit();
+                }
+            }
             match extract_entry(&entry.path, kind, options, ctx) {
                 Ok(outcome) => outcome,
                 Err(e) => return unreadable(e),
@@ -331,6 +364,7 @@ pub(crate) fn prepare(ctx: &IndexContext, options: &IndexRootOptions, job: &Job)
         outcome,
         chunks,
         thumb_key,
+        features_missing,
     }))
 }
 
@@ -342,13 +376,16 @@ pub(crate) fn embed(
     mut fresh: Fresh,
     before_batch: &dyn Fn(),
 ) -> Result<Embedded> {
-    let embeddings = embed_chunks(
-        &*ctx.embedder,
-        &job.entry.path,
-        &mut fresh.chunks,
-        &mut fresh.outcome,
-        before_batch,
-    )?;
+    let embeddings = match &ctx.embedder {
+        Some(embedder) => Some(embed_chunks(
+            &**embedder,
+            &job.entry.path,
+            &mut fresh.chunks,
+            &mut fresh.outcome,
+            before_batch,
+        )?),
+        None => None,
+    };
     Ok(Embedded { fresh, embeddings })
 }
 
@@ -363,6 +400,18 @@ pub(crate) fn embed_group(
     group: Vec<(Job, Fresh)>,
     before_batch: &dyn Fn(),
 ) -> Vec<(Job, Result<Embedded>)> {
+    let Some(embedder) = ctx.embedder.as_deref() else {
+        return group
+            .into_iter()
+            .map(|(job, fresh)| {
+                let embedded = Embedded {
+                    fresh,
+                    embeddings: None,
+                };
+                (job, Ok(embedded))
+            })
+            .collect();
+    };
     let chunk = |(f, c): (usize, usize)| group[f].1.chunks[c].text.as_str();
     let mut order: Vec<(usize, usize)> = group
         .iter()
@@ -378,7 +427,7 @@ pub(crate) fn embed_group(
     for batch in batches_by_length(&order, |at| chunk(at).len()) {
         before_batch();
         let texts: Vec<&str> = batch.iter().map(|&at| chunk(at)).collect();
-        match ctx.embedder.embed_passages(&texts) {
+        match embedder.embed_passages(&texts) {
             Ok(out) if out.len() == texts.len() => {
                 for (&(f, c), v) in batch.iter().zip(out) {
                     vectors[f][c] = v;
@@ -398,7 +447,13 @@ pub(crate) fn embed_group(
     group
         .into_iter()
         .zip(vectors)
-        .map(|((job, fresh), embeddings)| (job, Ok(Embedded { fresh, embeddings })))
+        .map(|((job, fresh), embeddings)| {
+            let embedded = Embedded {
+                fresh,
+                embeddings: Some(embeddings),
+            };
+            (job, Ok(embedded))
+        })
         .collect()
 }
 
@@ -429,11 +484,13 @@ pub(crate) fn store_embedded(
     embedded: Embedded,
 ) -> Result<Status> {
     let Embedded {
-        fresh: Fresh {
-            outcome,
-            chunks,
-            thumb_key,
-        },
+        fresh:
+            Fresh {
+                outcome,
+                chunks,
+                thumb_key,
+                features_missing,
+            },
         embeddings,
     } = embedded;
     let entry = &job.entry;
@@ -459,18 +516,22 @@ pub(crate) fn store_embedded(
         lang: outcome.doc.lang.as_deref(),
         state: outcome.state,
         skip_reason: outcome.skip_reason,
-        error: outcome.error.as_deref(),
+        error: outcome
+            .error
+            .as_ref()
+            .map(|(code, text)| (*code, text.as_str())),
         // Only inserts use it, and the row exists (a result for a vanished
         // row is dropped): scans own `seen_scan_id`.
         seen_scan_id: 0,
         content_hash: outcome.content_hash.as_ref().map(|h| h.as_slice()),
         thumb_key: thumb_key.as_deref(),
+        features_missing,
     };
     upsert_file(
         conn,
         &record,
         &chunks,
-        &embeddings,
+        embeddings.as_deref(),
         outcome.doc.image_embedding.as_deref(),
     )?;
     Ok(match outcome.state {
@@ -487,10 +548,10 @@ fn index_file(ctx: &IndexContext, options: &IndexRootOptions, job: Job) -> Resul
             job: Box::new(job),
             state,
         },
-        Extracted::Retry { message, locked } => FileStep::Retry {
+        Extracted::Retry { code, message } => FileStep::Retry {
             file_id: job.stored.id,
+            code,
             message,
-            locked,
         },
         Extracted::Fresh(fresh) => {
             let embedded = embed(ctx, &job, *fresh, &|| {})?;
@@ -523,7 +584,7 @@ fn embed_chunks(
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "embedding failed");
                 outcome.state = FileState::Error;
-                outcome.error = Some(e.to_string());
+                outcome.error = Some((FileErrorCode::EmbedFailed, e.to_string()));
                 chunks.drain(..chunks.len() - 1);
                 return embedder.embed_passages(&[chunks[0].text.as_str()]);
             }
@@ -553,7 +614,7 @@ struct FileOutcome {
     kind: Kind,
     state: FileState,
     skip_reason: Option<&'static str>,
-    error: Option<String>,
+    error: Option<(FileErrorCode, String)>,
     content_hash: Option<[u8; 32]>,
     doc: ExtractedDoc,
 }
@@ -578,10 +639,10 @@ fn skipped(kind: Kind, reason: &'static str) -> FileOutcome {
     }
 }
 
-fn errored(kind: Kind, message: String) -> FileOutcome {
+fn errored(kind: Kind, code: FileErrorCode, message: String) -> FileOutcome {
     FileOutcome {
         state: FileState::Error,
-        error: Some(message),
+        error: Some((code, message)),
         ..indexed_no_chunks(kind)
     }
 }
@@ -668,7 +729,9 @@ fn extract_entry(
     });
     let (path_buf, ocr, image_embedder, max_megapixels) = (
         path.to_path_buf(),
-        Arc::clone(&ctx.ocr),
+        ctx.ocr
+            .clone()
+            .unwrap_or_else(|| Arc::new(NoOcr) as Arc<dyn OcrEngine>),
         ctx.image_embedder.clone(),
         options.max_image_megapixels,
     );
@@ -713,7 +776,7 @@ fn extract_entry(
         },
         Err(e) => FileOutcome {
             content_hash,
-            ..errored(kind, e.to_string())
+            ..errored(kind, FileErrorCode::classify(&e), e.to_string())
         },
     })
 }
@@ -922,7 +985,7 @@ mod tests {
         assert_eq!((counting.calls(), counting.chunks()), (2, 6));
         let together: Vec<Vec<Vec<f32>>> = embedded
             .into_iter()
-            .map(|(_, e)| e.unwrap().embeddings)
+            .map(|(_, e)| e.unwrap().embeddings.unwrap())
             .collect();
         assert_eq!(together, alone);
     }
@@ -1547,7 +1610,7 @@ mod tests {
             .join("../../fixtures/corpus/qr/qr_url.png");
         fs::copy(qr, root.join("code.png")).unwrap();
         let with = |ocr: &'static str| IndexContext {
-            ocr: Arc::new(NamedOcr(ocr)),
+            ocr: Some(Arc::new(NamedOcr(ocr))),
             ..IndexContext::new(Arc::new(FakeEmbedder))
         };
         let go = |conn: &mut Connection, ctx: &IndexContext| {

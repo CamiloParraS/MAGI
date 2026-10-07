@@ -8,46 +8,27 @@ default:
     @just --list
 
 # Set up development environment and dependencies
-setup: install-frontend
+setup:
     cargo run -p xtask -- fetch-pdfium
     cargo run -p xtask -- fetch-onnxruntime
 
-[working-directory: 'apps/desktop']
-install-frontend:
-    pnpm install
-
-# Start the development server
-[working-directory: 'apps/desktop']
+# Run the desktop app (the GPUI crate lands in M6 Plan 3; ADR-0011)
 dev:
-    pnpm tauri dev
+    cargo run -p magi-desktop
 
-# Run all code formatting, linting, and type checks
-check: check-rust check-frontend
+# Run the desktop app with onboarding reset to its first step (folders and features stay)
+onboarding:
+    cargo run -p magi-desktop -- --onboarding
 
-check-rust:
+# Run formatting, lints and all tests
+check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace
 
-[working-directory: 'apps/desktop']
-check-frontend:
-    pnpm lint
-    pnpm typecheck
-    pnpm test
-
-# Run Rust and frontend tests with a fake embedder (no model downloads required)
-test: test-rust test-frontend
-
-test-rust:
+# Run all tests with a fake embedder (no model downloads required)
+test:
     cargo test --workspace
-
-[working-directory: 'apps/desktop']
-test-frontend:
-    pnpm test
-
-# Regenerate ts-rs bindings and verify no unexpected git diff exists
-bindings:
-    @echo "no ts-rs bindings yet: dto.rs exports nothing until the IPC contract lands in M6"
 
 # Download required models into the dev data directory
 models:
@@ -61,7 +42,6 @@ eval:
 bench:
     cargo run -p xtask --release -- bench-corpus
 
-# Build the production desktop application
-[working-directory: 'apps/desktop']
+# Build the desktop app in release mode (installers: SPEC.md §9 Q9)
 build:
-    pnpm tauri build
+    cargo build -p magi-desktop --release

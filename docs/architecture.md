@@ -1,40 +1,50 @@
 # Architecture
 
 Stub. Update this document whenever a public contract changes (DB schema,
-IPC commands, config format) — see SPEC.md §0.
+Host API, config format) — see SPEC.md §0.
 
 ## Process model
 
-A single process: the Tauri app hosts `magi-core::Engine`. The engine runs
-on its own threads; Tauri commands talk to it through an `EngineHandle`. The
+A single process: the GPUI desktop app hosts `magi-core::Engine` through
+`host::Host` (ADR-0011). The engine runs on its own threads; the UI calls
+`Host` directly, running its blocking methods on GPUI's background executor. The
 CLI (`magi-cli daemon`) hosts the same engine headless. See SPEC.md §5.3 for
 the full thread/data-flow diagram.
 
 ## Crates
 
-- `magi-core` — all business logic, no Tauri dependency.
+- `magi-core` — all business logic, no UI dependency.
 - `magi-cli` — dev/test CLI over `magi-core`.
-- `apps/desktop/src-tauri` — the Tauri shell; thin command wrappers only.
+- `apps/desktop` — the GPUI app (M6 Plan 3 onward); thin views over `Host` only.
 - `xtask` — cross-platform dev tasks (fetch PDFium, fetch models, ...).
 
-## IPC contract
+## Host API
 
-DTOs live in `crates/magi-core/src/dto.rs` and are exported to
-`apps/desktop/src/bindings/` via `ts-rs`. See SPEC.md §5.7 for the full
-command table (populated as commands land, starting M1).
+The UI calls `host::Host` directly; there is no IPC layer, serialization or
+generated bindings (ADR-0011, SPEC.md §5.7). The types it sees live in
+`crates/magi-core/src/dto.rs`: `IndexStatus { state: idle|scanning|indexing|paused,
+queued, indexed, skipped, errors, current_file?, roots: RootStatus[] }` and
+`RootStatus { id, path, enabled, status, indexed }` (`indexed`: its files in
+the `indexed` state). Paths are strings (lossy for
+non-UTF-8 names). See "Control surface" below for the `EngineHandle` methods
+behind them. The DTOs keep their `serde` derives (config, the CLI's output and
+the wire-name tests use them); the `ts-rs` derives are gone.
 
-So far (M5 Slice 7, serde only; the `ts-rs` derive comes with M6):
-`IndexStatus { state: idle|scanning|indexing|paused, queued, indexed, skipped,
-errors, current_file?, roots: RootStatus[] }` and `RootStatus { id, path,
-enabled, status }`. Paths are strings (lossy for non-UTF-8 names). See
-"Control surface" below for the `EngineHandle` methods behind them.
+M6 Plan 1 adds `FeatureStatus { feature, enabled, download_size, install,
+backfill? }`, `Install` (`NotInstalled | Downloading { bytes, total } |
+Installed { size_bytes } | Failed { code }`, tagged by `state`), `Backfill
+{ done, total }` and `DownloadError` (`DownloadNetworkError`,
+`ChecksumMismatch`, `DiskFull`, `PermissionDenied`, `WriteFailed`). See
+"Search features" below.
 
 ## Database schema
 
 See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
 (`0001_init.sql`; `0002_files_indexes.sql` adds the partial indexes
 `idx_files_size`, for the move lookup, and `idx_files_pending`, which
-`next_pending` reads in order with `INDEXED BY`). `db::open()` registers `sqlite-vec`,
+`next_pending` reads in order with `INDEXED BY`; `0003_features_missing.sql`
+adds `files.features_missing`, see "Search features"; `0004_error_code.sql`
+adds `files.error_code`, see "Desktop host"). `db::open()` registers `sqlite-vec`,
 sets `journal_mode=WAL`/`synchronous=NORMAL`/`foreign_keys=ON`/`busy_timeout`,
 and runs any pending migrations (tracked in `schema_migrations`, applied at
 most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
@@ -46,8 +56,14 @@ most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
 `<config_dir>/config.toml`, shape in SPEC.md §5.2. `config::load()` writes
 defaults on first run; `config::save()` writes to a temp file and renames it
 into place so a crash mid-save can't corrupt the existing config.
-`Config::validate()` rejects malformed exclude globs and roots whose path
-doesn't exist on disk.
+`Config::validate()` rejects malformed exclude globs, roots whose path
+doesn't exist on disk, and `ui.transparency_intensity` outside 0.40–0.95.
+M6 adds `[features] meaning = true, image_text = true, image_visual = false`
+(desired state only) and `ui.language` (`system|en|es`),
+`ui.transparency_mode` (`match_system|always|never`) and
+`ui.transparency_intensity` (default 0.75), and `ui.onboarding`
+(`folders|features|background|done`, default `folders`): the onboarding step
+to resume at, saved as each step completes. Unknown enum values fail to parse.
 The default `exclude_globs` also skip Unity's regenerated `Library` caches,
 `*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
 apply only when the config file is first written: an existing config keeps
@@ -279,10 +295,7 @@ runs under `index::isolate::run` (timeout, panic containment, stuck-thread cap).
 
 **Thumbnails** are 256 px JPEGs at `<cache_dir>/thumbs/<first two hex>/<key>.jpg`
 (`thumbs::store`), keyed by content hash, for images and PDF first pages.
-The desktop app enables Tauri's asset protocol with an empty static scope and
-grants exactly `thumbs::thumbs_dir()` at startup, so the webview can read
-thumbnails and nothing else. It is granted at runtime because the cache lives
-under the magi data directory, which the Tauri identifier cannot name.
+The desktop app renders them straight from `thumb_path` with GPUI's `img()`.
 
 **Model manifest.** Two slots were added: `ocr` (`det.onnx`, `rec.onnx`,
 `rec.yml`) and `image` (`vision_model.onnx`, `text_model.onnx`,
@@ -364,6 +377,45 @@ on `roots::Health` and `Root`, with SQL twins the queries splice in
   roots are scanned and indexed; the others keep their rows.
 - **Searchable:** enabled and not `missing`. An unreadable root stays
   searchable, because its index is still right.
+
+## Search features (M6 Plan 1, ADR-0010)
+
+`features::Feature` is `meaning` (e5, manifest slot `text`, bit 1),
+`image_text` (OCR, slot `ocr`, bit 2) or `image_visual` (SigLIP 2, slot
+`image`, bit 4).
+
+- **`Components { text, ocr, image }`**, every member an `Option`, is what
+  `Engine::start(config, db_path, Components)` runs with. A missing component
+  is skipped: no `vec_text` rows without meaning (chunks still go to FTS), no
+  OCR chunks without image text, no `vec_image` without image visual.
+  `hybrid_search(conn, Option<&dyn TextEmbedder>, ..)` skips the text vector
+  query when meaning is off; old `vec_text` rows stay unused, never deleted.
+  `ModelIds` is all-optional: a component that is not running never triggers
+  a model-change re-queue.
+- **`load_components(&FeaturesConfig)`** loads each enabled, installed
+  feature (fakes under `MAGI_FAKE_EMBEDDER=1`, except OCR); a load failure
+  leaves that feature out with a warning.
+- **`files.features_missing`** records, in the file's own transaction, the
+  bits of the features it was indexed without. Only images extracted as
+  images can miss image features.
+- **Backfill:** a feature becomes available → the host restarts the engine →
+  `index::requeue_missing` re-queues `indexed` and `skipped` files carrying the bit of any
+  running feature and stores `meta.backfill_total_<feature>` → the normal
+  pipeline re-indexes them → the bit clears. `backfill_progress` is
+  `(total - left, total)` while files carrying the bit are `pending` or
+  `indexing`; an `error` row counts as done. A restart mid-backfill keeps the
+  original total.
+- **`Features`** (`Features::start(db_path)`) owns the complete state: desire
+  from `config.toml`, availability from disk (`installed_size`: every
+  manifest file at its final name with the manifest size) plus the download in
+  flight, and backfill progress from the database. One `features` thread runs
+  queued downloads one at a time and re-reads progress every 250 ms;
+  `subscribe()` sends the current `Vec<FeatureStatus>` and then every change,
+  always complete. `cancel_download` stops the running download and drops the
+  queue (all back to `NotInstalled`); `remove_download` deletes only
+  `<data_dir>/models/<slot>/` and is refused while that feature downloads.
+- **CLI:** `magi-cli features list | enable <f> | disable <f>
+  [--delete-download]`; `doctor` prints the same table.
 
 ## Engine (M5 Slice 3)
 
@@ -521,3 +573,62 @@ minute, 100% = one core), RSS and private memory once a minute. Private
 memory (`PrivateUsage` on Windows) is the idle number to compare: RSS moves
 with however much the OS trims the working set. Elsewhere that column is the
 virtual size.
+
+## Desktop host (M6 Plan 2)
+
+`crates/magi-core/src/host.rs`'s `Host` is what the desktop app (and any
+other shell) manages instead of an `Engine` directly: one clone-able
+handle backed by a supervisor thread that owns the engine's lifecycle, plus
+its own read-only DB connection for search.
+
+- **Supervisor thread** (`host::supervise`). Each loop iteration reads the
+  current feature inputs (`host::engine_inputs`: each feature's `(enabled,
+  installed)` pair) *before* calling `start_engine` — `Engine::start` loads
+  config, builds components and blocks, so a feature change landing during
+  that window must show up as a mismatch against the freshly-read inputs
+  afterward, not be silently folded into them as if it had already been
+  running (Task 5's review fix). It restarts the engine when: a feature's
+  `(enabled, installed)` pair changes (ADR-0010 Plan 2 notes; progress and
+  backfill counts never count as a change), `update_settings` changes
+  `indexing` or `models`, or `clear_index` finishes. `HostEvent::Status` and
+  `HostEvent::Features` are forwarded to the shell as they arrive — a closed
+  window just misses one; the next event is always complete, never a delta.
+- **Search's own connection.** `Host` opens a second SQLite connection with
+  `PRAGMA query_only = true` and never touches the engine's writer connection
+  pool; `Host::search` reads through it under a `Mutex`, independent of
+  whether the engine is running, restarting, or down (a keyword-only result
+  from FTS/filename data while `EngineHandle` is unavailable, rather than
+  `EngineStarting` failing every search).
+- **`SearchGuard` yield.** Before running the fused query, `Host::search`
+  takes `EngineHandle::search_pending().guard()` for the query's duration,
+  the same priority lock the embed worker checks before each batch (SPEC.md
+  §5.3) — indexing pauses between batches rather than making a search wait
+  behind one. This is what NFR-8 (docs/benchmarks.md, "M6 — NFR-8") measures.
+- **Host API methods**: `search`, `get_status`, `list_roots`, `add_root`,
+  `remove_root`, `set_root_enabled`, `pause_indexing`, `resume_indexing`,
+  `rescan_all`, `open_file`, `reveal_file`, `get_settings`,
+  `update_settings`, `list_errors`, `retry_errors`, `features_status`,
+  `set_feature_enabled`, `download_feature`, `cancel_download`,
+  `remove_download`, `clear_index` (on `Host` or its `EngineHandle`). All
+  block, so the desktop app runs them on GPUI's background executor and the
+  UI thread never waits on the database or a model. `open_file`/`reveal_file`
+  resolve the path from the DB (`Host::file_path`, which also errors when
+  the file no longer exists); the UI never builds a path. `list_roots` also reads the DB (`Host::list_roots`), so it answers
+  while the engine restarts, and `search` clamps its `limit` to 1..=500. The
+  supervisor coalesces what queues up while the engine starts or stops: the
+  newest feature state only, and one control (Stop > Clear > Restart).
+- **Events**: `HostEvent::Status` (`IndexStatus`) and `HostEvent::Features`
+  (`FeatureStatus[]`, always complete), delivered through `Host::start`'s
+  callback.
+- **`ErrorCode`** (`dto.rs`): every command's `Result` error side, `{ code,
+  ...params }` (`#[serde(tag = "code")]`), built from `crate::Error` by
+  `ErrorCode::from`. Locale-neutral by construction — see
+  SPEC.md §5.7 "Errors" for the variant list.
+Known gap (carried from the Tauri shell): if `Host::start` fails at startup, the app
+must not panic with no window, dialog or log — release builds set
+`windows_subsystem = "windows"` and the desktop crate has no `tracing`
+subscriber wired up yet. Deferred to Plan 5.
+
+### Desktop app (M6 Plan 3)
+
+`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. A plain launch (first or forwarded) opens onboarding until `ui.onboarding` is `done` (FR-10), resuming at the saved step, else settings; the search window's gear and the tray open settings. `magi --background` is the launch at login's command line (`auto-launch`, registered per user while `ui.launch_at_login` is true; the shell applies a change of it): it starts in the tray and opens no window, and exits at once if magi is already running. The settings hotkey recorder sends `AppEvent::Hotkey`; the shell registers the new `ui.hotkey` in place of the old one and replies, and only a registered shortcut is saved (a refused one stays in `Live::hotkey_conflict`, as does one that fails at startup). Logs go to the file set up in `logging.rs`.

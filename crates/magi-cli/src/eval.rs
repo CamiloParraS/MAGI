@@ -106,8 +106,8 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &root.path,
         &options,
         &IndexContext {
-            embedder: embedder.clone(),
-            ocr: crate::ocr_from_env(),
+            embedder: Some(embedder.clone()),
+            ocr: Some(crate::ocr_from_env()),
             image_gate: Default::default(),
             image_embedder: Some(image_embedder.clone()),
         },
@@ -151,7 +151,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                 }
                 "hybrid" => search::hybrid_search(
                     &conn,
-                    embedder.as_ref(),
+                    Some(embedder.as_ref()),
                     Some(image_embedder.as_ref()),
                     &q.query,
                     FETCH_LIMIT,

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use crate::db::files::{self, FileState};
+use crate::dto::FileErrorCode;
 use crate::error::Result;
 
 use super::pipeline::{Embedded, Job, Status, store_embedded, unix_now};
@@ -28,20 +29,19 @@ pub(crate) enum FileStep {
     /// Failed for a reason that may pass: back off and retry.
     Retry {
         file_id: i64,
+        code: FileErrorCode,
         message: String,
-        locked: bool,
     },
     /// Gone from disk.
     Delete(i64),
 }
 
 impl FileStep {
-    /// A failure that may pass, not caused by a lock.
-    pub(crate) fn retry(file_id: i64, message: String) -> Self {
+    pub(crate) fn retry(file_id: i64, code: FileErrorCode, message: String) -> Self {
         Self::Retry {
             file_id,
+            code,
             message,
-            locked: false,
         }
     }
 
@@ -63,7 +63,7 @@ pub(crate) fn begin(
 ) -> (FileStep, Option<Job>) {
     let (file, entry) = match action {
         Action::Delete(id) => return (FileStep::Delete(id), None),
-        Action::Fail { id, message } => return (FileStep::retry(id, message), None),
+        Action::Fail { id, code, message } => return (FileStep::retry(id, code, message), None),
         Action::Extract { file, entry } => (file, entry),
     };
     let stored = files::get_stored(conn, &entry.path)
@@ -118,9 +118,9 @@ fn apply_as(conn: &mut Connection, step: FileStep, writer: Writer) -> Result<Opt
         }
         FileStep::Retry {
             file_id,
+            code,
             message,
-            locked,
-        } => retry(conn, file_id, &message, locked).map(Some),
+        } => retry(conn, file_id, code, &message).map(Some),
         FileStep::Keep { job, state } => {
             if stale(conn, job.stored.id) {
                 return Ok(None);
@@ -143,7 +143,7 @@ fn apply_as(conn: &mut Connection, step: FileStep, writer: Writer) -> Result<Opt
                 Ok(status) => Ok(Some(status)),
                 Err(e) => {
                     // Leave the file retryable rather than stuck in `indexing`.
-                    let _ = retry(conn, id, &e.to_string(), false);
+                    let _ = retry(conn, id, FileErrorCode::classify(&e), &e.to_string());
                     Err(e)
                 }
             }
@@ -161,13 +161,13 @@ fn superseded(conn: &Connection, file_id: i64) -> bool {
     files::state_of(conn, file_id).is_ok_and(|state| state != Some(FileState::Indexing))
 }
 
-fn retry(conn: &Connection, file_id: i64, message: &str, locked: bool) -> Result<Status> {
-    let record = if locked {
-        files::record_locked
+fn retry(conn: &Connection, file_id: i64, code: FileErrorCode, message: &str) -> Result<Status> {
+    let failure = if code == FileErrorCode::Locked {
+        files::record_locked(conn, file_id, code, message, unix_now())?
     } else {
-        files::record_failure
+        files::record_failure(conn, file_id, code, message, unix_now())?
     };
-    Ok(match record(conn, file_id, message, unix_now())? {
+    Ok(match failure {
         files::Failure::Retry { .. } => Status::Retried,
         files::Failure::GaveUp { .. } => Status::Errored,
     })
@@ -280,6 +280,7 @@ mod tests {
         assert!(job.is_none() && matches!(step, FileStep::Delete(3)));
         let fail = Action::Fail {
             id: 4,
+            code: FileErrorCode::ReadFailed,
             message: "busy".into(),
         };
         let (step, job) = begin(&f.conn, fail, &f.roots);
@@ -288,7 +289,7 @@ mod tests {
             step,
             FileStep::Retry {
                 file_id: 4,
-                locked: false,
+                code: FileErrorCode::ReadFailed,
                 ..
             }
         ));
@@ -397,7 +398,7 @@ mod tests {
         let Action::Extract { file, .. } = f.stable("a.txt") else {
             unreachable!()
         };
-        let step = FileStep::retry(file.id, "locked".into());
+        let step = FileStep::retry(file.id, FileErrorCode::ReadFailed, "locked".into());
         assert_eq!(step.file_id(), file.id);
         assert!(matches!(
             apply(&mut f.conn, step).unwrap(),

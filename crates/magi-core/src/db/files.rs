@@ -6,6 +6,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{Connection, params};
 
 use crate::db::roots::indexable_sql;
+use crate::dto::{FileError, FileErrorCode};
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::extract::RawChunk;
@@ -67,12 +68,14 @@ pub struct FileRecord<'a> {
     pub lang: Option<&'a str>,
     pub state: FileState,
     pub skip_reason: Option<&'a str>,
-    pub error: Option<&'a str>,
+    pub error: Option<(FileErrorCode, &'a str)>,
     pub seen_scan_id: i64,
     /// blake3 of the file's bytes; `None` when the content was never read.
     pub content_hash: Option<&'a [u8]>,
     /// Thumbnail cache key (see `crate::thumbs`).
     pub thumb_key: Option<&'a str>,
+    /// `Feature::bit`s of the search features this file was indexed without.
+    pub features_missing: i64,
 }
 
 /// Inserts or replaces `record`, its `chunks`, and their `vec_text`
@@ -80,6 +83,8 @@ pub struct FileRecord<'a> {
 /// unique `path`, and any previous chunks/vectors for that file are
 /// deleted before the new ones are inserted (idempotent re-indexing).
 /// `embeddings[i]` is the vector for `chunks[i]` — same length, same order.
+/// `embeddings` is `None` when meaning is not running: chunks are stored for
+/// keyword search with no `vec_text` rows.
 /// `image_embedding` replaces the file's `vec_image` row (or removes it
 /// when `None`) in the same transaction.
 ///
@@ -92,10 +97,12 @@ pub fn upsert_file(
     conn: &mut Connection,
     record: &FileRecord,
     chunks: &[RawChunk],
-    embeddings: &[Vec<f32>],
+    embeddings: Option<&[Vec<f32>]>,
     image_embedding: Option<&[f32]>,
 ) -> Result<i64> {
-    if chunks.len() != embeddings.len() {
+    if let Some(embeddings) = embeddings
+        && chunks.len() != embeddings.len()
+    {
         // `zip` below would silently drop the excess, i.e. lose chunks
         // from the index with no error anywhere.
         return Err(crate::error::Error::Model(format!(
@@ -113,8 +120,8 @@ pub fn upsert_file(
         "INSERT INTO files (
             root_id, path, rel_path, file_name, ext, kind, size, mtime_ns,
             lang, state, skip_reason, error, pipeline_version, seen_scan_id, indexed_at,
-            content_hash, thumb_key
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15)
+            content_hash, thumb_key, features_missing, error_code
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?13, unixepoch(), ?14, ?15, ?17, ?18)
          ON CONFLICT(path) DO UPDATE SET
             root_id = excluded.root_id,
             rel_path = excluded.rel_path,
@@ -127,8 +134,10 @@ pub fn upsert_file(
             state = excluded.state,
             skip_reason = excluded.skip_reason,
             error = excluded.error,
+            error_code = excluded.error_code,
             content_hash = excluded.content_hash,
             thumb_key = excluded.thumb_key,
+            features_missing = excluded.features_missing,
             pipeline_version = excluded.pipeline_version,
             attempts = 0,
             next_attempt_at = NULL,
@@ -146,11 +155,13 @@ pub fn upsert_file(
             record.lang,
             record.state,
             record.skip_reason,
-            record.error,
+            record.error.map(|(_, text)| text),
             record.seen_scan_id,
             record.content_hash,
             record.thumb_key,
             crate::index::PIPELINE_VERSION,
+            record.features_missing,
+            record.error.map(|(code, _)| code),
         ],
         |row| row.get(0),
     )?;
@@ -179,7 +190,7 @@ pub fn upsert_file(
         )?;
         let mut insert_vector =
             tx.prepare("INSERT INTO vec_text (chunk_id, embedding) VALUES (?1, vec_f32(?2))")?;
-        for (ordinal, (chunk, embedding)) in chunks.iter().zip(embeddings).enumerate() {
+        for (ordinal, chunk) in chunks.iter().enumerate() {
             let chunk_id: i64 = insert_chunk.query_row(
                 params![
                     file_id,
@@ -192,12 +203,28 @@ pub fn upsert_file(
                 ],
                 |row| row.get(0),
             )?;
-            insert_vector.execute(params![chunk_id, embedding_to_blob(embedding)])?;
+            if let Some(embeddings) = embeddings {
+                insert_vector
+                    .execute(params![chunk_id, embedding_to_blob(&embeddings[ordinal])])?;
+            }
         }
     }
 
     tx.commit()?;
     Ok(file_id)
+}
+
+/// Where a file is, for `open_file`/`reveal_file`: the UI never sends paths.
+pub fn path_of(conn: &Connection, file_id: i64) -> Result<PathBuf> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT path FROM files WHERE id = ?1",
+        params![file_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .map(PathBuf::from)
+    .ok_or(crate::error::Error::FileIdNotFound(file_id))
 }
 
 pub struct FileRow {
@@ -390,17 +417,24 @@ pub enum Failure {
     GaveUp { attempts: u32 },
 }
 
-pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
+pub fn record_failure(
+    conn: &Connection,
+    file_id: i64,
+    code: FileErrorCode,
+    message: &str,
+    now: i64,
+) -> Result<Failure> {
     let attempts = attempts_of(conn, file_id)? + 1;
     if attempts >= MAX_ATTEMPTS {
         conn.execute(
-            "UPDATE files SET state = 'error', attempts = ?2, error = ?3, next_attempt_at = NULL
+            "UPDATE files SET state = 'error', attempts = ?2, error = ?3, error_code = ?4,
+                    next_attempt_at = NULL
              WHERE id = ?1",
-            params![file_id, attempts, message],
+            params![file_id, attempts, message, code],
         )?;
         return Ok(Failure::GaveUp { attempts });
     }
-    retry_later(conn, file_id, attempts, message, now)
+    retry_later(conn, file_id, code, attempts, message, now)
 }
 
 /// A file another program holds open (Windows sharing or lock violation):
@@ -409,9 +443,15 @@ pub fn record_failure(conn: &Connection, file_id: i64, message: &str, now: i64) 
 ///
 /// ponytail: shares `attempts` with real failures, so one real failure right
 /// after a long lock gives up at once; a separate lock counter if that bites.
-pub fn record_locked(conn: &Connection, file_id: i64, message: &str, now: i64) -> Result<Failure> {
+pub fn record_locked(
+    conn: &Connection,
+    file_id: i64,
+    code: FileErrorCode,
+    message: &str,
+    now: i64,
+) -> Result<Failure> {
     let attempts = (attempts_of(conn, file_id)? + 1).min(MAX_ATTEMPTS - 1);
-    retry_later(conn, file_id, attempts, message, now)
+    retry_later(conn, file_id, code, attempts, message, now)
 }
 
 fn attempts_of(conn: &Connection, file_id: i64) -> Result<u32> {
@@ -425,15 +465,17 @@ fn attempts_of(conn: &Connection, file_id: i64) -> Result<u32> {
 fn retry_later(
     conn: &Connection,
     file_id: i64,
+    code: FileErrorCode,
     attempts: u32,
     message: &str,
     now: i64,
 ) -> Result<Failure> {
     let next_attempt_at = now + backoff_secs(attempts);
     conn.execute(
-        "UPDATE files SET state = 'pending', attempts = ?2, error = ?3, next_attempt_at = ?4
+        "UPDATE files SET state = 'pending', attempts = ?2, error = ?3, error_code = ?5,
+                next_attempt_at = ?4
          WHERE id = ?1",
-        params![file_id, attempts, message, next_attempt_at],
+        params![file_id, attempts, message, next_attempt_at, code],
     )?;
     Ok(Failure::Retry {
         attempts,
@@ -714,11 +756,43 @@ pub fn retry_errors(conn: &Connection) -> Result<usize> {
     )?)
 }
 
+/// Files in `error`, newest first (SPEC.md §5.7 `list_errors`).
+pub fn list_errors(conn: &Connection, limit: u32) -> Result<Vec<FileError>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, path, COALESCE(error_code, 'other'), COALESCE(error, ''), attempts
+         FROM files WHERE state = 'error' ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(FileError {
+                file_id: row.get(0)?,
+                path: row.get(1)?,
+                code: row.get(2)?,
+                detail: row.get(3)?,
+                attempts: row.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// How many files are in each state.
 pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<FileState, u64>> {
     let mut stmt = conn.prepare_cached("SELECT state, COUNT(*) FROM files GROUP BY state")?;
     let counts = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(counts)
+}
+
+/// Indexed files per root id; a root with none is absent.
+pub fn count_indexed_by_root(conn: &Connection) -> Result<std::collections::HashMap<i64, u64>> {
+    let mut stmt = conn
+        .prepare_cached("SELECT root_id, COUNT(*) FROM files WHERE state = ?1 GROUP BY root_id")?;
+    let counts = stmt
+        .query_map([FileState::Indexed], |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)? as u64))
+        })?
         .collect::<std::result::Result<_, _>>()?;
     Ok(counts)
 }
@@ -734,6 +808,7 @@ pub fn count_chunks(conn: &Connection) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
 
     fn upsert(
         conn: &mut Connection,
@@ -741,7 +816,7 @@ mod tests {
         chunks: &[RawChunk],
         embeddings: &[Vec<f32>],
     ) -> Result<i64> {
-        upsert_file(conn, record, chunks, embeddings, None)
+        upsert_file(conn, record, chunks, Some(embeddings), None)
     }
     use crate::db;
     use crate::embed::{FakeEmbedder, TextEmbedder};
@@ -777,7 +852,57 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         }
+    }
+
+    #[test]
+    fn paths_are_resolved_by_id() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let id = upsert(&mut conn, &sample_record(&path, &rel), &[], &[]).unwrap();
+        assert_eq!(path_of(&conn, id).unwrap(), path);
+        assert!(matches!(
+            path_of(&conn, id + 1),
+            Err(Error::FileIdNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_failure_records_its_code_and_a_clean_index_clears_it() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let mut record = sample_record(&path, &rel);
+        record.state = FileState::Error;
+        record.error = Some((FileErrorCode::ExtractFailed, "bad pdf xref"));
+        let id = upsert(&mut conn, &record, &[], &[]).unwrap();
+        let listed = &list_errors(&conn, 10).unwrap()[0];
+        assert_eq!(
+            (listed.file_id, listed.code, listed.detail.as_str()),
+            (id, FileErrorCode::ExtractFailed, "bad pdf xref")
+        );
+
+        record_failure(&conn, id, FileErrorCode::PermissionDenied, "denied", 1000).unwrap();
+        let code = |conn: &Connection| {
+            conn.query_row(
+                "SELECT error_code FROM files WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<FileErrorCode>>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(code(&conn), Some(FileErrorCode::PermissionDenied));
+
+        record.state = FileState::Indexed;
+        record.error = None;
+        upsert(&mut conn, &record, &[], &[]).unwrap();
+        assert_eq!(
+            code(&conn),
+            None,
+            "a clean index clears the code with the text"
+        );
     }
 
     #[test]
@@ -983,8 +1108,8 @@ mod tests {
         record.content_hash = Some(&hash);
         record.thumb_key = Some("abc");
 
-        upsert_file(&mut conn, &record, &[], &[], Some(&[0.5; 768])).unwrap();
-        upsert_file(&mut conn, &record, &[], &[], Some(&[0.25; 768])).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), Some(&[0.5; 768])).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), Some(&[0.25; 768])).unwrap();
 
         let (stored, key): (Vec<u8>, String) = conn
             .query_row("SELECT content_hash, thumb_key FROM files", [], |r| {
@@ -997,7 +1122,7 @@ mod tests {
             .unwrap();
         assert_eq!(vectors, 1);
 
-        upsert_file(&mut conn, &record, &[], &[], None).unwrap();
+        upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap();
         let vectors: i64 = conn
             .query_row("SELECT COUNT(*) FROM vec_image", [], |r| r.get(0))
             .unwrap();
@@ -1017,7 +1142,7 @@ mod tests {
             &mut conn,
             &sample_record(&path, &rel),
             &chunks,
-            std::slice::from_ref(&embedding),
+            Some(std::slice::from_ref(&embedding)),
             None,
         )
         .unwrap();
@@ -1079,7 +1204,7 @@ mod tests {
             conn,
             &record,
             &chunks,
-            &fake_embeddings(&chunks),
+            Some(&fake_embeddings(&chunks)),
             Some(&[0.5; 768]),
         )
         .unwrap()
@@ -1141,6 +1266,41 @@ mod tests {
     }
 
     #[test]
+    fn counts_indexed_files_per_root() {
+        let (_dir, mut conn) = open_test_db();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = db::roots::add(&conn, other_dir.path()).unwrap().id;
+        add_file(&mut conn, 1, "a.txt", 1, "x");
+        add_file(&mut conn, 1, "b.txt", 2, "x");
+        let queued = add_file(&mut conn, other, "c.txt", 3, "x");
+        mark_pending(&conn, queued).unwrap();
+
+        let counts = count_indexed_by_root(&conn).unwrap();
+        assert_eq!(counts.get(&1), Some(&2));
+        assert_eq!(counts.get(&other), None, "a queued file is not indexed yet");
+    }
+
+    /// The status thread runs it twice a second: it must count from an
+    /// index alone, never reading the table row by row.
+    #[test]
+    fn indexed_per_root_counts_from_a_covering_index() {
+        let (_dir, conn) = open_test_db();
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT root_id, COUNT(*) FROM files WHERE state = 'indexed' GROUP BY root_id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let plan = plan.join("\n");
+        assert!(plan.contains("COVERING INDEX"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+    }
+
+    #[test]
     fn next_pending_is_newest_first_and_waits_out_a_retry_delay() {
         let (_dir, mut conn) = open_test_db();
         let old = add_file(&mut conn, 1, "old.txt", 10, "x");
@@ -1187,7 +1347,7 @@ mod tests {
         mark_indexing(&conn, id).unwrap();
 
         assert_eq!(
-            record_locked(&conn, id, "locked", 1000).unwrap(),
+            record_locked(&conn, id, FileErrorCode::Locked, "locked", 1000).unwrap(),
             Failure::Retry {
                 attempts: 1,
                 next_attempt_at: 1030
@@ -1195,7 +1355,7 @@ mod tests {
         );
         for now in 2000..2010 {
             assert_eq!(
-                record_locked(&conn, id, "locked", now).unwrap(),
+                record_locked(&conn, id, FileErrorCode::Locked, "locked", now).unwrap(),
                 Failure::Retry {
                     attempts: MAX_ATTEMPTS - 1,
                     next_attempt_at: now + 120
@@ -1236,7 +1396,7 @@ mod tests {
         let broken = add_file(&mut conn, 1, "broken.txt", 1, "x");
         let fine = add_file(&mut conn, 1, "fine.txt", 2, "y");
         for now in [1000, 2000, 3000] {
-            record_failure(&conn, broken, "unreadable", now).unwrap();
+            record_failure(&conn, broken, FileErrorCode::ReadFailed, "unreadable", now).unwrap();
         }
         assert_eq!(
             count_states(&conn).unwrap().get(&FileState::Error),
@@ -1282,14 +1442,14 @@ mod tests {
         mark_indexing(&conn, id).unwrap();
 
         assert_eq!(
-            record_failure(&conn, id, "locked", 1000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "locked", 1000).unwrap(),
             Failure::Retry {
                 attempts: 1,
                 next_attempt_at: 1030
             }
         );
         assert_eq!(
-            record_failure(&conn, id, "locked", 2000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "locked", 2000).unwrap(),
             Failure::Retry {
                 attempts: 2,
                 next_attempt_at: 2120
@@ -1302,7 +1462,7 @@ mod tests {
         assert_eq!(state(&conn), "pending");
 
         assert_eq!(
-            record_failure(&conn, id, "still locked", 3000).unwrap(),
+            record_failure(&conn, id, FileErrorCode::ReadFailed, "still locked", 3000).unwrap(),
             Failure::GaveUp { attempts: 3 }
         );
         assert_eq!(state(&conn), "error");
@@ -1353,7 +1513,7 @@ mod tests {
             let rel = PathBuf::from("p.jpg");
             let mut record = sample_record(&path, &rel);
             record.kind = "image";
-            upsert_file(&mut conn, &record, &[], &[], None).unwrap()
+            upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap()
         };
 
         assert_eq!(invalidate(&conn, Some("image")).unwrap(), 1);

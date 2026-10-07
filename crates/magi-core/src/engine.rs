@@ -31,9 +31,9 @@ use crate::config::{Config, IndexingConfig};
 use crate::db::files::FileState;
 use crate::db::roots::{Health, Root};
 use crate::db::{self, files, meta, roots};
-use crate::dto::{IndexState, IndexStatus, RootStatus};
-use crate::embed::{ImageEmbedder, TextEmbedder};
+use crate::dto::{FileErrorCode, IndexState, IndexStatus, RootStatus};
 use crate::error::{Error, Result};
+use crate::features::Components;
 use crate::index::lifecycle::{self, FileStep};
 use crate::index::pipeline::{
     EMBED_BATCH, Extracted, Fresh, IndexContext, IndexRootOptions, Job, embed_group, prepare,
@@ -41,8 +41,7 @@ use crate::index::pipeline::{
 use crate::index::resources::{self, Pause};
 use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
-use crate::index::{ModelIds, requeue_on_model_change};
-use crate::ocr::OcrEngine;
+use crate::index::{ModelIds, requeue_missing, requeue_on_model_change};
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
 use crate::watch::reconcile::ScanSummary;
 use crate::watch::watcher::Watchers;
@@ -70,18 +69,13 @@ impl Engine {
     /// Starts indexing (SPEC.md §5.4 startup steps 1, 2, 4 and 6): recovers rows
     /// left `indexing`, re-queues files made stale by a model change, probes and
     /// reconciles every enabled root, then runs the pipeline threads until
-    /// [`EngineHandle::shutdown`].
+    /// [`EngineHandle::shutdown`]. `components` are the running search
+    /// features (ADR-0010); a missing one is skipped by indexing.
     ///
     /// Blocks while the first reconciliation walk runs.
     /// ponytail: startup scan is synchronous; move it onto the writer without
     /// waiting if `start` blocks the UI on a very large root.
-    pub fn start(
-        config: &Config,
-        db_path: &Path,
-        text: Arc<dyn TextEmbedder>,
-        image: Option<Arc<dyn ImageEmbedder>>,
-        ocr: Arc<dyn OcrEngine>,
-    ) -> Result<EngineHandle> {
+    pub fn start(config: &Config, db_path: &Path, components: Components) -> Result<EngineHandle> {
         let options: SharedOptions = Arc::new(RwLock::new(Arc::new(
             IndexRootOptions::from_config(&config.indexing)?,
         )));
@@ -90,11 +84,12 @@ impl Engine {
         requeue_on_model_change(
             &mut write_conn,
             &ModelIds {
-                text: text.model_id(),
-                image: image.as_deref().map(|e| e.model_id()),
-                ocr: ocr.engine_id(),
+                text: components.text.as_deref().map(|e| e.model_id()),
+                image: components.image.as_deref().map(|e| e.model_id()),
+                ocr: components.ocr.as_deref().map(|o| o.engine_id()),
             },
         )?;
+        requeue_missing(&mut write_conn, &components.running())?;
         let scheduler_conn = db::open(db_path)?;
         let pause = Arc::new(Pause::default());
         pause.user.store(
@@ -103,9 +98,10 @@ impl Engine {
         );
 
         let ctx = Arc::new(IndexContext {
-            image_embedder: image,
-            ocr,
-            ..IndexContext::new(text)
+            embedder: components.text,
+            ocr: components.ocr,
+            image_embedder: components.image,
+            ..IndexContext::default()
         });
         let (total_memory, workers) = resources::machine(config.indexing.worker_threads);
         let max_in_flight = workers * 2 + 2;
@@ -321,17 +317,19 @@ impl EngineHandle {
     /// returned is the probe's result.
     pub fn add_root(&self, path: &Path) -> Result<RootStatus> {
         let path = path.to_path_buf();
-        let (root, collapsed) = self.write(move |conn| {
+        // Collapsed roots' indexed files are now this root's.
+        let (root, collapsed, counts) = self.write(move |conn| {
             let (root, collapsed) = roots::add_collapsing(conn, &path)?;
             roots::set_access(conn, root.id, &FsProbe.probe(&root.path))?;
-            Ok((roots::get(conn, root.id)?, collapsed))
+            let counts = files::count_indexed_by_root(conn)?;
+            Ok((roots::get(conn, root.id)?, collapsed, counts))
         })?;
         for id in collapsed {
             self.unwatch(id);
         }
         let root = self.watch(root)?;
         let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
-        Ok(root.into())
+        Ok(RootStatus::new(root, &counts))
     }
 
     /// Stops watching a root and purges everything indexed under it (item 12).
@@ -536,10 +534,7 @@ impl StatusSource {
             skipped: count(FileState::Skipped),
             errors: count(FileState::Error),
             current_file: current_file.map(|p| p.to_string_lossy().into_owned()),
-            roots: roots::list(&conn)?
-                .into_iter()
-                .map(RootStatus::from)
-                .collect(),
+            roots: root_statuses(&conn)?,
         })
     }
 }
@@ -547,6 +542,15 @@ impl StatusSource {
 /// Sends the status to every subscriber whenever it changes. The database is
 /// read only after the writer applied something, or the pause or scan state
 /// flipped, so an idle engine costs a few atomic loads twice a second.
+/// Every root, with its indexed-file count.
+pub(crate) fn root_statuses(conn: &Connection) -> Result<Vec<RootStatus>> {
+    let counts = files::count_indexed_by_root(conn)?;
+    Ok(roots::list(conn)?
+        .into_iter()
+        .map(|root| RootStatus::new(root, &counts))
+        .collect())
+}
+
 fn status_thread(source: &StatusSource, subscribers: &Subscribers, closed: &Receiver<()>) {
     let mut seen = None;
     let mut last = None;
@@ -679,12 +683,16 @@ fn extract_worker(
                 job: Box::new(job),
                 state,
             },
-            Ok(Extracted::Retry { message, locked }) => FileStep::Retry {
+            Ok(Extracted::Retry { code, message }) => FileStep::Retry {
                 file_id: job.stored.id,
+                code,
                 message,
-                locked,
             },
-            Err(_) => FileStep::retry(job.stored.id, "extraction panicked".into()),
+            Err(_) => FileStep::retry(
+                job.stored.id,
+                FileErrorCode::Crashed,
+                "extraction panicked".into(),
+            ),
         };
         let _ = write_tx.send(next.into());
     }
@@ -716,7 +724,9 @@ fn embed_worker(
         }));
         let Ok(results) = result else {
             for id in ids {
-                let _ = write_tx.send(FileStep::retry(id, "embedding panicked".into()).into());
+                let _ = write_tx.send(
+                    FileStep::retry(id, FileErrorCode::Crashed, "embedding panicked".into()).into(),
+                );
             }
             continue;
         };
@@ -726,7 +736,9 @@ fn embed_worker(
                     job: Box::new(job),
                     embedded: Box::new(embedded),
                 },
-                Err(e) => FileStep::retry(job.stored.id, e.to_string()),
+                Err(e) => {
+                    FileStep::retry(job.stored.id, FileErrorCode::classify(&e), e.to_string())
+                }
             };
             let _ = write_tx.send(next.into());
         }

@@ -12,7 +12,7 @@ use magi_core::config::Config;
 use magi_core::db::{self, files, roots};
 use magi_core::dto::IndexState;
 use magi_core::embed::{CountingEmbedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder};
-use magi_core::ocr::NoOcr;
+use magi_core::features::Components;
 use magi_core::search::fts::search_fts;
 use magi_core::{Engine, EngineHandle};
 use rusqlite::Connection;
@@ -80,9 +80,11 @@ impl Env {
         Engine::start(
             &config,
             &self.db_path,
-            self.embedder.clone(),
-            image,
-            Arc::new(NoOcr),
+            Components {
+                text: Some(self.embedder.clone()),
+                image,
+                ocr: None,
+            },
         )
         .unwrap()
     }
@@ -703,6 +705,10 @@ fn a_file_without_read_permission_becomes_error_and_the_others_continue() {
     assert_eq!(env.hits("public"), 1);
     assert_eq!(env.hits("classified"), 0);
     assert_eq!(engine.status().unwrap().errors, 1);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE error_code = 'permission_denied'"),
+        1
+    );
 
     // Readable again: only a manual retry brings it back.
     make_readable(&env.root().join("secret.txt"));
@@ -963,7 +969,7 @@ fn status_counts_the_queue_and_events_follow_changes() {
     );
     assert_eq!(status.current_file, None);
     assert_eq!(status.roots.len(), 1);
-    assert_eq!(status.roots[0].status, "ok");
+    assert_eq!(status.roots[0].status, magi_core::db::roots::Health::Ok);
 }
 
 /// Item 3b: a text model id that differs from the one stored at the last

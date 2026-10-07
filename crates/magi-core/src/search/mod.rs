@@ -34,6 +34,8 @@ pub struct SearchHit {
     pub score: f64,
     pub snippet: String,
     pub match_sources: Vec<&'static str>,
+    /// Page of the best chunk (PDF page, slide), when it has one.
+    pub page: Option<i64>,
 }
 
 /// One file's best-matching chunk from a single ranked source. Both
@@ -47,6 +49,11 @@ pub struct FileHit {
     pub file_name: String,
     pub mtime_ns: i64,
     pub snippet: String,
+    /// Page of the best chunk (PDF page, slide), when it has one.
+    pub page: Option<i64>,
+    /// `chunks.source` of the best chunk (`body`, `ocr`, `qr`, `filename`,
+    /// `code_symbol`); `None` for a visual match, which has no chunk.
+    pub source: Option<String>,
 }
 
 /// How many chunk rows to read before per-file dedup: one file can
@@ -134,8 +141,8 @@ pub fn rank_and_boost(
 
     // `fused`'s ids are the union of the lists, so every lookup here
     // resolves. Preferring the FTS side keeps the snippet that carries the
-    // `[...]` match highlights, and the visual side (a bare file name) is
-    // the last resort.
+    // match highlights, and the visual side (a bare file name) is the last
+    // resort.
     let mut hits: Vec<SearchHit> = fused
         .into_iter()
         .filter_map(|(file_id, base_score)| {
@@ -153,12 +160,19 @@ pub fn rank_and_boost(
             if image.is_some() {
                 match_sources.push("visual");
             }
+            match hit.source.as_deref() {
+                Some("ocr") => match_sources.push("ocr"),
+                Some("qr") => match_sources.push("qr"),
+                Some("filename") => match_sources.push("filename"),
+                _ => {}
+            }
             Some(SearchHit {
                 file_id,
                 path: hit.path.clone(),
                 score: base_score * boost,
                 snippet: hit.snippet.clone(),
                 match_sources,
+                page: hit.page,
             })
         })
         .collect();
@@ -183,7 +197,7 @@ pub fn rank_and_boost(
 /// on query order, so this defers threading to when that pool lands.
 pub fn hybrid_search(
     conn: &Connection,
-    embedder: &dyn TextEmbedder,
+    embedder: Option<&dyn TextEmbedder>,
     image_embedder: Option<&dyn ImageEmbedder>,
     query: &str,
     limit: u32,
@@ -193,8 +207,13 @@ pub fn hybrid_search(
     }
 
     let fts_hits = fts::search_fts(conn, query, FTS_FETCH_LIMIT)?;
-    let query_embedding = embedder.embed_query(query)?;
-    let vector_hits = vector::search_vector_text(conn, &query_embedding, VECTOR_FETCH_LIMIT)?;
+    // Without meaning, old `vec_text` rows stay unused.
+    let vector_hits = match embedder {
+        Some(embedder) => {
+            vector::search_vector_text(conn, &embedder.embed_query(query)?, VECTOR_FETCH_LIMIT)?
+        }
+        None => Vec::new(),
+    };
 
     // A missing or broken visual model degrades to text-only search rather
     // than failing the query.
@@ -254,10 +273,26 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         };
         let chunks = vec![RawChunk::body(body.to_string())];
         let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
-        upsert_file(conn, &record, &chunks, &embeddings, None).unwrap();
+        upsert_file(conn, &record, &chunks, Some(&embeddings), None).unwrap();
+    }
+
+    #[test]
+    fn hybrid_search_without_a_text_embedder_uses_keywords_only() {
+        // vec_text rows from when meaning was on stay unused, and nothing
+        // tries to embed the query.
+        let (_dir, mut conn) = open_test_db();
+        index_text(&mut conn, "/roots/a/port.txt", "the harbor at dawn", 0);
+        let hits = hybrid_search(&conn, None, None, "harbor", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(
+            conn.query_row("SELECT COUNT(*) FROM vec_text", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+                > 0
+        );
     }
 
     #[test]
@@ -283,16 +318,24 @@ mod tests {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: None,
+            features_missing: 0,
         };
         let name_chunk = vec![RawChunk::body("IMG 0042 jpg".to_string())];
         let embeddings = FakeEmbedder.embed_passages(&["IMG 0042 jpg"]).unwrap();
         let visual = FakeImageEmbedder.embed_query("dog on the beach").unwrap();
-        upsert_file(&mut conn, &record, &name_chunk, &embeddings, Some(&visual)).unwrap();
+        upsert_file(
+            &mut conn,
+            &record,
+            &name_chunk,
+            Some(&embeddings),
+            Some(&visual),
+        )
+        .unwrap();
         index_text(&mut conn, "/roots/a/tax.txt", "quarterly tax filing", 0);
 
         let hits = hybrid_search(
             &conn,
-            &FakeEmbedder,
+            Some(&FakeEmbedder),
             Some(&FakeImageEmbedder),
             "dog on the beach",
             10,
@@ -304,7 +347,7 @@ mod tests {
         // dragged into every search.
         let unrelated = hybrid_search(
             &conn,
-            &FakeEmbedder,
+            Some(&FakeEmbedder),
             Some(&FakeImageEmbedder),
             "quarterly tax filing",
             10,
@@ -317,7 +360,8 @@ mod tests {
             "{unrelated:?}"
         );
         // Without the image embedder the same query cannot reach it.
-        let text_only = hybrid_search(&conn, &FakeEmbedder, None, "dog on the beach", 10).unwrap();
+        let text_only =
+            hybrid_search(&conn, Some(&FakeEmbedder), None, "dog on the beach", 10).unwrap();
         assert!(
             !text_only
                 .iter()
@@ -332,12 +376,12 @@ mod tests {
         let embedder = FakeEmbedder;
 
         assert!(
-            hybrid_search(&conn, &embedder, None, "", 10)
+            hybrid_search(&conn, Some(&embedder), None, "", 10)
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            hybrid_search(&conn, &embedder, None, "hello", 0)
+            hybrid_search(&conn, Some(&embedder), None, "hello", 0)
                 .unwrap()
                 .is_empty()
         );
@@ -354,7 +398,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "arepas", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "arepas", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/recipe.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
@@ -374,7 +418,7 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "cat sat mat", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "cat sat mat", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/cats.txt"));
         assert!(hits[0].match_sources.contains(&"keyword"));
         assert!(hits[0].match_sources.contains(&"semantic"));
@@ -403,7 +447,34 @@ mod tests {
         );
         let embedder = FakeEmbedder;
 
-        let hits = hybrid_search(&conn, &embedder, None, "budget quarterly", 10).unwrap();
+        let hits = hybrid_search(&conn, Some(&embedder), None, "budget quarterly", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/budget_report.txt"));
+    }
+
+    #[test]
+    fn the_best_chunks_source_and_page_reach_the_hit() {
+        let hit = |id: i64, source: &str, page| FileHit {
+            file_id: id,
+            path: PathBuf::from(format!("/r/{id}")),
+            file_name: format!("f{id}"),
+            mtime_ns: 0,
+            snippet: "s".into(),
+            page,
+            source: Some(source.into()),
+        };
+        let hits = rank_and_boost(
+            "zzz",
+            &[hit(1, "ocr", None), hit(2, "body", Some(3))],
+            &[hit(3, "qr", None)],
+            &[],
+            10,
+        );
+        let by_id = |id| hits.iter().find(|h| h.file_id == id).unwrap();
+        assert_eq!(by_id(1).match_sources, vec!["keyword", "ocr"]);
+        assert_eq!(
+            (by_id(2).match_sources.clone(), by_id(2).page),
+            (vec!["keyword"], Some(3))
+        );
+        assert_eq!(by_id(3).match_sources, vec!["semantic", "qr"]);
     }
 }

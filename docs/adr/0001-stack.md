@@ -1,5 +1,7 @@
 # ADR-0001: Technology stack
 
+- **Status:** Accepted; desktop shell, frontend and TS bindings superseded by ADR-0011 (GPUI).
+
 ## Context
 
 magi needs a cross-platform (Windows/macOS/Linux) desktop app with an

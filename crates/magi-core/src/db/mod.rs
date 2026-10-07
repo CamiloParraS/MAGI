@@ -17,6 +17,9 @@ use crate::error::Result;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/0001_init.sql")),
     (2, include_str!("migrations/0002_files_indexes.sql")),
+    (3, include_str!("migrations/0003_features_missing.sql")),
+    (4, include_str!("migrations/0004_error_code.sql")),
+    (5, include_str!("migrations/0005_files_state_root.sql")),
 ];
 
 static VEC_EXTENSION_REGISTERED: Once = Once::new();

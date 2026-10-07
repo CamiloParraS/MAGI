@@ -1,12 +1,71 @@
-//! Serializable DTOs shared with the UI.
+//! Types the UI sees through `host::Host` (SPEC.md §5.7, the Host API).
 //!
-//! Types here derive `Serialize`, `Deserialize`, and `ts_rs::TS`, and are
-//! exported to `apps/desktop/src/bindings/`. Populated as IPC commands land
-//! (see SPEC.md §5.7). The `ts_rs::TS` derive arrives with M6's bindings.
+//! They keep their `serde` derives: config and the stable wire names the
+//! tests below pin rely on them.
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::roots::Root;
+use crate::db::roots::{Health, Root};
+use crate::features::Feature;
+
+/// Whether a feature's download is on disk (ADR-0010). Independent of
+/// `FeatureStatus::enabled`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Install {
+    NotInstalled,
+    Downloading { bytes: u64, total: u64 },
+    Installed { size_bytes: u64 },
+    Failed { code: DownloadError },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Backfill {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// One search feature at a glance (`features_status`, `engine://features`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureStatus {
+    pub feature: Feature,
+    /// What the user wants (config).
+    pub enabled: bool,
+    /// Bytes to download, shown before consent.
+    pub download_size: u64,
+    pub install: Install,
+    /// Files still being brought up to date after the feature came online.
+    pub backfill: Option<Backfill>,
+}
+
+/// Why a download failed: a stable code, localized by the UI (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadError {
+    DownloadNetworkError,
+    ChecksumMismatch,
+    DiskFull,
+    PermissionDenied,
+    /// Any other local I/O failure while saving the download.
+    WriteFailed,
+}
+
+impl DownloadError {
+    pub fn classify(error: &crate::Error) -> Self {
+        use std::io::ErrorKind;
+        match error {
+            crate::Error::Network { .. } => Self::DownloadNetworkError,
+            crate::Error::ChecksumMismatch { .. } => Self::ChecksumMismatch,
+            crate::Error::Io { source, .. } => match source.kind() {
+                ErrorKind::StorageFull => Self::DiskFull,
+                ErrorKind::PermissionDenied => Self::PermissionDenied,
+                _ => Self::WriteFailed,
+            },
+            _ => Self::WriteFailed,
+        }
+    }
+}
 
 /// What the engine is doing (`get_status`, `engine://status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,17 +97,389 @@ pub struct RootStatus {
     pub id: i64,
     pub path: String,
     pub enabled: bool,
-    /// `ok`, `missing`, `permission_denied` or `watch_failed`.
-    pub status: String,
+    pub status: Health,
+    /// Its files in the `indexed` state.
+    pub indexed: u64,
 }
 
-impl From<Root> for RootStatus {
-    fn from(root: Root) -> Self {
+impl RootStatus {
+    /// `counts`: indexed files per root id, as `db::files::count_indexed_by_root`
+    /// returns them.
+    pub(crate) fn new(root: Root, counts: &HashMap<i64, u64>) -> Self {
         Self {
             id: root.id,
             path: root.path.to_string_lossy().into_owned(),
             enabled: root.enabled,
-            status: root.status.as_str().to_string(),
+            status: root.status,
+            indexed: counts.get(&root.id).copied().unwrap_or(0),
         }
+    }
+}
+
+/// A snippet plus the byte ranges of its matched terms in `text`
+/// (`&text[start..end]`), always on char boundaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snippet {
+    pub text: String,
+    pub highlights: Vec<[u32; 2]>,
+}
+
+impl Snippet {
+    /// Strips the `search::fts` highlight markers, recording where they were.
+    /// An unclosed highlight ends with the text.
+    pub fn from_marked(marked: &str) -> Self {
+        use crate::search::fts::{HIGHLIGHT_END, HIGHLIGHT_START};
+        let mut text = String::with_capacity(marked.len());
+        let mut highlights = Vec::new();
+        let (mut offset, mut open) = (0u32, None);
+        for c in marked.chars() {
+            match c {
+                HIGHLIGHT_START => open = Some(offset),
+                HIGHLIGHT_END => {
+                    if let Some(start) = open.take() {
+                        highlights.push([start, offset]);
+                    }
+                }
+                c => {
+                    text.push(c);
+                    offset += c.len_utf8() as u32;
+                }
+            }
+        }
+        if let Some(start) = open {
+            highlights.push([start, offset]);
+        }
+        Self { text, highlights }
+    }
+}
+
+/// Why a file failed (`files.error_code`, `list_errors`): a stable code the
+/// UI localizes. `files.error` keeps the diagnostic text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileErrorCode {
+    PermissionDenied,
+    /// Another program holds it open; retried, never given up on.
+    Locked,
+    ReadFailed,
+    /// Damaged or unsupported content (PDF, Office, image, HEIC, code).
+    ExtractFailed,
+    TimedOut,
+    /// An extractor or the embedder panicked.
+    Crashed,
+    EmbedFailed,
+    /// The index could not store it.
+    WriteFailed,
+    Other,
+}
+
+impl FileErrorCode {
+    pub const ALL: [Self; 9] = [
+        Self::PermissionDenied,
+        Self::Locked,
+        Self::ReadFailed,
+        Self::ExtractFailed,
+        Self::TimedOut,
+        Self::Crashed,
+        Self::EmbedFailed,
+        Self::WriteFailed,
+        Self::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PermissionDenied => "permission_denied",
+            Self::Locked => "locked",
+            Self::ReadFailed => "read_failed",
+            Self::ExtractFailed => "extract_failed",
+            Self::TimedOut => "timed_out",
+            Self::Crashed => "crashed",
+            Self::EmbedFailed => "embed_failed",
+            Self::WriteFailed => "write_failed",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn classify_io(error: &std::io::Error) -> Self {
+        if crate::platform::is_locked(error) {
+            Self::Locked
+        } else if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Self::PermissionDenied
+        } else {
+            Self::ReadFailed
+        }
+    }
+
+    pub fn classify(error: &crate::Error) -> Self {
+        use crate::Error as E;
+        match error {
+            E::Io { source, .. } => Self::classify_io(source),
+            E::ExtractionTimeout { .. } | E::ExtractionBacklog { .. } => Self::TimedOut,
+            E::ExtractionPanicked { .. } => Self::Crashed,
+            E::Pdf(_)
+            | E::Image(_)
+            | E::Heic(_)
+            | E::Office(_)
+            | E::Code(_)
+            | E::ImageTooLarge { .. } => Self::ExtractFailed,
+            E::Model(_) => Self::EmbedFailed,
+            E::Db(_) => Self::WriteFailed,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl rusqlite::ToSql for FileErrorCode {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+impl rusqlite::types::FromSql for FileErrorCode {
+    /// A code from a newer build reads as `Other` rather than failing the row.
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let name = value.as_str()?;
+        Ok(Self::ALL
+            .into_iter()
+            .find(|c| c.as_str() == name)
+            .unwrap_or(Self::Other))
+    }
+}
+
+/// A file in `error` (`list_errors`). The UI shows `code`, localized;
+/// `detail` is diagnostic text for logs and "copy details".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileError {
+    pub file_id: i64,
+    pub path: String,
+    pub code: FileErrorCode,
+    pub detail: String,
+    pub attempts: u32,
+}
+
+/// A search query (`search`, SPEC.md §5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchRequest {
+    pub query: String,
+    /// `ui.max_results` when `null`.
+    pub limit: Option<u32>,
+}
+
+/// Why a result matched (SPEC.md §5.6): the UI shows a badge per source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchSource {
+    Keyword,
+    Semantic,
+    Visual,
+    Ocr,
+    Qr,
+    Filename,
+}
+
+impl MatchSource {
+    /// `search::SearchHit::match_sources` names.
+    pub fn from_wire(name: &str) -> Option<Self> {
+        Some(match name {
+            "keyword" => Self::Keyword,
+            "semantic" => Self::Semantic,
+            "visual" => Self::Visual,
+            "ocr" => Self::Ocr,
+            "qr" => Self::Qr,
+            "filename" => Self::Filename,
+            _ => return None,
+        })
+    }
+}
+
+/// One search result with what the UI needs to render it (`search`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub file_id: i64,
+    pub path: String,
+    pub file_name: String,
+    pub kind: crate::discovery::Kind,
+    pub score: f64,
+    /// `None` for a match on the image alone.
+    pub snippet: Option<Snippet>,
+    pub page: Option<i64>,
+    /// Inside the thumbnail cache; `lib/ipc.ts` turns it into an asset URL.
+    pub thumb_path: Option<String>,
+    /// Unix milliseconds.
+    pub modified_at: i64,
+    pub match_sources: Vec<MatchSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub took_ms: u64,
+}
+
+/// A failed command as a stable code plus parameters (SPEC.md §5.7 locale
+/// neutrality). The UI localizes it; `Internal.detail` is for logs only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code")]
+pub enum ErrorCode {
+    RootNotFound {
+        path: String,
+    },
+    NestedRoot {
+        path: String,
+        conflicts_with: String,
+    },
+    RootAlreadyExists {
+        path: String,
+    },
+    RootIdNotFound {
+        id: i64,
+    },
+    FileIdNotFound {
+        file_id: i64,
+    },
+    UnknownFeature {
+        name: String,
+    },
+    DownloadInProgress {
+        feature: Feature,
+    },
+    InvalidSetting {
+        field: String,
+    },
+    InvalidGlob {
+        glob: String,
+    },
+    /// The engine is starting or restarting; retry shortly.
+    EngineStarting,
+    Internal {
+        detail: String,
+    },
+}
+
+impl From<&crate::Error> for ErrorCode {
+    fn from(error: &crate::Error) -> Self {
+        use crate::Error as E;
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        match error {
+            E::RootNotFound(p) => Self::RootNotFound { path: path(p) },
+            E::NestedRoot {
+                path: p,
+                conflicts_with,
+            } => Self::NestedRoot {
+                path: path(p),
+                conflicts_with: path(conflicts_with),
+            },
+            E::RootAlreadyExists(p) => Self::RootAlreadyExists { path: path(p) },
+            E::RootIdNotFound(id) => Self::RootIdNotFound { id: *id },
+            E::FileIdNotFound(file_id) => Self::FileIdNotFound { file_id: *file_id },
+            E::UnknownFeature(name) => Self::UnknownFeature { name: name.clone() },
+            E::DownloadInProgress(feature) => Self::DownloadInProgress { feature: *feature },
+            E::InvalidSetting { field, .. } => Self::InvalidSetting {
+                field: field.to_string(),
+            },
+            E::InvalidGlob { glob, .. } => Self::InvalidGlob { glob: glob.clone() },
+            E::EngineStarting => Self::EngineStarting,
+            other => Self::Internal {
+                detail: other.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::roots::Health;
+
+    #[test]
+    fn root_health_crosses_ipc_as_its_database_name() {
+        for health in [
+            Health::Ok,
+            Health::PermissionDenied,
+            Health::Missing,
+            Health::WatchFailed,
+        ] {
+            assert_eq!(
+                serde_json::to_value(health).unwrap(),
+                serde_json::json!(health.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn snippet_highlights_are_byte_ranges_and_brackets_stay_text() {
+        let s = Snippet::from_marked("😀 [draft] \u{E000}invoice\u{E001} total");
+        assert_eq!(s.text, "😀 [draft] invoice total");
+        // "😀 [draft] " is 13 bytes: the emoji takes four.
+        assert_eq!(s.highlights, vec![[13, 20]]);
+        assert_eq!(&s.text[13..20], "invoice");
+        // An unclosed highlight ends with the text.
+        assert_eq!(
+            Snippet::from_marked("\u{E000}open").highlights,
+            vec![[0, 4]]
+        );
+    }
+
+    #[test]
+    fn file_error_codes_classify_failures_and_keep_one_name() {
+        use std::io::{Error as IoError, ErrorKind};
+        let io = |kind| crate::Error::Io {
+            path: "/f".into(),
+            source: IoError::from(kind),
+        };
+        assert_eq!(
+            FileErrorCode::classify(&io(ErrorKind::PermissionDenied)),
+            FileErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            FileErrorCode::classify(&io(ErrorKind::UnexpectedEof)),
+            FileErrorCode::ReadFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::ExtractionTimeout {
+                path: "/f".into(),
+                seconds: 30
+            }),
+            FileErrorCode::TimedOut
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Pdf("bad xref".into())),
+            FileErrorCode::ExtractFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Model("nan".into())),
+            FileErrorCode::EmbedFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::Db(rusqlite::Error::InvalidQuery)),
+            FileErrorCode::WriteFailed
+        );
+        for code in FileErrorCode::ALL {
+            assert_eq!(
+                serde_json::to_value(code).unwrap(),
+                serde_json::json!(code.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn errors_cross_ipc_as_codes_with_parameters() {
+        let json = |e: crate::Error| serde_json::to_value(ErrorCode::from(&e)).unwrap();
+        assert_eq!(
+            json(crate::Error::RootIdNotFound(7)),
+            serde_json::json!({"code": "RootIdNotFound", "id": 7})
+        );
+        assert_eq!(
+            json(crate::Error::InvalidSetting {
+                field: "ui.transparency_intensity",
+                reason: "english prose".into()
+            }),
+            serde_json::json!({"code": "InvalidSetting", "field": "ui.transparency_intensity"})
+        );
+        assert_eq!(json(crate::Error::EngineStarting)["code"], "EngineStarting");
+        assert_eq!(
+            json(crate::Error::Engine("boom".into()))["code"],
+            "Internal"
+        );
     }
 }

@@ -5,10 +5,6 @@ target/
 **/mutants.out*/
 rustc-ice-*.txt
 
-# Node / frontend
-node_modules/
-dist/
-
 # App data
 vendor/
 models/cache/
@@ -41,3 +37,6 @@ fixtures/golden/ocr/personal.md
 
 # Python bytecode
 __pycache__/
+
+# Local-only UI mockup
+mockup/

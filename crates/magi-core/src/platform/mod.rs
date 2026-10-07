@@ -292,9 +292,110 @@ pub fn onnxruntime_library_filename() -> &'static str {
     }
 }
 
+/// What the OS offers the search window's background (ADR-0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BackdropSupport {
+    /// Windows 11 22H2+: GPUI sets `DWMWA_SYSTEMBACKDROP_TYPE`, which older builds ignore.
+    pub mica: bool,
+    /// The user turned transparency effects off in the OS.
+    pub reduce_transparency: bool,
+}
+
+/// GPUI's Windows backend applies Mica only from build 22621 (gpui-pre 0.3.7).
+pub fn mica_supported_on_build(build: u32) -> bool {
+    build >= 22621
+}
+
+/// This machine's [`BackdropSupport`]. Only Windows offers Mica for now; macOS
+/// vibrancy is decided in M6 Plan 4 (ADR-0011).
+pub fn backdrop_support() -> BackdropSupport {
+    #[cfg(target_os = "windows")]
+    {
+        windows::backdrop_support()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        BackdropSupport::default()
+    }
+}
+
+/// macOS shows modifier keys as symbols (⌘ ⌥ ⇧ ⌃); Windows and Linux by
+/// name (Ctrl, Alt, Shift).
+pub const SYMBOL_MODIFIERS: bool = cfg!(target_os = "macos");
+
+/// The user asked the OS for less motion: Windows' "Show animations" off,
+/// macOS "Reduce motion", GNOME animations off. `false` when unknown.
+pub fn reduce_motion() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::reduce_motion()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        read_setting(
+            "defaults",
+            &["read", "com.apple.universalaccess", "reduceMotion"],
+        ) == Some(true)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        read_setting(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "enable-animations"],
+        ) == Some(false)
+    }
+}
+
+/// ponytail: one process spawn, once at startup; a native API if it ever
+/// needs to follow the setting live.
+#[cfg(not(target_os = "windows"))]
+fn read_setting(program: &str, args: &[&str]) -> Option<bool> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
+    setting_flag(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// A boolean setting as `defaults` (`1`/`0`) or `gsettings` (`true`/`false`) prints it.
+pub fn setting_flag(output: &str) -> Option<bool> {
+    match output.trim() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// The OS id of the display under the mouse cursor, which is what GPUI's
+/// `DisplayId` wraps: the `HMONITOR` on Windows, the `CGDirectDisplayID` on
+/// macOS (gpui-pre 0.3.7). `None` on Linux, where Wayland has no global
+/// cursor position, or when the OS call fails.
+pub fn display_under_cursor() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::display_under_cursor()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::display_under_cursor()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mica_needs_windows_11_22h2() {
+        assert!(!mica_supported_on_build(19045)); // Windows 10 22H2
+        assert!(!mica_supported_on_build(22000)); // Windows 11 21H2
+        assert!(mica_supported_on_build(22621));
+        assert!(mica_supported_on_build(26100));
+    }
 
     #[test]
     fn probe_tells_a_folder_from_a_missing_one() {
@@ -332,6 +433,17 @@ mod tests {
         assert_eq!(pmset_on_battery(ac), Some(false));
         assert_eq!(pmset_on_battery(""), None);
         assert_eq!(pmset_on_battery("No batteries"), None);
+    }
+
+    #[test]
+    fn setting_output_reads_as_a_flag() {
+        // `defaults read … reduceMotion` and `gsettings get … enable-animations`.
+        assert_eq!(setting_flag("1\n"), Some(true));
+        assert_eq!(setting_flag("0\n"), Some(false));
+        assert_eq!(setting_flag("true\n"), Some(true));
+        assert_eq!(setting_flag("false\n"), Some(false));
+        assert_eq!(setting_flag(""), None);
+        assert_eq!(setting_flag("No such key"), None);
     }
 
     #[test]

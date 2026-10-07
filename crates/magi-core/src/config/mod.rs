@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::discovery::Kind;
 use crate::error::{Error, Result};
+use crate::features::Feature;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RootConfig {
@@ -85,6 +86,78 @@ impl Default for ModelsConfig {
     }
 }
 
+/// Which optional search features the user wants (ADR-0010). Desired state
+/// only: whether each one is downloaded is on disk, see `features`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeaturesConfig {
+    pub meaning: bool,
+    pub image_text: bool,
+    pub image_visual: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            meaning: true,
+            image_text: true,
+            image_visual: false,
+        }
+    }
+}
+
+impl FeaturesConfig {
+    pub fn enabled(&self, feature: Feature) -> bool {
+        match feature {
+            Feature::Meaning => self.meaning,
+            Feature::ImageText => self.image_text,
+            Feature::ImageVisual => self.image_visual,
+        }
+    }
+
+    pub fn set(&mut self, feature: Feature, on: bool) {
+        *match feature {
+            Feature::Meaning => &mut self.meaning,
+            Feature::ImageText => &mut self.image_text,
+            Feature::ImageVisual => &mut self.image_visual,
+        } = on;
+    }
+}
+
+/// `system` resolves any `es-*` OS locale to Spanish, everything else to
+/// English (resolution happens in the UI; the core only stores the choice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    System,
+    En,
+    Es,
+}
+
+/// Search-window transparency (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransparencyMode {
+    MatchSystem,
+    Always,
+    Never,
+}
+
+/// The first-run onboarding step to resume at (FR-10); each step saves the
+/// next when it completes, the background step saves `Done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Onboarding {
+    Folders,
+    Features,
+    Background,
+    Done,
+}
+
+/// Allowed `ui.transparency_intensity`: below it text over a busy wallpaper
+/// stops being readable; above it the effect is invisible.
+pub const TRANSPARENCY_INTENSITY: std::ops::RangeInclusive<f32> = 0.40..=0.95;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -92,6 +165,11 @@ pub struct UiConfig {
     pub theme: String,
     pub max_results: u32,
     pub launch_at_login: bool,
+    pub language: Language,
+    pub transparency_mode: TransparencyMode,
+    /// Alpha of the tint drawn over the native effect.
+    pub transparency_intensity: f32,
+    pub onboarding: Onboarding,
 }
 
 impl Default for UiConfig {
@@ -101,6 +179,10 @@ impl Default for UiConfig {
             theme: "system".into(),
             max_results: 30,
             launch_at_login: false,
+            language: Language::System,
+            transparency_mode: TransparencyMode::MatchSystem,
+            transparency_intensity: 0.75,
+            onboarding: Onboarding::Folders,
         }
     }
 }
@@ -112,6 +194,7 @@ pub struct Config {
     pub roots: Vec<RootConfig>,
     pub indexing: IndexingConfig,
     pub models: ModelsConfig,
+    pub features: FeaturesConfig,
     pub ui: UiConfig,
 }
 
@@ -122,14 +205,24 @@ impl Default for Config {
             roots: Vec::new(),
             indexing: IndexingConfig::default(),
             models: ModelsConfig::default(),
+            features: FeaturesConfig::default(),
             ui: UiConfig::default(),
         }
     }
 }
 
 impl Config {
-    /// Rejects bad exclude globs and roots that don't exist on disk.
+    /// Rejects out-of-range UI settings, bad exclude globs and roots that don't exist on disk.
     pub fn validate(&self) -> Result<()> {
+        if !TRANSPARENCY_INTENSITY.contains(&self.ui.transparency_intensity) {
+            return Err(Error::InvalidSetting {
+                field: "ui.transparency_intensity",
+                reason: format!(
+                    "{} is outside {:?}",
+                    self.ui.transparency_intensity, TRANSPARENCY_INTENSITY
+                ),
+            });
+        }
         for glob in &self.indexing.exclude_globs {
             glob::Pattern::new(glob).map_err(|e| Error::InvalidGlob {
                 glob: glob.clone(),
@@ -143,6 +236,53 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// Sections `update_settings` may change. Roots live in the database (root
+/// commands); features have their own commands (ADR-0010).
+const PATCHABLE: [&str; 3] = ["indexing", "models", "ui"];
+
+/// Applies a partial settings object and validates the result. Objects
+/// merge; anything else (numbers, strings, lists) replaces. A key the config
+/// does not have is an error, so a typo never silently does nothing.
+pub fn apply_patch(config: &Config, patch: &serde_json::Value) -> Result<Config> {
+    let invalid = |reason: String| Error::InvalidSetting {
+        field: "settings",
+        reason,
+    };
+    let serde_json::Value::Object(sections) = patch else {
+        return Err(invalid("expected an object".into()));
+    };
+    if let Some(key) = sections.keys().find(|k| !PATCHABLE.contains(&k.as_str())) {
+        return Err(invalid(format!("{key} cannot be changed here")));
+    }
+    let mut merged = serde_json::to_value(config).map_err(|e| invalid(e.to_string()))?;
+    merge(&mut merged, patch, "")?;
+    let next: Config = serde_json::from_value(merged).map_err(|e| invalid(e.to_string()))?;
+    next.validate()?;
+    Ok(next)
+}
+
+fn merge(target: &mut serde_json::Value, patch: &serde_json::Value, path: &str) -> Result<()> {
+    use serde_json::Value;
+    match (target, patch) {
+        (Value::Object(target), Value::Object(patch)) => {
+            for (key, value) in patch {
+                let path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                let slot = target.get_mut(key).ok_or_else(|| Error::InvalidSetting {
+                    field: "settings",
+                    reason: format!("unknown setting {path}"),
+                })?;
+                merge(slot, value, &path)?;
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+    Ok(())
 }
 
 /// Path to `config.toml` under the resolved config directory.
@@ -160,7 +300,7 @@ pub fn save(config: &Config) -> Result<()> {
     save_to(&config_path(), config)
 }
 
-fn load_from(path: &Path) -> Result<Config> {
+pub(crate) fn load_from(path: &Path) -> Result<Config> {
     match fs::read_to_string(path) {
         Ok(raw) => {
             let config: Config = toml::from_str(&raw)?;
@@ -179,7 +319,7 @@ fn load_from(path: &Path) -> Result<Config> {
     }
 }
 
-fn save_to(path: &Path, config: &Config) -> Result<()> {
+pub(crate) fn save_to(path: &Path, config: &Config) -> Result<()> {
     config.validate()?;
     let dir = path.parent().expect("config path always has a parent");
     fs::create_dir_all(dir).map_err(|source| Error::Io {
@@ -278,5 +418,123 @@ file_types = [\"text\", \"pdfs\"]
 
         let loaded = load_from(&path).unwrap();
         assert_eq!(loaded.ui.max_results, 42);
+    }
+    #[test]
+    fn feature_and_ui_defaults_match_adr_0010() {
+        let c = Config::default();
+        assert!(c.features.meaning && c.features.image_text && !c.features.image_visual);
+        assert_eq!(c.ui.language, Language::System);
+        assert_eq!(c.ui.transparency_mode, TransparencyMode::MatchSystem);
+        assert_eq!(c.ui.transparency_intensity, 0.75);
+        assert_eq!(
+            c.ui.onboarding,
+            Onboarding::Folders,
+            "a first run starts onboarding"
+        );
+    }
+
+    #[test]
+    fn features_and_ui_fields_round_trip_with_their_wire_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[features]
+image_visual = true
+image_text = false
+             [ui]
+language = \"es\"
+transparency_mode = \"never\"
+transparency_intensity = 0.4
+onboarding = \"background\"
+",
+        )
+        .unwrap();
+        let c = load_from(&path).unwrap();
+        assert!(c.features.meaning, "missing keys keep their default");
+        assert!(!c.features.image_text && c.features.image_visual);
+        assert_eq!(c.ui.language, Language::Es);
+        assert_eq!(c.ui.transparency_mode, TransparencyMode::Never);
+        assert_eq!(c.ui.onboarding, Onboarding::Background);
+        save_to(&path, &c).unwrap();
+        assert_eq!(load_from(&path).unwrap(), c);
+    }
+
+    #[test]
+    fn transparency_intensity_outside_its_range_is_rejected() {
+        for bad in [0.39_f32, 0.96, f32::NAN] {
+            let mut c = Config::default();
+            c.ui.transparency_intensity = bad;
+            assert!(
+                matches!(
+                    c.validate(),
+                    Err(Error::InvalidSetting {
+                        field: "ui.transparency_intensity",
+                        ..
+                    })
+                ),
+                "{bad} accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_is_rejected_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[ui]
+language = \"fr\"
+",
+        )
+        .unwrap();
+        assert!(matches!(load_from(&path), Err(Error::ConfigParse(_))));
+    }
+
+    #[test]
+    fn features_config_reads_and_writes_each_feature() {
+        let mut f = FeaturesConfig::default();
+        f.set(Feature::ImageVisual, true);
+        f.set(Feature::Meaning, false);
+        assert!(f.enabled(Feature::ImageVisual) && !f.enabled(Feature::Meaning));
+    }
+
+    #[test]
+    fn a_settings_patch_merges_into_the_current_config() {
+        let next = apply_patch(
+            &Config::default(),
+            &serde_json::json!({"ui": {"language": "es"}, "indexing": {"max_file_size_mb": 10}}),
+        )
+        .unwrap();
+        assert_eq!(next.ui.language, Language::Es);
+        assert_eq!(next.indexing.max_file_size_mb, 10);
+        assert_eq!(
+            next.ui.hotkey,
+            UiConfig::default().hotkey,
+            "untouched fields kept"
+        );
+    }
+
+    #[test]
+    fn a_settings_patch_rejects_typos_bad_values_and_protected_sections() {
+        use serde_json::json;
+        for patch in [
+            json!({"ui": {"langauge": "es"}}),
+            json!({"ui": {"transparency_intensity": 2.0}}),
+            json!({"ui": {"language": "fr"}}),
+            json!({"indexing": {"exclude_globs": ["[unclosed"]}}),
+            json!({"features": {"meaning": false}}),
+            json!({"roots": []}),
+            json!(["ui"]),
+        ] {
+            assert!(
+                matches!(
+                    apply_patch(&Config::default(), &patch),
+                    Err(Error::InvalidSetting { .. } | Error::InvalidGlob { .. })
+                ),
+                "{patch}"
+            );
+        }
     }
 }

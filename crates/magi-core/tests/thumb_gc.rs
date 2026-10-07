@@ -39,8 +39,9 @@ fn a_shared_thumbnail_survives_until_its_last_file_is_deleted() {
             seen_scan_id: 1,
             content_hash: None,
             thumb_key: Some(&key),
+            features_missing: 0,
         };
-        upsert_file(&mut conn, &record, &[], &[], None).unwrap()
+        upsert_file(&mut conn, &record, &[], Some(&[]), None).unwrap()
     };
     let (first, second) = (add("a.jpg"), add("b.jpg"));
 
