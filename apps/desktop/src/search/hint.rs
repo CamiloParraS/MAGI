@@ -63,6 +63,13 @@ pub fn hint(results: usize, features: &[FeatureStatus], dismissed: &[Feature]) -
     })
 }
 
+/// The shortcut line under the input, for whoever skipped onboarding or
+/// forgot the shortcut: only when search was opened some other way (tray,
+/// launching Magi), not closed this session, and the shortcut works.
+pub fn teach_shortcut(by_hotkey: bool, dismissed: bool, conflict: bool) -> bool {
+    !by_hotkey && !dismissed && !conflict
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +92,17 @@ mod tests {
             .into_iter()
             .map(|f| status(f, true, INSTALLED))
             .collect()
+    }
+
+    #[test]
+    fn the_shortcut_is_taught_when_search_was_opened_another_way() {
+        assert!(teach_shortcut(false, false, false));
+        // Opened with it: they know it.
+        assert!(!teach_shortcut(true, false, false));
+        // Closed this session.
+        assert!(!teach_shortcut(false, true, false));
+        // Not registered: it would not work.
+        assert!(!teach_shortcut(false, false, true));
     }
 
     #[test]

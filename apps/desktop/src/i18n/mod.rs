@@ -77,6 +77,9 @@ pub struct Strings {
     /// `{name}` is the feature name.
     pub updating: Plural,
     pub dismiss: &'static str,
+    /// The search window opened from the tray or a launch; the shortcut's
+    /// keys follow it.
+    pub teach_shortcut: &'static str,
     pub tray_starting: &'static str,
     pub tray_open: &'static str,
     pub tray_pause: &'static str,

@@ -53,6 +53,7 @@ pub const STRINGS: Strings = Strings {
         other: "{name} is on. Updating {n} files…",
     },
     dismiss: "Dismiss",
+    teach_shortcut: "Next time, open this from anywhere with",
     tray_starting: "Starting…",
     tray_open: "Open search",
     tray_pause: "Pause indexing",

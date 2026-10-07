@@ -13,15 +13,16 @@ use magi_core::host::{Host, HostEvent, HostPaths};
 use crate::hotkey::{self, Hotkey};
 use crate::i18n::Lang;
 use crate::onboarding::{self, OnboardingView};
-use crate::search::view::{self, Live, SearchView};
+use crate::search::view::{self, Live, Opening, SearchView};
 use crate::settings::view::{self as settings, SettingsView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
 
 pub enum AppEvent {
-    /// A plain launch: onboarding until it is done (FR-10), else the
-    /// settings window; or bring either forward. The app stays
-    /// usable without a tray (SPEC.md §6.3).
+    /// A plain launch: onboarding until it is done (FR-10), else search,
+    /// which then shows the shortcut; or bring either forward. Opening the
+    /// app again is how someone who forgot the shortcut gets back, and
+    /// keeps it usable without a tray (SPEC.md §6.3).
     Show,
     /// Open the settings window, or bring it forward (the search window's
     /// gear).
@@ -103,12 +104,16 @@ pub fn run(
         }
         let tray_tx = tx.clone();
         let lang = live.lang;
+        let registered = hotkey.is_some() && live.hotkey_conflict.is_none();
         let live = cx.new(|_| live);
-        let tray = Tray::new(lang, move |action| {
+        let mut tray = Tray::new(lang, move |action| {
             let _ = tray_tx.send_blocking(AppEvent::Tray(action));
         })
         .inspect_err(|error| tracing::warn!(%error, "no tray icon; use the hotkey or `magi --toggle`"))
         .ok();
+        if let Some(tray) = &mut tray {
+            tray.set_hotkey(registered.then_some(ui.hotkey.as_str()));
+        }
         let mut shell = Shell {
             host,
             ui,
@@ -156,7 +161,7 @@ impl Shell {
                     cx.notify();
                 });
                 if !self.close_window(cx) {
-                    self.open_window(cx);
+                    self.open_window(false, cx);
                 }
             }
             AppEvent::Host(HostEvent::Status(status)) => {
@@ -177,7 +182,7 @@ impl Shell {
             }
             AppEvent::Tray(TrayAction::OpenSearch) => {
                 if !activate(self.window, cx) {
-                    self.open_window(cx);
+                    self.open_window(true, cx);
                 }
             }
             AppEvent::Ui(ui) => {
@@ -207,6 +212,8 @@ impl Shell {
                 };
                 if let Err(error) = &set {
                     tracing::warn!(%error, hotkey = %spec, "hotkey change refused");
+                } else if let Some(tray) = &mut self.tray {
+                    tray.set_hotkey(Some(&spec));
                 }
                 self.live.update(cx, |live, cx| {
                     live.hotkey_conflict = set.is_err().then_some(spec);
@@ -215,14 +222,14 @@ impl Shell {
                 let _ = reply.try_send(set.is_ok());
             }
             AppEvent::Show => {
-                if activate(self.onboarding, cx) || activate(self.settings, cx) {
+                if activate(self.onboarding, cx) {
                     return ControlFlow::Continue(());
                 }
                 // Onboarding saves its progress; until it is done it resumes.
-                if self.ui.onboarding == Onboarding::Done {
-                    self.open_settings(cx);
-                } else {
+                if self.ui.onboarding != Onboarding::Done {
                     self.open_onboarding(cx);
+                } else if !activate(self.window, cx) {
+                    self.open_window(true, cx);
                 }
             }
             AppEvent::Onboarding => {
@@ -340,8 +347,12 @@ impl Shell {
         }
     }
 
-    fn open_window(&mut self, cx: &mut App) {
-        let opened_at = Instant::now();
+    /// `teach`: opened some other way than the hotkey, so it shows it.
+    fn open_window(&mut self, teach: bool, cx: &mut App) {
+        let opening = Opening {
+            at: Instant::now(),
+            teach: (teach && self.hotkey.is_some()).then(|| self.ui.hotkey.clone()),
+        };
         let backdrop = theme::backdrop(
             self.ui.transparency_mode,
             self.ui.transparency_intensity,
@@ -367,7 +378,7 @@ impl Shell {
         };
         let (host, live, events) = (self.host.clone(), self.live.clone(), self.events.clone());
         match gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| SearchView::new(host, live, events, backdrop, opened_at, window, cx))
+            cx.new(|cx| SearchView::new(host, live, events, backdrop, opening, window, cx))
         }) {
             Ok((handle, view)) => {
                 // However it closes (hotkey, Esc, opening a file).

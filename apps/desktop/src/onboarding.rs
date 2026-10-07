@@ -209,6 +209,24 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool, held: &Modifi
     caps
 }
 
+/// `keystroke` as one line of text, where keycaps cannot be drawn (the
+/// tray's tooltip): names joined by `+`, or macOS's symbols run together.
+pub fn shortcut_text(keystroke: &Keystroke, s: &Strings, symbols: bool) -> String {
+    let label = |c: Cap| match c.icon {
+        _ if !c.label.is_empty() => c.label,
+        Some(IconName::ChevronUp) => "⌃".into(),
+        Some(IconName::Option) => "⌥".into(),
+        Some(IconName::ArrowBigUp) => "⇧".into(),
+        Some(IconName::Command) => "⌘".into(),
+        _ => String::new(),
+    };
+    key_caps(keystroke, s, symbols, &Modifiers::default())
+        .into_iter()
+        .map(label)
+        .collect::<Vec<_>>()
+        .join(if symbols { "" } else { "+" })
+}
+
 pub fn progress(st: &IndexStatus) -> Option<f32> {
     if st.state == IndexState::Scanning {
         return None;
@@ -1364,7 +1382,7 @@ mod tests {
     // Not `super::*`: GPUI's prelude has its own `test` attribute.
     use super::{
         Readiness, download_total, feature_changes, key_caps, preselected, progress, readiness,
-        suggestions,
+        shortcut_text, suggestions,
     };
     use crate::i18n::Lang;
     use gpui_kit::{Keystroke, Modifiers};
@@ -1579,6 +1597,17 @@ mod tests {
             .map(|c| c.label)
             .collect();
         assert_eq!(es, ["Ctrl", "Shift", "Espacio"]);
+    }
+
+    #[test]
+    fn a_shortcut_reads_as_text_the_platform_way() {
+        let k = Keystroke::parse("ctrl-shift-space").unwrap();
+        assert_eq!(
+            shortcut_text(&k, Lang::Es.strings(), false),
+            "Ctrl+Shift+Espacio"
+        );
+        let k = Keystroke::parse("cmd-alt-k").unwrap();
+        assert_eq!(shortcut_text(&k, Lang::En.strings(), true), "⌥⌘K");
     }
 
     #[test]

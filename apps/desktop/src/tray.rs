@@ -1,10 +1,17 @@
 //! Tray / menu-bar icon (FR-8). The app stays usable without it (SPEC.md §6.3).
 
+use std::sync::Arc;
+
+use gpui_kit::Keystroke;
 use magi_core::dto::{IndexState, IndexStatus};
+use magi_core::platform::{SYMBOL_MODIFIERS, TRAY_CLICK_OPENS_APP};
+use tray_icon::menu::accelerator::Accelerator;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::i18n::Lang;
+use crate::onboarding::shortcut_text;
+use crate::settings::hotkey_keystroke;
 use crate::theme::Tone;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,13 +44,15 @@ pub fn status_tone(status: &IndexStatus) -> Tone {
 }
 
 pub struct Tray {
-    _icon: TrayIcon,
+    icon: TrayIcon,
     status: MenuItem,
     open: MenuItem,
     pause: MenuItem,
     settings: MenuItem,
     quit: MenuItem,
     lang: Lang,
+    /// `ui.hotkey` while it is registered: the tooltip and Open search show it.
+    hotkey: Option<String>,
 }
 
 impl Tray {
@@ -75,25 +84,42 @@ impl Tray {
             (settings.id().clone(), TrayAction::OpenSettings),
             (quit.id().clone(), TrayAction::Quit),
         ];
+        let on_action = Arc::new(on_action);
+        let on_menu = on_action.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if let Some((_, action)) = ids.iter().find(|(id, _)| *id == event.id) {
-                on_action(*action);
+                on_menu(*action);
             }
         }));
+        // Where a click opens the app, it opens search; the menu stays on
+        // the right click.
+        if TRAY_CLICK_OPENS_APP {
+            TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    on_action(TrayAction::OpenSearch);
+                }
+            }));
+        }
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
+            .with_menu_on_left_click(!TRAY_CLICK_OPENS_APP)
             .with_icon(placeholder_icon()?)
-            .with_tooltip("magi")
             .build()
             .map_err(|e| e.to_string())?;
         let mut tray = Self {
-            _icon: icon,
+            icon,
             status,
             open,
             pause,
             settings,
             quit,
             lang,
+            hotkey: None,
         };
         tray.set_lang(lang, None);
         Ok(tray)
@@ -112,6 +138,31 @@ impl Tray {
                 self.status.set_text(s.tray_starting);
                 self.pause.set_text(s.tray_pause);
             }
+        }
+        self.show_hotkey();
+    }
+
+    /// `None` while the hotkey is not registered: a shortcut that does
+    /// nothing is not advertised.
+    pub fn set_hotkey(&mut self, hotkey: Option<&str>) {
+        self.hotkey = hotkey.map(str::to_owned);
+        self.show_hotkey();
+    }
+
+    /// The hotkey beside Open search and in the tooltip, so whoever forgot
+    /// it finds it where they look for the app.
+    fn show_hotkey(&self) {
+        let hotkey = self.hotkey.as_deref();
+        let accelerator = hotkey.and_then(|h| h.parse::<Accelerator>().ok());
+        if let Err(error) = self.open.set_accelerator(accelerator) {
+            tracing::warn!(%error, ?hotkey, "the tray could not show the hotkey");
+        }
+        let tooltip = hotkey
+            .and_then(|h| Keystroke::parse(&hotkey_keystroke(h)).ok())
+            .map(|k| shortcut_text(&k, self.lang.strings(), SYMBOL_MODIFIERS))
+            .map_or_else(|| "Magi".to_owned(), |keys| format!("Magi — {keys}"));
+        if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {
+            tracing::warn!(%error, "the tray tooltip could not be set");
         }
     }
 

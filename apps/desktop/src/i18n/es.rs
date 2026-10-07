@@ -53,6 +53,7 @@ pub const STRINGS: Strings = Strings {
         other: "{name} está activado. Actualizando {n} archivos…",
     },
     dismiss: "Descartar",
+    teach_shortcut: "La próxima vez, ábrelo desde cualquier lugar con",
     tray_starting: "Iniciando…",
     tray_open: "Abrir búsqueda",
     tray_pause: "Pausar indexación",
