@@ -195,6 +195,7 @@ pub const STRINGS: Strings = Strings {
     ob_download_and_start: "Download {size} and start",
     ob_start: "Start",
     back: "Go back",
+    ob_need_folder: "Add a folder to start.",
     ob_recommended: "Recommended",
     ob_installed: "Installed",
     ob_folders: "Choose folders to search",

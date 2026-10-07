@@ -220,6 +220,9 @@ pub struct OnboardingView {
     /// The last change that failed, until the next one.
     error: Option<ErrorCode>,
     dark: bool,
+    /// Which way the last screen change went; the new screen slides in
+    /// from that side.
+    forward: bool,
     /// `hotkey_presses` when the window opened: a press after it is the
     /// user trying the hotkey.
     hotkey_presses: u32,
@@ -270,6 +273,7 @@ impl OnboardingView {
             busy: false,
             error: None,
             dark: false,
+            forward: true,
             hotkey_presses,
             focus: cx.focus_handle(),
             recorder: cx.focus_handle(),
@@ -380,6 +384,7 @@ impl OnboardingView {
     }
 
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
+        self.forward = step == Step::Indexing;
         self.step = step;
         self.error = None;
         cx.notify();
@@ -524,8 +529,10 @@ impl OnboardingView {
                     ),
                 ),
         };
-        body.drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(accent))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)))
+        body.drag_over::<ExternalPaths>(move |style, _, _, _| {
+            style.border_color(accent).bg(accent.opacity(0.08))
+        })
+        .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)))
     }
 
     fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -916,7 +923,16 @@ impl OnboardingView {
                             .child(sentence),
                     )
                     .children(bar)
-                    .children(failed),
+                    .children(failed)
+                    .child(
+                        Button::new("open-settings")
+                            .link()
+                            .small()
+                            .label(s.open_settings)
+                            .on_click(cx.listener(|this, _, window, _| {
+                                this.leave(Some(AppEvent::Settings), window)
+                            })),
+                    ),
             )
     }
 }
@@ -952,6 +968,7 @@ impl Render for OnboardingView {
             Step::Indexing => self.indexing(s, &p, cx),
         };
         let can_continue = self.can_continue(cx);
+        let no_folder = self.roots(cx).is_none_or(|roots| roots.is_empty());
         let total = download_total(&self.live.read(cx).features, &self.chosen(cx));
         // The consent is the button: it says what agreeing downloads.
         let next_label: SharedString = match self.step {
@@ -969,19 +986,21 @@ impl Render for OnboardingView {
             .top_0()
             .left_0()
             .w_full()
-            .h(px(220.))
+            .h(px(260.))
             .bg(linear_gradient(
                 180.,
-                linear_color_stop(p.accent.opacity(if self.dark { 0.12 } else { 0.09 }), 0.),
+                linear_color_stop(p.accent.opacity(if self.dark { 0.20 } else { 0.16 }), 0.),
                 linear_color_stop(p.accent.opacity(0.), 1.),
             ));
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             // Bindings run before the recorder's keys: while it waits, Enter
-            // does nothing and Esc cancels it.
+            // does nothing and Esc cancels it. On setup Enter does nothing
+            // either: a stray key must not start a download; the focused
+            // button still takes it.
             .on_action(cx.listener(|this, _: &Next, window, cx| {
-                if !this.recording {
+                if !this.recording && this.step == Step::Indexing {
                     this.next(window, cx);
                 }
             }))
@@ -1009,7 +1028,7 @@ impl Render for OnboardingView {
                     .px(px(32.))
                     .pt(px(32.))
                     .pb(px(16.))
-                    .child(slide_in(body, self.step))
+                    .child(slide_in(body, self.step, self.forward))
                     .children(self.error.as_ref().map(|error| {
                         note(&p)
                             .mt(px(10.))
@@ -1026,28 +1045,16 @@ impl Render for OnboardingView {
                     .py(px(16.))
                     .border_t_1()
                     .border_color(p.line)
-                    .when(self.step == Step::Setup && total == 0, |bar| {
-                        bar.child(note(&p).mt_0().child(s.ob_nothing_to_download))
-                    })
-                    // The last step: onboarding is saved, any way out is fine.
-                    .when(self.step == Step::Indexing, |bar| {
-                        bar.child(
-                            Button::new("open-settings")
-                                .ghost()
-                                .label(s.open_settings)
-                                .on_click(cx.listener(|this, _, window, _| {
-                                    this.leave(Some(AppEvent::Settings), window)
-                                })),
-                        )
+                    // Why Start is off, or that nothing downloads.
+                    .when(self.step == Step::Setup, |bar| {
+                        let hint = if no_folder {
+                            Some(s.ob_need_folder)
+                        } else {
+                            (total == 0).then_some(s.ob_nothing_to_download)
+                        };
+                        bar.children(hint.map(|h| note(&p).mt_0().child(h)))
                     })
                     .child(div().flex_1())
-                    .when(self.step == Step::Indexing, |bar| {
-                        bar.child(
-                            Button::new("close").ghost().label(s.close).on_click(
-                                cx.listener(|this, _, window, _| this.leave(None, window)),
-                            ),
-                        )
-                    })
                     .child(
                         Button::new("next")
                             .primary()
@@ -1081,13 +1088,15 @@ const STAGGER: Duration = Duration::from_millis(40);
 /// The finish screen's check growing in.
 const CHECK_IN: Duration = Duration::from_millis(320);
 
-/// A screen's body fades in from 8px to the right. Under reduced motion
-/// GPUI shows the end state.
-fn slide_in(body: Div, step: Step) -> impl IntoElement {
+/// A screen's body fades in from 8px toward where it came from: forward
+/// from the right, back from the left. Under reduced motion GPUI shows the
+/// end state.
+fn slide_in(body: Div, step: Step, forward: bool) -> impl IntoElement {
+    let from = if forward { 8. } else { -8. };
     body.relative().with_animation(
         ("step", step as usize),
         Animation::new(STEP_IN).with_easing(ease_out_quint()),
-        |el, t| el.opacity(t).left(px(8. * (1. - t))),
+        move |el, t| el.opacity(t).left(px(from * (1. - t))),
     )
 }
 

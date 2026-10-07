@@ -230,6 +230,8 @@ pub struct Strings {
     /// Beside a feature on by default (ADR-0010).
     /// The finish screen's arrow back to setup.
     pub back: &'static str,
+    /// Beside Start while no folder is chosen: why it is off.
+    pub ob_need_folder: &'static str,
     pub ob_recommended: &'static str,
     /// In place of a downloaded feature's size.
     pub ob_installed: &'static str,
