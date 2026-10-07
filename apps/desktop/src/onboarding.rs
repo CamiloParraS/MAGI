@@ -526,7 +526,7 @@ impl OnboardingView {
                 .child(
                     Button::new("add-folder")
                         .primary()
-                        .small()
+                        .xsmall()
                         .label(s.add_folder)
                         .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
                 ),
@@ -886,15 +886,27 @@ impl OnboardingView {
                 "done-hotkey-works",
             )
             .into_any_element()
-        } else {
-            note(p).mt_0().child(s.ob_try_it).into_any_element()
-        };
-        let conflict = live.hotkey_conflict.is_some().then(|| {
-            note(p)
-                .mt_0()
+        } else if live.hotkey_conflict.is_some() {
+            // Taken: said right under the keys, with Change just below it;
+            // "Try it now" would be wrong.
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
                 .text_color(p.warn)
+                .child(Icon::new(IconName::TriangleAlert).size(px(14.)))
                 .child(format!("{}. {}", s.shortcut_taken, s.shortcut_taken_note))
-        });
+                .into_any_element()
+        } else {
+            // The one thing to do on this screen: an invitation, in the accent.
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(p.accent)
+                .child(s.ob_try_it)
+                .into_any_element()
+        };
         let recording = self.recording;
         let shortcut = card(p)
             .w_full()
@@ -921,11 +933,11 @@ impl OnboardingView {
                 keys.into_any_element()
             })
             .children((!recording).then_some(try_it))
-            .children(conflict)
             .child(
+                // Outlined: it is a control, so it looks like one.
                 Button::new("change-hotkey")
                     .small()
-                    .ghost()
+                    .outline()
                     .label(if recording {
                         s.cancel
                     } else {
