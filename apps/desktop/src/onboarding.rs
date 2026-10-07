@@ -371,6 +371,14 @@ impl OnboardingView {
         }
     }
 
+    /// From the finish screen back to setup, to change a choice. Setup is
+    /// already applied; confirming it again applies only what changed.
+    pub fn back(&mut self, cx: &mut Context<Self>) {
+        if self.step == Step::Indexing && !self.busy && !self.recording {
+            self.go(Step::Setup, cx);
+        }
+    }
+
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
         self.step = step;
         self.error = None;
@@ -980,6 +988,8 @@ impl Render for OnboardingView {
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 if this.recording {
                     this.toggle_recording(window, cx);
+                } else {
+                    this.back(cx);
                 }
             }))
             .relative()
@@ -1047,6 +1057,19 @@ impl Render for OnboardingView {
                             .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                     ),
             )
+            // Last, so it sits above the scroll area.
+            .when(self.step == Step::Indexing, |root| {
+                root.child(
+                    div().absolute().top(px(12.)).left(px(12.)).child(
+                        Button::new("back")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ArrowLeft)
+                            .label(s.back)
+                            .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
+                    ),
+                )
+            })
     }
 }
 

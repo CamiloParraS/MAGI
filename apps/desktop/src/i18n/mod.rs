@@ -228,6 +228,8 @@ pub struct Strings {
     /// The setup button when nothing downloads.
     pub ob_start: &'static str,
     /// Beside a feature on by default (ADR-0010).
+    /// The finish screen's arrow back to setup.
+    pub back: &'static str,
     pub ob_recommended: &'static str,
     /// In place of a downloaded feature's size.
     pub ob_installed: &'static str,

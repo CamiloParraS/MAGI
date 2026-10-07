@@ -78,6 +78,16 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
     assert_eq!(last.onboarding, Onboarding::Done);
     assert_eq!(saved(), Onboarding::Done);
 
+    // Back from the finish screen reopens setup to change a choice;
+    // onboarding stays done, and confirming again returns to the finish.
+    window.update(cx, |view, _, cx| view.back(cx)).unwrap();
+    assert_eq!(step(cx), Step::Setup);
+    assert_eq!(saved(), Onboarding::Done);
+    window.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
+    cx.run_until_parked();
+    assert_eq!(step(cx), Step::Indexing);
+    while rx.try_recv().is_ok() {}
+
     // The finish step's Change: registered by the shell, then saved.
     let key = gpui_kit::Keystroke::parse("ctrl-alt-j").unwrap();
     window
