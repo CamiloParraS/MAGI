@@ -44,18 +44,17 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
         cx.add_window(|window, cx| OnboardingView::new(host, live, tx, window, cx))
     };
     let saved = || host.settings().unwrap().ui.onboarding;
-    let first = open(cx);
-    assert_eq!(first.update(cx, |v, _, _| v.step()).unwrap(), Step::Folders);
-    first.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
-    cx.run_until_parked();
-    assert_eq!(saved(), Onboarding::Features, "a completed step is saved");
-
-    // Left early: the next onboarding resumes where this one stopped.
+    // A step saved by the old four-screen flow resumes on the one setup screen.
+    host.update_settings(&serde_json::json!({ "ui": { "onboarding": Onboarding::Features } }))
+        .unwrap();
     let window = open(cx);
     let step = |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.step()).unwrap();
-    assert_eq!(step(cx), Step::Features);
+    assert_eq!(step(cx), Step::Setup);
 
-    // Unchecking both defaults: keyword search only, nothing downloaded.
+    // One confirm applies everything: unchecking both defaults means keyword
+    // search only and nothing downloaded; "Start with your computer" is on by
+    // default and the shell applies it.
+    assert!(!host.settings().unwrap().ui.launch_at_login);
     window
         .update(cx, |view, w, cx| {
             view.toggle_feature(Feature::Meaning, false, cx);
@@ -64,16 +63,9 @@ fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppCon
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(step(cx), Step::Background);
-    assert_eq!(saved(), Onboarding::Background);
+    assert_eq!(step(cx), Step::Indexing);
     let features = host.settings().unwrap().features;
     assert!(!features.meaning && !features.image_text && !features.image_visual);
-
-    // "Start with your computer" is checked by default; the shell applies it.
-    assert!(!host.settings().unwrap().ui.launch_at_login);
-    window.update(cx, |view, w, cx| view.next(w, cx)).unwrap();
-    cx.run_until_parked();
-    assert_eq!(step(cx), Step::Indexing);
     // Every saved step reaches the shell; the last one finishes onboarding.
     let last = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {

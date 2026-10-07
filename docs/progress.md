@@ -2405,6 +2405,15 @@ Open:
 
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
 
+Onboarding redesign and light palette (2026-10-07, after a showcase found onboarding and light mode plain):
+
+- Onboarding is two screens instead of four. Setup (880×600): "Welcome to Magi", then folders on the left and search features plus "Start with your computer" on the right; one button applies all three and saves `ui.onboarding = done`. Its label is the consent: "Download {size} and start", or "Start" when nothing downloads (ADR-0010). The finish screen is unchanged apart from its check growing in. Step counter, Back and the background step are gone; a saved `folders`/`features`/`background` reopens setup (config format unchanged; `docs/architecture.md`). SPEC FR-10 updated.
+- Folders: an empty list is a dashed drop zone; folders can be dropped from the file manager (`ExternalPaths`, files ignored) or picked. Folders and features are grouped lists as in system settings: one rounded box, inset dividers, 44 px rows, accent outline icons with no colored squares (`text-search`, `scan-text`, `scan-eye`), a switch per feature, its size or a green check when installed, "Recommended" in small type under the defaults (from `FeaturesConfig::default()`), and ⓘ opening what a feature does.
+- Light palette: window `#f5f5f7`, cards white with a faint shadow (`settings::view::card`, so settings too), secondary text `#636366` (≥ 4.5:1 on the sidebar). A soft accent wash at the top of onboarding. The onboarding window stays solid (SPEC §M6: only search and settings take the backdrop).
+- Icons outside gpui-kit's default set must be listed in `app.rs`'s `ExtraIcons`, or they draw blank; `FolderPlus`, `TextSearch`, `ScanText`, `ScanEye` added.
+- Tests: `tests/onboarding.rs` rewritten: an old saved step opens setup; one confirm with both defaults off enables none, saves `launch_at_login = true` and `done`; the finish step's recorder as before.
+- Checked by the user on screen ("looks good"). Not checked: dark mode, Spanish label widths, dropping a folder, and a click on a feature row outside its switch (rows do not toggle: the switch's click might reach the row too).
+
 ## M6 sign-off (desktop app: search window, tray, settings, onboarding)
 
 **Not signed off yet.** Drafted 2026-10-05. This section collects every
@@ -2463,7 +2472,7 @@ Linux GNOME without AppIndicator). ☐
 - Global hotkey, configurable, with conflict detection: done (Plan 5); single instance and `--toggle`: done (Plan 3).
 - Optional search features (ADR-0010): done (Plan 1).
 - Settings window: done, except **fix actions for `missing` / `permission_denied` roots**, which need M7's permission guidance.
-- Onboarding (FR-10) with the download consent screen and "Start with your computer": done; `get_permissions_report` in onboarding is M7.
+- Onboarding (FR-10) with the download consent and "Start with your computer" on one setup screen, then a finish screen (redesigned 2026-10-07): done; `get_permissions_report` in onboarding is M7.
 - Search hint: done (Plan 4).
 - Localization (en/es, ICU4X, `ui.language`, live switch, tray): done.
 - Theme and window background, including the see-through amount (it visibly changes the window, so it stays): done.

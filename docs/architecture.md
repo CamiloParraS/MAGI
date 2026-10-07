@@ -62,8 +62,10 @@ M6 adds `[features] meaning = true, image_text = true, image_visual = false`
 (desired state only) and `ui.language` (`system|en|es`),
 `ui.transparency_mode` (`match_system|always|never`) and
 `ui.transparency_intensity` (default 0.75), and `ui.onboarding`
-(`folders|features|background|done`, default `folders`): the onboarding step
-to resume at, saved as each step completes. Unknown enum values fail to parse.
+(`folders|features|background|done`, default `folders`): whether onboarding
+is finished. The setup screen (folders, features, launch at login) saves
+`done` when confirmed; `features` and `background` are left from the earlier
+four-screen flow and, like `folders`, reopen the setup screen. Unknown enum values fail to parse.
 The default `exclude_globs` also skip Unity's regenerated `Library` caches,
 `*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
 apply only when the config file is first written: an existing config keeps

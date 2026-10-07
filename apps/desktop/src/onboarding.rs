@@ -1,19 +1,18 @@
-//! First-run onboarding (FR-10): folders, with each one's status as the
-//! permission check → search features, with consent to download → start with
-//! the computer → the first index's progress. Each step saves the next one to
-//! `ui.onboarding` when it completes; a plain launch opens onboarding until
-//! the background step saves `done`, and it resumes at the saved step.
-//! Closing it at any step leaves the app running.
+//! First-run onboarding (FR-10) in two screens. Setup: folders, with each
+//! one's status as the permission check; search features, with consent to
+//! download; start with the computer. Confirming applies all three and saves
+//! `done` to `ui.onboarding`; then the first index's progress. A plain launch
+//! opens onboarding until then. Closing it leaves the app running.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::config::{Onboarding, UiConfig};
+use magi_core::config::{FeaturesConfig, Onboarding, UiConfig};
 use magi_core::dto::{ErrorCode, FeatureStatus, IndexState, IndexStatus, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
@@ -23,11 +22,11 @@ use std::time::Duration;
 use crate::app::{AppEvent, Events};
 use crate::i18n::Strings;
 use crate::search::view::{Live, turn_on};
-use crate::settings::view::{card, heading, note, pick_folder, stack};
+use crate::settings::view::{card, heading, note, pick_folder};
 use crate::settings::{error_text, hotkey_keystroke, root_state};
 use crate::theme::{self, Palette, Tone};
 
-pub const SIZE: Size<Pixels> = size(px(640.), px(560.));
+pub const SIZE: Size<Pixels> = size(px(880.), px(600.));
 
 actions!(magi_onboarding, [Next, Back]);
 
@@ -44,61 +43,18 @@ pub fn bind_keys(cx: &mut App) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    Folders,
-    Features,
-    Background,
+    Setup,
     Indexing,
 }
 
-/// The saved resume point; `Done` only shows if a window was already open.
+/// The saved resume point. `folders`, `features` and `background` were the
+/// earlier flow's screens: all of them are on the setup screen now. `Done`
+/// only shows if a window was already open.
 impl From<Onboarding> for Step {
     fn from(saved: Onboarding) -> Self {
         match saved {
-            Onboarding::Folders => Self::Folders,
-            Onboarding::Features => Self::Features,
-            Onboarding::Background => Self::Background,
             Onboarding::Done => Self::Indexing,
-        }
-    }
-}
-
-const STEPS: [Step; 4] = [
-    Step::Folders,
-    Step::Features,
-    Step::Background,
-    Step::Indexing,
-];
-
-impl Step {
-    fn index(self) -> usize {
-        STEPS.iter().position(|&s| s == self).unwrap_or_default()
-    }
-
-    fn title(self, s: &Strings) -> &'static str {
-        match self {
-            Self::Folders => s.ob_folders,
-            Self::Features => s.ob_features,
-            Self::Background => s.ob_background,
-            Self::Indexing => s.ob_done,
-        }
-    }
-
-    fn intro(self, s: &Strings) -> Option<&'static str> {
-        match self {
-            Self::Folders => Some(s.ob_folders_note),
-            Self::Features => Some(s.ob_features_note),
-            Self::Background => Some(s.ob_background_note),
-            // Depends on how far the files are: `indexing` says it.
-            Self::Indexing => None,
-        }
-    }
-
-    /// Indexing has started on the last step: nothing to go back to.
-    fn back(self) -> Option<Self> {
-        match self {
-            Self::Features => Some(Self::Folders),
-            Self::Background => Some(Self::Features),
-            Self::Folders | Self::Indexing => None,
+            Onboarding::Folders | Onboarding::Features | Onboarding::Background => Self::Setup,
         }
     }
 }
@@ -264,8 +220,6 @@ pub struct OnboardingView {
     /// The last change that failed, until the next one.
     error: Option<ErrorCode>,
     dark: bool,
-    /// Which way the last step change went; the new step slides in from it.
-    forward: bool,
     /// `hotkey_presses` when the window opened: a press after it is the
     /// user trying the hotkey.
     hotkey_presses: u32,
@@ -316,7 +270,6 @@ impl OnboardingView {
             busy: false,
             error: None,
             dark: false,
-            forward: true,
             hotkey_presses,
             focus: cx.focus_handle(),
             recorder: cx.focus_handle(),
@@ -365,31 +318,33 @@ impl OnboardingView {
         cx.notify();
     }
 
-    /// Folders needs one folder; features needs the features to show.
+    /// Setup needs one folder and the features to show.
     fn can_continue(&self, cx: &App) -> bool {
         !self.busy
             && match self.step {
-                Step::Folders => self.roots(cx).is_some_and(|roots| !roots.is_empty()),
-                Step::Features => !self.live.read(cx).features.is_empty(),
-                Step::Background | Step::Indexing => true,
+                Step::Setup => {
+                    self.roots(cx).is_some_and(|roots| !roots.is_empty())
+                        && !self.live.read(cx).features.is_empty()
+                }
+                Step::Indexing => true,
             }
     }
 
-    /// Applies the step's choices, then moves on; the last step opens search.
+    /// Setup applies the features and the login choice and finishes
+    /// onboarding in one go; the last screen opens search.
     pub fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_continue(cx) {
             return;
         }
         match self.step {
-            Step::Folders => self.apply(
-                Step::Features,
-                |host| save_step(host, json!({ "onboarding": Onboarding::Features })),
-                cx,
-            ),
-            Step::Features => {
+            Step::Setup => {
                 let changes = feature_changes(&self.live.read(cx).features, &self.chosen(cx));
+                let ui = json!({
+                    "launch_at_login": self.launch_at_login,
+                    "onboarding": Onboarding::Done,
+                });
                 self.apply(
-                    Step::Background,
+                    Step::Indexing,
                     move |host| {
                         for (feature, on) in changes {
                             if on {
@@ -398,17 +353,10 @@ impl OnboardingView {
                                 host.set_feature_enabled(feature, false)?;
                             }
                         }
-                        save_step(host, json!({ "onboarding": Onboarding::Background }))
+                        save_step(host, ui)
                     },
                     cx,
                 );
-            }
-            Step::Background => {
-                let ui = json!({
-                    "launch_at_login": self.launch_at_login,
-                    "onboarding": Onboarding::Done,
-                });
-                self.apply(Step::Indexing, move |host| save_step(host, ui), cx);
             }
             Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
         }
@@ -424,7 +372,6 @@ impl OnboardingView {
     }
 
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
-        self.forward = step.index() > self.step.index();
         self.step = step;
         self.error = None;
         cx.notify();
@@ -505,172 +452,236 @@ impl OnboardingView {
         .detach();
     }
 
-    /// FR-10's permission check: each folder's status says whether Magi can
-    /// read it.
-    fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let rows = self.roots(cx).map(|roots| {
-            if roots.is_empty() {
-                return stack().child(card(p).text_color(p.mute).child(s.no_folders));
-            }
-            stack().children(roots.iter().map(|root| {
-                let (badge, tone, explain) = root_state(root, s);
-                let id = root.id;
-                let icon = match tone {
-                    Tone::Warn | Tone::Err => {
-                        Icon::new(IconName::TriangleAlert).text_color(p.tone(tone))
-                    }
-                    _ => Icon::new(IconName::Folder).text_color(p.mute),
-                };
-                card(p)
-                    .child(icon.size(px(16.)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis_middle()
-                                    .child(root.path.clone()),
-                            )
-                            .children(explain.map(|e| note(p).child(e))),
-                    )
-                    .child(p.status(badge, tone))
-                    // A rescan probes each root again: a fixed permission or
-                    // a reconnected drive clears the badge.
-                    .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
-                        row.child(
-                            Button::new(("retry-root", id as u64))
-                                .ghost()
-                                .small()
-                                .label(s.try_again)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_root(
-                                        |host| host.engine().map(|e| drop(e.rescan())),
-                                        cx,
-                                    );
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new(("remove-root", id as u64))
-                            .ghost()
-                            .small()
-                            .icon(IconName::Trash)
-                            .tooltip(s.remove)
-                            .accessibility_label(format!("{} {}", s.remove, root.path))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.run_root(move |host| host.engine()?.remove_root(id), cx);
-                            })),
-                    )
-            }))
-        });
-        let none_yet = self.roots(cx).is_none_or(|roots| roots.is_empty());
-        stack().children(rows).child(
-            div().mt(px(6.)).flex().child(
-                Button::new("add-folder")
-                    .when(none_yet, |b| b.primary())
-                    .small()
-                    .icon(IconName::Plus)
-                    .label(s.add_folder)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-            ),
-        )
+    /// Folders dropped from the file manager: the user picking them, as
+    /// with the picker. Dropped files are ignored.
+    fn drop_folders(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        let paths = paths.paths().to_vec();
+        self.run_root(
+            move |host| {
+                let engine = host.engine()?;
+                for path in paths.iter().filter(|p| p.is_dir()) {
+                    engine.add_root(path)?;
+                }
+                Ok(())
+            },
+            cx,
+        );
     }
 
-    /// The download consent (FR-10, ADR-0010): each feature's exact size, and
-    /// the total the chosen ones download.
-    fn features(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let live = self.live.read(cx);
-        let lang = live.lang;
-        let chosen = self.chosen(cx);
-        let rows = live.features.iter().map(|f| {
-            let feature = f.feature;
-            let text = s.feature(feature);
-            let size = match f.install {
-                Install::Installed { size_bytes } => {
-                    s.installed.replace("{size}", &lang.size(size_bytes))
-                }
-                _ => s
-                    .not_downloaded
-                    .replace("{size}", &lang.size(f.download_size)),
-            };
-            card(p).items_start().child(
+    /// FR-10's permission check: each folder's status says whether Magi can
+    /// read it. With none yet, a drop zone; folders can be dropped either way.
+    fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let accent = p.accent;
+        let roots = self.roots(cx).filter(|roots| !roots.is_empty());
+        let body = match roots {
+            None => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .py(px(22.))
+                .rounded(px(10.))
+                .border_1()
+                .border_dashed()
+                .border_color(p.mute.opacity(0.4))
+                .child(
+                    Icon::new(IconName::FolderPlus)
+                        .size(px(26.))
+                        .text_color(p.accent),
+                )
+                .child(div().text_color(p.mute).child(s.ob_drop_folders))
+                .child(
+                    Button::new("add-folder")
+                        .primary()
+                        .small()
+                        .label(s.add_folder)
+                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                ),
+            // The same grouped list as the features, Add folder its last row.
+            Some(roots) => group(p)
+                .children(roots.iter().enumerate().map(|(ix, root)| {
+                    div()
+                        .children((ix > 0).then(|| divider(p)))
+                        .child(self.root_row(root, s, p, cx))
+                }))
+                .child(divider(p))
+                .child(
+                    div().flex().px(px(6.)).py(px(4.)).child(
+                        Button::new("add-folder")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label(s.add_folder)
+                            .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                    ),
+                ),
+        };
+        body.drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(accent))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)))
+    }
+
+    fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let (badge, tone, explain) = root_state(root, s);
+        let id = root.id;
+        let icon = match tone {
+            Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
+            _ => Icon::new(IconName::Folder).text_color(p.accent),
+        };
+        // Spaced as `row`; its own because a path is cut in the middle,
+        // where the folder's name survives.
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(12.))
+            .py(px(6.))
+            .min_h(px(44.))
+            .child(icon.size(px(18.)).flex_none())
+            .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .child(
-                        Checkbox::new(("feature", feature as usize))
-                            .label(text.name)
-                            .checked(chosen.contains(&feature))
-                            .on_click(cx.listener(move |this, &on: &bool, _, cx| {
-                                this.toggle_feature(feature, on, cx)
-                            })),
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(root.path.clone()),
                     )
-                    .child(note(p).pl(px(24.)).child(text.pitch))
-                    .child(note(p).pl(px(24.)).child(size)),
+                    .children(explain.map(|e| note(p).child(e))),
             )
-        });
-        stack().children(rows)
-    }
-
-    /// Beside "Download and continue": the size is read as it is agreed to.
-    fn download_summary(&self, s: &Strings, cx: &App) -> String {
-        let live = self.live.read(cx);
-        let total = download_total(&live.features, &self.chosen(cx));
-        if total > 0 {
-            s.ob_download_total
-                .replace("{size}", &live.lang.size(total))
-        } else {
-            s.ob_nothing_to_download.into()
-        }
-    }
-
-    fn background(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
-            .ok()
-            .map(Kbd::new);
-        stack()
+            .child(p.status(badge, tone))
+            // A rescan probes each root again: a fixed permission or
+            // a reconnected drive clears the badge.
+            .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
+                row.child(
+                    Button::new(("retry-root", id as u64))
+                        .ghost()
+                        .small()
+                        .label(s.try_again)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.run_root(|host| host.engine().map(|e| drop(e.rescan())), cx);
+                        })),
+                )
+            })
             .child(
-                card(p).items_start().child(
-                    div()
-                        .flex_1()
-                        .child(
-                            Checkbox::new("start-at-login")
-                                .label(s.launch_at_login)
-                                .checked(self.launch_at_login)
-                                .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                                    this.launch_at_login = on;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(note(p).pl(px(24.)).child(s.launch_at_login_note)),
-                ),
+                Button::new(("remove-root", id as u64))
+                    .ghost()
+                    .small()
+                    .icon(IconName::Trash)
+                    .tooltip(s.remove)
+                    .accessibility_label(format!("{} {}", s.remove, root.path))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.run_root(move |host| host.engine()?.remove_root(id), cx);
+                    })),
             )
+    }
+
+    /// The download consent (FR-10, ADR-0010): each feature's exact size;
+    /// the button states the total. One grouped list, as in system
+    /// settings: a switch shows the choice, ⓘ says what a feature does.
+    fn features(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        let lang = live.lang;
+        let chosen = self.chosen(cx);
+        let defaults = FeaturesConfig::default();
+        let rows = live.features.iter().enumerate().map(|(ix, f)| {
+            let feature = f.feature;
+            let text = s.feature(feature);
+            let pitch = text.pitch;
+            // Downloaded: a green check in place of the size.
+            let size = match f.install {
+                Install::Installed { .. } => div()
+                    .id(("installed", ix))
+                    .flex_none()
+                    .aria_label(s.ob_installed)
+                    .child(Icon::new(IconName::Check).size(px(16.)).text_color(p.ok))
+                    .into_any_element(),
+                _ => note(p)
+                    .mt_0()
+                    .flex_none()
+                    .child(lang.size(f.download_size))
+                    .into_any_element(),
+            };
+            let sub = defaults.enabled(feature).then_some(s.ob_recommended);
+            let row = row(feature_icon(feature), text.name, sub, p)
+                .child(size)
+                .child(
+                    Popover::new(("feature-info", ix))
+                        .trigger(
+                            Button::new(("feature-info-button", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Info)
+                                .accessibility_label(text.name),
+                        )
+                        .content(move |_, _, _| div().max_w(px(260.)).text_sm().child(pitch)),
+                )
+                .child(
+                    Switch::new(("feature", feature as usize))
+                        .checked(chosen.contains(&feature))
+                        .color(p.accent)
+                        .accessibility_label(text.name)
+                        .on_click(cx.listener(move |this, &on: &bool, _, cx| {
+                            this.toggle_feature(feature, on, cx)
+                        })),
+                );
+            stagger_in(row, ix)
+        });
+        group(p).children(
+            rows.enumerate()
+                .map(|(ix, row)| div().children((ix > 0).then(|| divider(p))).child(row)),
+        )
+    }
+
+    /// "Start with your computer" (FR-10), on by default.
+    fn launch_row(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        group(p).child(
+            row(IconName::Power, s.launch_at_login, None, p).child(
+                Switch::new("start-at-login")
+                    .checked(self.launch_at_login)
+                    .color(p.accent)
+                    .tooltip(s.launch_at_login_note)
+                    .accessibility_label(s.launch_at_login)
+                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                        this.launch_at_login = on;
+                        cx.notify();
+                    })),
+            ),
+        )
+    }
+
+    /// The one setup screen: the welcome over two columns, folders on the
+    /// left, features and startup on the right.
+    fn setup(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let column = || div().flex_1().min_w_0().flex().flex_col().gap(px(16.));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .child(heading(s.welcome).mb_0().text_center().text_size(px(28.)))
             .child(
                 div()
-                    .mt(px(8.))
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_color(p.mute)
-                    .child(s.ob_search_with)
-                    .children(hotkey),
+                    .items_start()
+                    .gap(px(24.))
+                    .child(column().child(section(
+                        s.ob_folders,
+                        s.ob_folders_note,
+                        self.folders(s, p, cx),
+                        p,
+                    )))
+                    .child(
+                        column()
+                            .child(section(
+                                s.ob_features,
+                                s.ob_features_note,
+                                self.features(s, p, cx),
+                                p,
+                            ))
+                            .child(self.launch_row(s, p, cx)),
+                    ),
             )
-            .children(self.hotkey_tried(cx).then(|| {
-                theme::fade_in(
-                    note(p)
-                        .mt(px(6.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_color(p.tone(Tone::Ok))
-                        .child(Icon::new(IconName::Check).size(px(14.)))
-                        .child(self.works(s, cx)),
-                    "hotkey-works",
-                )
-            }))
     }
 
     fn hotkey_tried(&self, cx: &App) -> bool {
@@ -728,9 +739,6 @@ impl OnboardingView {
         cx.notify();
     }
 
-    /// The finish line: setup is done, so it leads with the shortcut and
-    /// says how far along the files are in one plain sentence, no counts
-    /// (Settings › Index has those).
     /// The finish line, centered: setup is done, so a check, the title, the
     /// shortcut as keycaps, and one plain sentence on how far the files are,
     /// no counts (Settings › Index has those).
@@ -742,17 +750,27 @@ impl OnboardingView {
             Readiness::Ready => s.ob_done_note_ready,
             Readiness::Preparing(_) => s.ob_done_note,
         };
+        // Seen once, so it may arrive with a little life: it grows into its
+        // fixed 52px slot (nothing around it moves) as it fades in.
+        let accent = p.accent;
         let check = div()
             .size(px(52.))
-            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
-            .bg(p.accent.opacity(0.14))
             .child(
-                Icon::new(IconName::Check)
-                    .size(px(26.))
-                    .text_color(p.accent),
+                div()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(accent.opacity(0.14))
+                    .child(Icon::new(IconName::Check).size(px(26.)).text_color(accent))
+                    .with_animation(
+                        "done-check",
+                        Animation::new(CHECK_IN).with_easing(ease_out_quint()),
+                        |el, t| el.size(px(44. + 8. * t)).opacity(t),
+                    ),
             );
         let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
             .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS))
@@ -922,21 +940,33 @@ impl Render for OnboardingView {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
         let body = match self.step {
-            Step::Folders => self.folders(s, &p, cx),
-            Step::Features => self.features(s, &p, cx),
-            Step::Background => self.background(s, &p, cx),
+            Step::Setup => self.setup(s, &p, cx),
             Step::Indexing => self.indexing(s, &p, cx),
         };
         let can_continue = self.can_continue(cx);
-        let next_label = match self.step {
-            Step::Features
-                if download_total(&self.live.read(cx).features, &self.chosen(cx)) > 0 =>
-            {
-                s.download_and_continue
-            }
-            Step::Indexing => s.ob_start_searching,
-            _ => s.continue_,
+        let total = download_total(&self.live.read(cx).features, &self.chosen(cx));
+        // The consent is the button: it says what agreeing downloads.
+        let next_label: SharedString = match self.step {
+            Step::Setup if total > 0 => s
+                .ob_download_and_start
+                .replace("{size}", &self.live.read(cx).lang.size(total))
+                .into(),
+            Step::Setup => s.ob_start.into(),
+            Step::Indexing => s.ob_start_searching.into(),
         };
+        // A soft wash of the accent behind the top of the window: light mode
+        // otherwise has no color but the button.
+        let wash = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w_full()
+            .h(px(220.))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(p.accent.opacity(if self.dark { 0.12 } else { 0.09 }), 0.),
+                linear_color_stop(p.accent.opacity(0.), 1.),
+            ));
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
@@ -949,18 +979,17 @@ impl Render for OnboardingView {
             }))
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 if this.recording {
-                    return this.toggle_recording(window, cx);
-                }
-                if let Some(step) = this.step.back().filter(|_| !this.busy) {
-                    this.go(step, cx);
+                    this.toggle_recording(window, cx);
                 }
             }))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
             .bg(p.solid)
             .text_color(p.ink)
             .text_size(px(14.))
+            .child(wash)
             .child(
                 div()
                     .id("onboarding")
@@ -968,27 +997,9 @@ impl Render for OnboardingView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(32.))
-                    .pt(px(24.))
-                    // The last step is a finish line, not a step to do.
-                    .child(div().mb(px(4.)).text_xs().text_color(p.mute).when(
-                        self.step != Step::Indexing,
-                        |d| {
-                            d.child(
-                                s.step_of
-                                    .replace("{n}", &(self.step.index() + 1).to_string())
-                                    .replace("{total}", &(STEPS.len() - 1).to_string()),
-                            )
-                        },
-                    ))
-                    .when(self.step != Step::Indexing, |d| {
-                        d.child(heading(self.step.title(s)).mb(px(6.)))
-                    })
-                    .children(
-                        self.step
-                            .intro(s)
-                            .map(|text| note(&p).mb(px(16.)).text_sm().child(text)),
-                    )
-                    .child(slide_in(body, self.step, self.forward))
+                    .pt(px(32.))
+                    .pb(px(16.))
+                    .child(slide_in(body, self.step))
                     .children(self.error.as_ref().map(|error| {
                         note(&p)
                             .mt(px(10.))
@@ -1005,12 +1016,8 @@ impl Render for OnboardingView {
                     .py(px(16.))
                     .border_t_1()
                     .border_color(p.line)
-                    .when(self.step == Step::Features, |bar| {
-                        bar.child(
-                            note(&p)
-                                .text_color(p.ink)
-                                .child(self.download_summary(s, cx)),
-                        )
+                    .when(self.step == Step::Setup && total == 0, |bar| {
+                        bar.child(note(&p).mt_0().child(s.ob_nothing_to_download))
                     })
                     // The last step: onboarding is saved, any way out is fine.
                     .when(self.step == Step::Indexing, |bar| {
@@ -1031,13 +1038,6 @@ impl Render for OnboardingView {
                             ),
                         )
                     })
-                    .children(self.step.back().map(|step| {
-                        Button::new("back")
-                            .ghost()
-                            .label(s.back)
-                            .disabled(self.busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.go(step, cx)))
-                    }))
                     .child(
                         Button::new("next")
                             .primary()
@@ -1050,20 +1050,110 @@ impl Render for OnboardingView {
     }
 }
 
-/// How long a step takes to slide in; onboarding is seen once, so a little
-/// longer than [`theme::FADE`].
+/// How long a screen takes to slide in; onboarding is seen once, so a
+/// little longer than [`theme::FADE`].
 const STEP_IN: Duration = Duration::from_millis(220);
+/// How far apart the feature tiles arrive.
+const STAGGER: Duration = Duration::from_millis(40);
+/// The finish screen's check growing in.
+const CHECK_IN: Duration = Duration::from_millis(320);
 
-/// A step's body fades in from 8px toward where it came from: forward from
-/// the right, back from the left. Under reduced motion GPUI shows the end
-/// state.
-fn slide_in(body: Div, step: Step, forward: bool) -> impl IntoElement {
-    let from = if forward { 8. } else { -8. };
+/// A screen's body fades in from 8px to the right. Under reduced motion
+/// GPUI shows the end state.
+fn slide_in(body: Div, step: Step) -> impl IntoElement {
     body.relative().with_animation(
-        ("step", step.index()),
+        ("step", step as usize),
         Animation::new(STEP_IN).with_easing(ease_out_quint()),
-        move |el, t| el.opacity(t).left(px(from * (1. - t))),
+        |el, t| el.opacity(t).left(px(8. * (1. - t))),
     )
+}
+
+/// Tile `ix` of a list fades up 6px, [`STAGGER`] after the one before it.
+/// It plays when the tile first shows, never on later renders.
+fn stagger_in(el: Div, ix: usize) -> impl IntoElement {
+    let delay = STAGGER * ix as u32;
+    let total = STEP_IN + delay;
+    let start = delay.as_secs_f32() / total.as_secs_f32();
+    let ease = ease_out_quint();
+    el.relative()
+        .with_animation(("stagger-in", ix), Animation::new(total), move |el, t| {
+            let t = ease(((t - start) / (1. - start)).clamp(0., 1.));
+            el.opacity(t).top(px(6. * (1. - t)))
+        })
+}
+
+/// A titled part of the setup screen.
+fn section(title: &'static str, intro: &'static str, body: Div, p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        .child(note(p).mt(px(2.)).mb(px(10.)).text_sm().child(intro))
+        .child(body)
+}
+
+/// What each feature does, as a picture.
+fn feature_icon(feature: Feature) -> IconName {
+    match feature {
+        Feature::Meaning => IconName::TextSearch,
+        Feature::ImageText => IconName::ScanText,
+        Feature::ImageVisual => IconName::ScanEye,
+    }
+}
+
+/// Rows grouped in one rounded box, as in system settings.
+fn group(p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(p.line)
+        .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
+        .overflow_hidden()
+}
+
+/// A line between grouped rows, starting where the text does.
+fn divider(p: &Palette) -> Div {
+    div().h(px(1.)).ml(px(42.)).bg(p.line)
+}
+
+/// A grouped row: an icon in the accent, the name with an optional small
+/// line under it, then what follows.
+fn row(icon: IconName, name: &'static str, sub: Option<&'static str>, p: &Palette) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(6.))
+        .min_h(px(44.))
+        .child(
+            Icon::new(icon)
+                .size(px(18.))
+                .flex_none()
+                .text_color(p.accent),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(name),
+                )
+                .children(sub.map(|sub| {
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(14.))
+                        .text_color(p.mute)
+                        .child(sub)
+                })),
+        )
 }
 
 #[cfg(test)]

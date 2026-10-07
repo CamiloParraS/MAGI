@@ -40,7 +40,7 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 11 | Idle RSS ≤ 150 MB | Window closed, models unloaded; Task Manager › Details › Memory (private working set). | ✅ ~24 MB | | |
 | 12 | Software rendering | See "No GPU" below. | not run | | |
 | 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change not run | | |
-| 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's last step. | | | |
+| 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's finish screen. | | | |
 | 15 | Hotkey conflict | See "Hotkey conflicts" below. | | | |
 | 16 | Real feature download | Isolated instance without `MAGI_FAKE_EMBEDDER`; see "Downloads" below. | | | |
 | 17 | Launch at login | See "Launch at login" below. | | | |
@@ -50,6 +50,7 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 21 | Dark-mode switch contrast | Dark theme: an off switch is clearly visible on its box. | | | |
 | 22 | Spanish and English | `ui.language = es`, then `en`, from settings: every window relabels live; tray too. | ✅ es 2026-09-30 | | |
 | 23 | Startup failure | Isolated instance with a folder where the database should be (`mkdir $MAGI_DATA_DIR/magi.db`): "Magi couldn't start" with the error; Show log reveals `magi.log`; Quit and closing both exit. | ✅ 2026-10-05 except Show log | | |
+| 24 | Onboarding setup | `--onboarding`: drag a folder from Explorer/Finder onto the drop zone, it is added (a dropped file is not); every icon draws; ⓘ opens what a feature does; the button reads "Download {size} and start", or "Start" with every feature off; light and dark, English and Spanish: no name cut off, no scrolling in the features column. | | | |
 
 ## Hotkey conflicts
 

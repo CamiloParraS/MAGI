@@ -399,6 +399,11 @@ gpui_kit::assets::icon_assets!(
         Keyboard,
         Trash,
         Power,
+        // Onboarding: the folder drop zone and the search features.
+        FolderPlus,
+        TextSearch,
+        ScanText,
+        ScanEye,
         // Keycaps (onboarding).
         ArrowBigUp,
         ChevronUp,
