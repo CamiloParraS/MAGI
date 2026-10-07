@@ -2389,6 +2389,8 @@ Smaller open items closed (2026-10-05):
 
 QA checklist: `docs/qa-checklist.md` (2026-10-05), Windows only for now; macOS and Linux columns are empty until a machine for each is available. Results already known are filled in from the rounds above.
 
+Intended, not open (decided 2026-10-05): a switched-off root always reads "Paused, not searched", even if its last health was a problem. It is not probed while off, so its stored health would be stale; switching it on probes it and shows the real state at once. Its files are out of search either way (`searchable_sql!`: enabled and not missing).
+
 Exceptions the owner accepted (M6):
 
 1. **Typing → results < 400 ms is not met on the first search after the text model idle-unloads** (0.98–1.86 s, 2026-09-30); warm searches pass (154–214 ms). Accepted 2026-10-05: minimal resource use while the app is not in use matters more, so the model is not warmed when the window opens (SPEC §3 lazy loading, NFR-1).
@@ -2402,4 +2404,100 @@ Startup-failure window (2026-10-05):
 Open:
 
 - Fix actions for `missing` / `permission_denied` roots (permission guidance is M7).
-- A switched-off root always reads "Paused, not searched", even if its last health was a problem (it is not probed while off).
+
+## M6 sign-off (desktop app: search window, tray, settings, onboarding)
+
+**Not signed off yet.** Drafted 2026-10-05. This section collects every
+SPEC.md §7 M6 verification item with its evidence, and leaves room for the
+manual checks still to run. Only Windows can be tested for now; the macOS
+and Linux columns stay open, and M6 is not done until they are filled in
+(see this file's header). The manual steps are in `docs/qa-checklist.md`.
+Fill in a ☐ with ✅ / ❌ / ⚠️, the date, and a note or a link to the evidence.
+
+### Verification items
+
+| #   | SPEC.md item | Result | Evidence |
+| --- | ------------ | ------ | -------- |
+| 1   | `cargo test` on the desktop crate's pure logic: snippet highlight ranges, keyboard navigation, settings validation, transparency resolution, language resolution; `#[gpui::test]` smoke tests for the search window | **Pass.** 50 unit tests plus 4 headless GPUI tests. | `search::highlight::tests` (3), `search::state::tests` (8, incl. `selection_clamps_and_resets_on_new_results`), `settings::tests` (15), `theme::tests` (4), `i18n::tests` (4), `hotkey::tests` (5); `tests/headless.rs` `the_search_window_opens_empty_over_a_real_host`, `tests/settings.rs`, `tests/onboarding.rs`. `es` covering `en` is checked by the compiler. |
+| 2   | Core: search and indexing work with no features; enabling backfills only files missing its output; disabling keeps derived data; a failed or cancelled download never leaves an `Installed` asset | **Pass.** | M6 Plan 1 table: `with_no_features_files_are_found_by_keyword_and_name`, `enabling_meaning_embeds_only_the_files_missing_it`, `turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing`, `a_checksum_mismatch_is_failed_and_never_installed`, `cancel_clears_the_queue_and_a_later_download_works` |
+| 3   | `docs/qa-checklist.md` completed on all three OSes | **Windows: partly done** (see "Manual checks" below). macOS ☐ Linux ☐ | `docs/qa-checklist.md` |
+| 4   | Warm models: window visible < 150 ms after the hotkey; first results < 400 ms after typing stops | **Pass, with an accepted exception** for the first search after the model unloads (exception 1). Window: max 57 ms over 10 release-build samples. Results: 154–214 ms warm. macOS ☐ Linux ☐ | Plan 3 "Windows verification", second round |
+| 5   | Idle footprint with the window hidden meets NFR-1 (RSS ≤ 150 MB), recorded in `docs/benchmarks.md` | **Pass on Windows:** ~24 MB, models unloaded, window closed. CPU not recorded. macOS ☐ Linux ☐ | `docs/benchmarks.md`, "M6 — idle footprint (GPUI)" |
+| 6   | Renders on a GPU-less Windows VM and Linux VM, or the GPU requirement (§1) is documented as the reason it does not | Windows ☐ Linux ☐ | QA checklist row 12, "No GPU" |
+| 7   | IME and dead-key input in the search window on every OS | **Windows: dead keys pass** (`canción`, 2026-09-29). Windows IME ☐ macOS ☐ Linux ☐ | QA checklist row 7 |
+| 8   | CI builds the desktop app and runs its headless tests on all three OSes | **Pass.** `ci.yml` runs clippy and `cargo test --workspace` (which includes `magi-desktop`) on Windows, macOS and Linux; green, reported by the owner 2026-09-29. | Plan 3 "Windows verification", second round |
+
+### Manual checks (Windows)
+
+From `docs/qa-checklist.md`; the numbers match its rows. Already passed:
+1 hotkey toggle, 2 `--toggle`, 3 open and reveal, 4 hides on blur and Esc,
+9 first frame, 10 warm results, 11 idle RSS, 22 Spanish (2026-09-29/30),
+and 23 startup failure except Show log (2026-10-05).
+
+| Row | Check | Result | Date | Notes |
+| --- | ----- | ------ | ---- | ----- |
+| 5   | Multi-monitor placement (needs a second display) | ☐ | | |
+| 6   | HiDPI at 150 % and 200 % | ☐ | | |
+| 7   | IME (e.g. Japanese) composes in place | ☐ | | |
+| 12  | Software rendering (VirtualBox, 3D acceleration off) | ☐ | | |
+| 13  | Transparency effects switched while settings is open | ☐ | | |
+| 14  | Hotkey recorder in the running app (settings and onboarding) | ☐ | | |
+| 15  | Hotkey conflict: `Win+E`, a second Magi, another app, and at startup | ☐ | | |
+| 16  | Real feature download: turn on, network cut, remove download | ☐ | | |
+| 17  | Launch at login: registry value, sign out/in, switch off | ☐ | | |
+| 18  | Remove folder asks first | ☐ | | |
+| 19  | Unreadable list updates live | ☐ | | |
+| 20  | Light-mode see-through: every slider step shows | ☐ | | |
+| 21  | Dark-mode switch contrast | ☐ | | |
+| 22  | English, and the live language switch (tray included) | ☐ | | |
+| 23  | Startup failure: Show log reveals `magi.log` | ☐ | | |
+
+macOS and Linux: every row of `docs/qa-checklist.md`, plus row 8 (no tray,
+Linux GNOME without AppIndicator). ☐
+
+### Deliverables
+
+- Walking skeleton (GPUI, Host API, tray, hotkey, single instance, `--toggle`, blurred backdrop): done (Plan 3).
+- Search window (frameless, centered, on top, hides on blur/Esc, 150 ms debounce, results with thumbnail, page, date, snippet and sources, keyboard navigation, copy path, empty/loading/error states, indexing hint): done (Plan 4).
+- Tray menu (status line, Open search, Pause/Resume, Settings, Quit): done.
+- Global hotkey, configurable, with conflict detection: done (Plan 5); single instance and `--toggle`: done (Plan 3).
+- Optional search features (ADR-0010): done (Plan 1).
+- Settings window: done, except **fix actions for `missing` / `permission_denied` roots**, which need M7's permission guidance.
+- Onboarding (FR-10) with the download consent screen and "Start with your computer": done; `get_permissions_report` in onboarding is M7.
+- Search hint: done (Plan 4).
+- Localization (en/es, ICU4X, `ui.language`, live switch, tray): done.
+- Theme and window background, including the see-through amount (it visibly changes the window, so it stays): done.
+- Visual direction: variant A "Pane".
+- Files open and reveal only by `file_id` through `Host`: done (`Host::file_path`).
+- Not in SPEC's list, also done: the startup-failure window, quitting from settings when there is no tray, the last search query restored on reopen.
+
+### Exceptions the owner accepted
+
+1. Typing → results < 400 ms is not met on the first search after the text model idle-unloads (0.98–1.86 s); accepted 2026-10-05 in favor of minimal resource use while the app is not in use.
+
+### Intended behavior (decided, not open)
+
+- A switched-off folder reads "Paused, not searched" whatever its last health was; its files are out of search either way (2026-10-05).
+
+### Superseded
+
+- M6 Plan 2's seven manual Tauri console checks (CSP, capabilities, `engine://status`, …): the Tauri host was replaced by GPUI (ADR-0011), which has no webview and no IPC. What they guarded is now covered by `Host` tests (`FileIdNotFound` by id, `shutdown_stops_the_engine`) and the checks above.
+
+### Carried forward (none is an M6 verification item)
+
+- **NFR-8:** search p95 while indexing is recorded (278 ms), but the "never blocked behind more than one small batch" bound is unverified (max 3.34 s). M7 has its own NFR-8 item.
+- **NFR-11:** peak memory while indexing with a concurrent search is 1,762–1,800 MB against 1.5 GB (`image_visual` on). M7's 8 GB-machine item will hit it.
+- **`Engine::start` blocks for the startup walk:** no status, keyword-only search and a slow quit until it ends.
+- **`just eval`** with the real models through the desktop search path: pending before merging `feat/gpui-shell`.
+- A second launch that cannot reach the running Magi logs and exits with no window.
+- Search quality: nearest-but-irrelevant vectors fill the list (RRF fuses by rank only); candidate fix is a minimum similarity, tuned with `just eval`.
+
+### Sign-off
+
+- [ ] Windows manual checks above filled in, with no unexplained ❌
+- [ ] macOS: `docs/qa-checklist.md` complete
+- [ ] Linux: `docs/qa-checklist.md` complete, including row 8 (no tray)
+- [ ] Items 6 and 7 done on every OS (or the GPU requirement documented)
+- [ ] `just eval` run and recorded
+
+Signed off by: ______ Date: ______
