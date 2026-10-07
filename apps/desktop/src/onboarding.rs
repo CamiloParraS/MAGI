@@ -143,19 +143,24 @@ pub struct Cap {
     pub label: String,
     /// The space bar.
     pub wide: bool,
+    /// Held down right now.
+    pub held: bool,
 }
 
-/// `keystroke` as keycaps, modifiers first in the platform's order;
-/// `symbols` is [`magi_core::platform::SYMBOL_MODIFIERS`].
-pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
+/// `keystroke` as keycaps, modifiers first in the platform's order, those
+/// in `held` lit; `symbols` is [`magi_core::platform::SYMBOL_MODIFIERS`].
+/// The last key never lights: the registered hotkey swallows it.
+pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool, held: &Modifiers) -> Vec<Cap> {
     let cap = |icon, label: &str| Cap {
         icon,
         label: label.into(),
         wide: false,
+        held: false,
     };
     // Each modifier: its symbol on macOS, its name elsewhere.
-    let pick = |symbol, name| {
-        if symbols {
+    let pick = |symbol, name, down| Cap {
+        held: down,
+        ..if symbols {
             cap(Some(symbol), "")
         } else {
             cap(None, name)
@@ -164,20 +169,23 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
     let m = &keystroke.modifiers;
     let mut caps = Vec::new();
     if m.control {
-        caps.push(pick(IconName::ChevronUp, "Ctrl"));
+        caps.push(pick(IconName::ChevronUp, "Ctrl", held.control));
     }
     if m.alt {
-        caps.push(pick(IconName::Option, "Alt"));
+        caps.push(pick(IconName::Option, "Alt", held.alt));
     }
     if m.shift {
         // The arrow is printed on Shift keys everywhere.
-        caps.push(cap(
-            Some(IconName::ArrowBigUp),
-            if symbols { "" } else { s.key_shift },
-        ));
+        caps.push(Cap {
+            held: held.shift,
+            ..cap(
+                Some(IconName::ArrowBigUp),
+                if symbols { "" } else { s.key_shift },
+            )
+        });
     }
     if m.platform {
-        caps.push(pick(IconName::Command, "Win"));
+        caps.push(pick(IconName::Command, "Win", held.platform));
     }
     let key = keystroke.key.as_str();
     caps.push(match key {
@@ -185,6 +193,7 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
             icon: None,
             label: s.key_space.into(),
             wide: true,
+            held: false,
         },
         // `k`, `f1`: as printed. `enter`, `tab`: capitalized.
         _ if key.chars().count() <= 3 => cap(None, &key.to_uppercase()),
@@ -249,6 +258,10 @@ pub struct OnboardingView {
     /// Focused while the finish step's shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
+    /// The modifiers held down, lit on the finish screen's keycaps.
+    held: Modifiers,
+    /// The window title last set; it follows the step.
+    title: &'static str,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -271,12 +284,19 @@ impl OnboardingView {
             .inspect_err(|error| tracing::warn!(%error, "could not list the roots"))
             .ok();
         let subscriptions = vec![
-            cx.observe_in(&live, window, |this, live, window, cx| {
-                window.set_window_title(live.read(cx).lang.strings().welcome);
+            cx.observe_in(&live, window, |this, _, window, cx| {
                 this.sync_appearance(window, cx);
             }),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
+            }),
+            // The key-ups go to whichever window is active by then (search,
+            // after the hotkey): unlight them all.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.held = Modifiers::default();
+                    cx.notify();
+                }
             }),
         ];
         let hotkey_presses = live.read(cx).hotkey_presses;
@@ -298,6 +318,8 @@ impl OnboardingView {
             focus: cx.focus_handle(),
             recorder: cx.focus_handle(),
             recording: false,
+            held: Modifiers::default(),
+            title: "",
             _subscriptions: subscriptions,
         };
         window.focus(&view.focus, cx);
@@ -866,8 +888,9 @@ impl OnboardingView {
                         |el, t| el.size(px(44. + 8. * t)).opacity(t),
                     ),
             );
+        let recording = self.recording;
         let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
-            .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS))
+            .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS, &self.held))
             .unwrap_or_default();
         let plus = !magi_core::platform::SYMBOL_MODIFIERS;
         let keys =
@@ -878,10 +901,17 @@ impl OnboardingView {
                 .children(caps.into_iter().enumerate().flat_map(|(ix, c)| {
                     let sep = (plus && ix > 0)
                         .then(|| div().text_color(p.mute).child("+").into_any_element());
-                    sep.into_iter().chain([keycap(c, p).into_any_element()])
+                    sep.into_iter()
+                        .chain([keycap(c, recording, p).into_any_element()])
                 }));
         let tried = self.hotkey_tried(cx);
-        let try_it = if tried {
+        let try_it = if recording {
+            // In the try-it line's place, so the card keeps its height.
+            note(p)
+                .mt_0()
+                .child(s.shortcut_recording)
+                .into_any_element()
+        } else if tried {
             theme::fade_in(
                 div()
                     .flex()
@@ -907,15 +937,13 @@ impl OnboardingView {
                 .child(format!("{}. {}", s.shortcut_taken, s.shortcut_taken_note))
                 .into_any_element()
         } else {
-            // The one thing to do on this screen: an invitation, in the accent.
+            // A hint, not a link: the keys themselves answer it.
             div()
                 .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(p.accent)
+                .text_color(p.mute)
                 .child(s.ob_try_it)
                 .into_any_element()
         };
-        let recording = self.recording;
         let shortcut = card(p)
             .w_full()
             .flex_col()
@@ -932,15 +960,10 @@ impl OnboardingView {
                 ))
             })
             .child(div().text_color(p.mute).child(s.ob_try_hotkey))
-            .child(if recording {
-                note(p)
-                    .mt_0()
-                    .child(s.shortcut_recording)
-                    .into_any_element()
-            } else {
-                keys.into_any_element()
-            })
-            .children((!recording).then_some(try_it))
+            .child(keys)
+            // One height for every line in this slot, so swapping them
+            // moves nothing.
+            .child(div().min_h(px(20.)).flex().items_center().child(try_it))
             .child(
                 // Outlined: it is a control, so it looks like one.
                 Button::new("change-hotkey")
@@ -954,29 +977,42 @@ impl OnboardingView {
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_recording(window, cx))),
             );
-        let sentence = match ready {
-            Readiness::Ready => s.ob_ready.to_string(),
-            Readiness::Preparing(Some(feature)) => s
-                .ob_preparing_feature
-                .replace("{name}", s.feature(feature).name),
-            Readiness::Preparing(None) => s.ob_preparing.to_string(),
-        };
-        let state_icon = match ready {
-            Readiness::Ready => Icon::new(IconName::Check)
-                .size(px(14.))
-                .text_color(p.ok)
-                .into_any_element(),
-            Readiness::Preparing(_) => p.dot(Tone::Busy).into_any_element(),
-        };
-        // A thin bar while preparing; it has no numbers next to it.
-        let bar = (ready != Readiness::Ready).then(|| {
+        // Only while preparing: once ready, the intro already says so. A
+        // thin bar under it, with no numbers.
+        let preparing = match ready {
+            Readiness::Ready => None,
+            Readiness::Preparing(feature) => Some(feature),
+        }
+        .map(|feature| {
+            let sentence = match feature {
+                Some(feature) => s
+                    .ob_preparing_feature
+                    .replace("{name}", s.feature(feature).name),
+                None => s.ob_preparing.to_string(),
+            };
             let bar = Progress::new("preparing").color(p.accent);
             div()
-                .w(px(260.))
-                .child(match live.status.as_ref().and_then(progress) {
-                    Some(value) => bar.value(value),
-                    None => bar.loading(true),
-                })
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .child(p.dot(Tone::Busy))
+                        .child(sentence),
+                )
+                .child(
+                    div()
+                        .w(px(260.))
+                        .child(match live.status.as_ref().and_then(progress) {
+                            Some(value) => bar.value(value),
+                            None => bar.loading(true),
+                        }),
+                )
         });
         let failed = live
             .features
@@ -1005,22 +1041,15 @@ impl OnboardingView {
                     .flex_col()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .child(state_icon)
-                            .child(sentence),
-                    )
-                    .children(bar)
+                    .children(preparing)
                     .children(failed)
                     .child(
+                        // A quiet way out: muted, full ink on hover.
                         Button::new("open-settings")
                             .cursor_pointer()
-                            .link()
+                            .text()
                             .small()
+                            .text_color(p.mute)
                             .label(s.open_settings)
                             .on_click(cx.listener(|this, _, window, _| {
                                 this.leave(Some(AppEvent::Settings), window)
@@ -1030,9 +1059,22 @@ impl OnboardingView {
     }
 }
 
-/// A key drawn as a keycap: a deeper bottom edge, like a real key.
-fn keycap(cap: Cap, p: &Palette) -> Div {
-    div()
+/// A key drawn as a keycap: a deeper bottom edge, like a real key, its
+/// face lighter than the card in dark mode (raised reads lighter there).
+/// Held, it sinks 2px and takes the accent, instantly: it is the user's own
+/// keypress. While recording, an empty dashed outline of the same size.
+fn keycap(cap: Cap, recording: bool, p: &Palette) -> Div {
+    let face: Hsla = if p.dark {
+        rgb(0x3a3a3a).into()
+    } else {
+        p.solid
+    };
+    let edge: Hsla = if p.dark {
+        rgb(0x151515).into()
+    } else {
+        p.mute.opacity(0.45)
+    };
+    let key = div()
         .flex()
         .items_center()
         .justify_center()
@@ -1040,22 +1082,42 @@ fn keycap(cap: Cap, p: &Palette) -> Div {
         .h(px(42.))
         .min_w(px(42.))
         .px_3()
-        .when(cap.wide, |d| d.w(px(150.)))
+        .when(cap.wide, |d| d.w(px(110.)))
         .rounded(px(8.))
         .border_1()
-        .border_b(px(3.))
-        .border_color(p.mute.opacity(0.45))
-        .bg(p.solid)
         .text_size(px(16.))
         .font_weight(FontWeight::MEDIUM)
         .children(cap.icon.map(|i| Icon::new(i).size(px(17.))))
-        .when(!cap.label.is_empty(), |d| d.child(cap.label))
+        .when(!cap.label.is_empty(), |d| d.child(cap.label));
+    // In a fixed slot, so a sinking key moves nothing around it.
+    let slot = div().h(px(47.)).flex().items_end();
+    slot.child(if recording {
+        key.mb(px(2.))
+            .border_dashed()
+            .border_color(p.mute.opacity(0.6))
+            .text_color(transparent_black())
+    } else if cap.held {
+        key.border_b(px(3.))
+            .border_color(p.accent)
+            .bg(p.accent.opacity(0.14))
+            .text_color(p.accent)
+    } else {
+        key.mb(px(2.)).border_b(px(3.)).border_color(edge).bg(face)
+    })
 }
 
 impl Render for OnboardingView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
+        let title = match self.step {
+            Step::Setup => s.welcome,
+            Step::Indexing => s.ob_done,
+        };
+        if self.title != title {
+            window.set_window_title(title);
+            self.title = title;
+        }
         let body = match self.step {
             Step::Setup => self.setup(s, &p, cx),
             Step::Indexing => self.indexing(s, &p, cx),
@@ -1097,6 +1159,10 @@ impl Render for OnboardingView {
                     this.next(window, cx);
                 }
             }))
+            .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| {
+                this.held = e.modifiers;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 if this.recording {
                     this.toggle_recording(window, cx);
@@ -1121,6 +1187,11 @@ impl Render for OnboardingView {
                     .px(px(32.))
                     .pt(px(32.))
                     .pb(px(16.))
+                    // The finish screen is short: centered in the space,
+                    // not stacked at the top.
+                    .flex()
+                    .flex_col()
+                    .when(self.step == Step::Indexing, |d| d.justify_center())
                     .child(slide_in(body, self.step, self.forward))
                     .children(self.error.as_ref().map(|error| {
                         note(&p)
@@ -1147,6 +1218,17 @@ impl Render for OnboardingView {
                         };
                         bar.children(hint.map(|h| note(&p).mt_0().child(h)))
                     })
+                    // Back across from the way forward, where wizards keep it.
+                    .when(self.step == Step::Indexing, |bar| {
+                        bar.child(
+                            Button::new("back")
+                                .cursor_pointer()
+                                .ghost()
+                                .icon(IconName::ArrowLeft)
+                                .label(s.back)
+                                .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
+                        )
+                    })
                     .child(div().flex_1())
                     .child(
                         Button::new("next")
@@ -1158,20 +1240,6 @@ impl Render for OnboardingView {
                             .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                     ),
             )
-            // Last, so it sits above the scroll area.
-            .when(self.step == Step::Indexing, |root| {
-                root.child(
-                    div().absolute().top(px(12.)).left(px(12.)).child(
-                        Button::new("back")
-                            .cursor_pointer()
-                            .ghost()
-                            .small()
-                            .icon(IconName::ArrowLeft)
-                            .label(s.back)
-                            .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
-                    ),
-                )
-            })
     }
 }
 
@@ -1299,7 +1367,7 @@ mod tests {
         suggestions,
     };
     use crate::i18n::Lang;
-    use gpui_kit::Keystroke;
+    use gpui_kit::{Keystroke, Modifiers};
     use magi_core::dto::{DownloadError, FeatureStatus, IndexState, IndexStatus, Install};
     use magi_core::features::Feature;
 
@@ -1476,7 +1544,7 @@ mod tests {
     fn a_shortcut_becomes_keycaps_the_platform_way() {
         let caps = |key: &str, symbols: bool| {
             let k = Keystroke::parse(key).unwrap();
-            key_caps(&k, Lang::En.strings(), symbols)
+            key_caps(&k, Lang::En.strings(), symbols, &Modifiers::default())
                 .into_iter()
                 .map(|c| (c.label, c.icon.is_some(), c.wide))
                 .collect::<Vec<_>>()
@@ -1506,10 +1574,34 @@ mod tests {
         );
         // Spanish says Espacio; Shift stays Shift (eadfe73).
         let k = Keystroke::parse("ctrl-shift-space").unwrap();
-        let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false)
+        let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false, &Modifiers::default())
             .into_iter()
             .map(|c| c.label)
             .collect();
         assert_eq!(es, ["Ctrl", "Shift", "Espacio"]);
+    }
+
+    #[test]
+    fn the_modifiers_held_down_light_their_keycaps() {
+        let k = Keystroke::parse("ctrl-shift-space").unwrap();
+        let lit = |held: Modifiers| {
+            key_caps(&k, Lang::En.strings(), false, &held)
+                .into_iter()
+                .map(|c| c.held)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lit(Modifiers::default()), [false, false, false]);
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(lit(ctrl), [true, false, false]);
+        // A held modifier the shortcut does not use lights nothing.
+        let alt_shift = Modifiers {
+            alt: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(lit(alt_shift), [false, true, false]);
     }
 }
