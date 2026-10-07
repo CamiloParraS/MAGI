@@ -828,6 +828,7 @@ impl SettingsView {
                     .child(div().flex_1().child(subheading(s.searched_folders, p)))
                     .child(
                         Button::new("add-folder")
+                            .cursor_pointer()
                             .primary()
                             .small()
                             .icon(IconName::Plus)
@@ -870,12 +871,15 @@ impl SettingsView {
                     .children(self.problem(Field::Root(id), s, p)),
             )
             // A changed status fades in, so the change is seen.
-            .child(theme::fade_in(
-                p.status(badge, tone),
-                SharedString::from(format!("root-status-{id}-{badge}")),
-            ))
+            .children(badge.map(|badge| {
+                theme::fade_in(
+                    p.status(badge, tone),
+                    SharedString::from(format!("root-status-{id}-{badge}")),
+                )
+            }))
             .child(
                 Switch::new(("root-enabled", id as u64))
+                    .cursor_pointer()
                     .checked(root.enabled)
                     .color(p.accent)
                     .accessibility_label(root.path.clone())
@@ -889,6 +893,7 @@ impl SettingsView {
             )
             .child(
                 Button::new(("remove-root", id as u64))
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .icon(IconName::Trash)
@@ -909,6 +914,7 @@ impl SettingsView {
         let kinds = FILE_TYPES.into_iter().map(|kind| {
             let on = types.contains(&kind);
             let checkbox = Checkbox::new(("kind", kind as usize))
+                .cursor_pointer()
                 .label(kind_label(kind, s))
                 .checked(on)
                 .on_click(cx.listener(move |this, &on: &bool, window, cx| {
@@ -987,6 +993,7 @@ impl SettingsView {
                     s.pause_on_battery,
                     Some(s.pause_on_battery_note),
                     Switch::new("battery")
+                        .cursor_pointer()
                         .checked(battery)
                         .color(p.accent)
                         .accessibility_label(s.pause_on_battery)
@@ -1013,6 +1020,7 @@ impl SettingsView {
                     .child(
                         div().flex().justify_end().child(
                             Button::new("save-excludes")
+                                .when(excludes_edited, |b| b.cursor_pointer())
                                 .primary()
                                 .label(s.save)
                                 .disabled(!excludes_edited)
@@ -1094,17 +1102,20 @@ impl SettingsView {
         let button = match action {
             FeatureAction::TurnOn => Some(
                 Button::new(("turn-on", feature as usize))
+                    .cursor_pointer()
                     .primary()
                     .small()
                     .label(s.turn_on.replace("{size}", &lang.size(f.download_size))),
             ),
             FeatureAction::Retry => Some(
                 Button::new(("retry", feature as usize))
+                    .cursor_pointer()
                     .small()
                     .label(s.try_again),
             ),
             FeatureAction::Remove => Some(
                 Button::new(("remove", feature as usize))
+                    .cursor_pointer()
                     .danger()
                     .small()
                     .label(s.remove_download),
@@ -1127,6 +1138,7 @@ impl SettingsView {
         // is wanted (a cancelled download), hidden before.
         let switch = (action != FeatureAction::TurnOn || f.enabled).then(|| {
             Switch::new(("feature", feature as usize))
+                .cursor_pointer()
                 .checked(f.enabled)
                 .color(p.accent)
                 .accessibility_label(text.name)
@@ -1202,6 +1214,7 @@ impl SettingsView {
                     .children((!recording).then(|| kbd(&self.ui.hotkey)).flatten())
                     .child(
                         Button::new("change-hotkey")
+                            .cursor_pointer()
                             .label(if recording {
                                 s.cancel
                             } else {
@@ -1225,6 +1238,7 @@ impl SettingsView {
                     s.launch_at_login,
                     Some(s.launch_at_login_note),
                     Switch::new("launch-at-login")
+                        .cursor_pointer()
                         .checked(self.ui.launch_at_login)
                         .color(p.accent)
                         .accessibility_label(s.launch_at_login)
@@ -1248,6 +1262,7 @@ impl SettingsView {
                     None,
                     div().w(px(260.)).child(
                         Select::new(&self.language)
+                            .cursor_pointer()
                             .bg(p.solid)
                             .accessibility_label(s.language),
                     ),
@@ -1263,6 +1278,7 @@ impl SettingsView {
                     Some(s.results_shown_note),
                     div().w(px(120.)).child(
                         Select::new(&self.results)
+                            .cursor_pointer()
                             .bg(p.solid)
                             .accessibility_label(s.results_shown),
                     ),
@@ -1276,11 +1292,12 @@ impl SettingsView {
                     None,
                     s.quit_app,
                     Some(s.quit_app_note),
-                    Button::new("quit").label(s.tray_quit).on_click(cx.listener(
-                        |this, _, _, _| {
+                    Button::new("quit")
+                        .cursor_pointer()
+                        .label(s.tray_quit)
+                        .on_click(cx.listener(|this, _, _, _| {
                             let _ = this.events.try_send(AppEvent::Quit);
-                        },
-                    )),
+                        })),
                     s,
                     p,
                 ),
@@ -1299,6 +1316,7 @@ impl SettingsView {
                     None,
                     div().w(px(260.)).child(
                         Select::new(&self.theme_choice)
+                            .cursor_pointer()
                             .bg(p.solid)
                             .accessibility_label(s.theme),
                     ),
@@ -1314,6 +1332,7 @@ impl SettingsView {
                     None,
                     div().w(px(260.)).child(
                         Select::new(&self.background)
+                            .cursor_pointer()
                             .bg(p.solid)
                             .accessibility_label(s.window_background),
                     ),
@@ -1349,7 +1368,11 @@ impl SettingsView {
                                 } else {
                                     transparent_black()
                                 })
-                                .child(Slider::new(&self.see_through).disabled(!adjustable)),
+                                .child(
+                                    Slider::new(&self.see_through)
+                                        .when(adjustable, |s| s.cursor_pointer())
+                                        .disabled(!adjustable),
+                                ),
                         )
                         .child(s.more_transparent),
                     s,
@@ -1436,6 +1459,7 @@ impl SettingsView {
                 d.child(
                     div().mt(px(8.)).child(
                         Button::new("retry-all")
+                            .cursor_pointer()
                             .small()
                             .icon(IconName::RefreshCw)
                             .label(s.retry_all)
@@ -1467,6 +1491,7 @@ impl SettingsView {
                     ))
                     .child(
                         Button::new("clear-index")
+                            .cursor_pointer()
                             .danger()
                             .small()
                             .label(s.clear_index_button)
@@ -1506,6 +1531,7 @@ impl Render for SettingsView {
                 let selected = section == self.section;
                 // A button, so Tab and Enter reach every section.
                 Button::new(("section", ix))
+                    .cursor_pointer()
                     .ghost()
                     .selected(selected)
                     .w_full()
@@ -1609,7 +1635,8 @@ pub(crate) fn stack() -> Div {
 }
 
 /// A settings box, as in the variant A mockup. Fields inside it take
-/// `p.solid` so they stand out from the box.
+/// `p.solid` so they stand out from the box. In light mode a white box on a
+/// near-white window needs a faint shadow to read as a layer.
 pub(crate) fn card(p: &Palette) -> Div {
     div()
         .flex()
@@ -1621,6 +1648,7 @@ pub(crate) fn card(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
 }
 
 /// A setting's second line.

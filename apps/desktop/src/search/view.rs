@@ -19,10 +19,11 @@ use magi_core::features::Feature;
 use magi_core::host::Host;
 
 use super::highlight;
-use super::hint::{Hint, hint};
+use super::hint::{Hint, hint, teach_shortcut};
 use super::state::{Query, SearchState};
 use crate::app::{AppEvent, Events};
 use crate::i18n::Lang;
+use crate::settings::hotkey_keystroke;
 use crate::theme::{self, Backdrop, Palette};
 use crate::tray::{status_line, status_tone};
 
@@ -59,6 +60,8 @@ pub struct Live {
     /// ponytail: hints closed this session only; persist in config if a
     /// hint that returns after a restart annoys anyone.
     pub dismissed: Vec<Feature>,
+    /// The shortcut line was closed (this session, as the hints).
+    pub shortcut_dismissed: bool,
     /// Hotkey presses this run; onboarding confirms one it sees.
     pub hotkey_presses: u32,
     /// A shortcut that could not be registered (another app or the OS has
@@ -78,12 +81,20 @@ impl Live {
             status: None,
             features: Vec::new(),
             dismissed: Vec::new(),
+            shortcut_dismissed: false,
             hotkey_presses: 0,
             hotkey_conflict: None,
             search_open: false,
             last_query: String::new(),
         }
     }
+}
+
+/// How a search window was opened.
+pub struct Opening {
+    pub at: Instant,
+    /// `ui.hotkey`, when it was opened some other way than by it.
+    pub teach: Option<String>,
 }
 
 pub struct SearchView {
@@ -108,6 +119,8 @@ pub struct SearchView {
     copied: Option<(i64, Task<()>)>,
     /// Copies so far; keys the row flash so each copy replays it.
     copies: u64,
+    /// `ui.hotkey`, when this window was opened some other way than by it.
+    teach: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -130,7 +143,7 @@ impl SearchView {
         live: Entity<Live>,
         events: Events,
         backdrop: Backdrop,
-        opened_at: Instant,
+        opening: Opening,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -160,12 +173,13 @@ impl SearchView {
             focus: cx.focus_handle(),
             backdrop,
             dark: false,
-            opened_at: Some(opened_at),
+            opened_at: Some(opening.at),
             pending: None,
             slow: false,
             slow_timer: None,
             copied: None,
             copies: 0,
+            teach: opening.teach,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -359,6 +373,53 @@ impl SearchView {
         });
     }
 
+    /// The shortcut, under the input, so next time search is one keypress
+    /// away (see [`teach_shortcut`]).
+    fn shortcut_hint(&self, p: &Palette, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        let live = self.live.read(cx);
+        let s = live.lang.strings();
+        let show = teach_shortcut(
+            self.teach.is_none(),
+            live.shortcut_dismissed,
+            live.hotkey_conflict.is_some(),
+        );
+        let keystroke = self
+            .teach
+            .as_ref()
+            .filter(|_| show)
+            .and_then(|hotkey| Keystroke::parse(&hotkey_keystroke(hotkey)).ok())?;
+        let hint = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .mx(px(12.))
+            .mb(px(10.))
+            .pl(px(12.))
+            .pr(px(6.))
+            .py(px(6.))
+            .rounded(px(6.))
+            .bg(p.selection)
+            .text_sm()
+            .child(s.teach_shortcut)
+            .child(Kbd::new(keystroke))
+            .child(div().flex_1())
+            .child(
+                Button::new("dismiss-shortcut")
+                    .cursor_pointer()
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .tooltip(s.dismiss)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.live.update(cx, |live, cx| {
+                            live.shortcut_dismissed = true;
+                            cx.notify();
+                        });
+                    })),
+            );
+        Some(theme::fade_in(hint, "shortcut-hint"))
+    }
+
     fn body(&self, p: &Palette, cx: &Context<Self>) -> Option<AnyElement> {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
@@ -382,6 +443,7 @@ impl SearchView {
                     .child(s.search_failed)
                     .child(
                         Button::new("retry")
+                            .cursor_pointer()
                             .label(s.try_again)
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
@@ -528,6 +590,7 @@ impl SearchView {
                 let off = s.feature_off.replace("{name}", text.name);
                 let name_at = s.feature_off.find("{name}");
                 let button = Button::new("turn-on")
+                    .cursor_pointer()
                     .primary()
                     .small()
                     .label(s.turn_on.replace("{size}", &lang.size(size)))
@@ -576,6 +639,7 @@ impl SearchView {
             .children(action)
             .child(
                 Button::new("dismiss")
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .icon(IconName::Close)
@@ -628,6 +692,7 @@ impl SearchView {
             .border_color(p.line)
             .child(
                 Button::new("settings")
+                    .cursor_pointer()
                     .ghost()
                     .xsmall()
                     .icon(IconName::Settings)
@@ -706,6 +771,7 @@ impl Render for SearchView {
                             // fixed at 20 px, so bigger text clips descenders.
                             .child(Input::new(&self.input).appearance(false).large()),
                     )
+                    .children(self.shortcut_hint(&p, cx))
                     .when(self.dimmed(), |d| {
                         d.child(
                             div().h(px(2.)).bg(p.accent).with_animation(
@@ -794,6 +860,8 @@ fn row(
     };
     div()
         .id(ix)
+        // A result opens like a link: the hand, as on every clickable thing.
+        .cursor_pointer()
         .relative()
         .flex()
         .items_center()

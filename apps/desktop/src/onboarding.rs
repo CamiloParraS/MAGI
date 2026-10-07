@@ -1,33 +1,33 @@
-//! First-run onboarding (FR-10): folders, with each one's status as the
-//! permission check → search features, with consent to download → start with
-//! the computer → the first index's progress. Each step saves the next one to
-//! `ui.onboarding` when it completes; a plain launch opens onboarding until
-//! the background step saves `done`, and it resumes at the saved step.
-//! Closing it at any step leaves the app running.
+//! First-run onboarding (FR-10) in two screens. Setup: folders, with each
+//! one's status as the permission check; search features, with consent to
+//! download; start with the computer. Confirming applies all three and saves
+//! `done` to `ui.onboarding`; then the first index's progress. A plain launch
+//! opens onboarding until then. Closing it leaves the app running.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::config::{Onboarding, UiConfig};
+use magi_core::config::{FeaturesConfig, Onboarding, UiConfig};
 use magi_core::dto::{ErrorCode, FeatureStatus, IndexState, IndexStatus, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::app::{AppEvent, Events};
 use crate::i18n::Strings;
 use crate::search::view::{Live, turn_on};
-use crate::settings::view::{card, heading, note, pick_folder, stack};
+use crate::settings::view::{card, heading, note, pick_folder};
 use crate::settings::{error_text, hotkey_keystroke, root_state};
 use crate::theme::{self, Palette, Tone};
 
-pub const SIZE: Size<Pixels> = size(px(640.), px(560.));
+pub const SIZE: Size<Pixels> = size(px(880.), px(600.));
 
 actions!(magi_onboarding, [Next, Back]);
 
@@ -44,61 +44,18 @@ pub fn bind_keys(cx: &mut App) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    Folders,
-    Features,
-    Background,
+    Setup,
     Indexing,
 }
 
-/// The saved resume point; `Done` only shows if a window was already open.
+/// The saved resume point. `folders`, `features` and `background` were the
+/// earlier flow's screens: all of them are on the setup screen now. `Done`
+/// only shows if a window was already open.
 impl From<Onboarding> for Step {
     fn from(saved: Onboarding) -> Self {
         match saved {
-            Onboarding::Folders => Self::Folders,
-            Onboarding::Features => Self::Features,
-            Onboarding::Background => Self::Background,
             Onboarding::Done => Self::Indexing,
-        }
-    }
-}
-
-const STEPS: [Step; 4] = [
-    Step::Folders,
-    Step::Features,
-    Step::Background,
-    Step::Indexing,
-];
-
-impl Step {
-    fn index(self) -> usize {
-        STEPS.iter().position(|&s| s == self).unwrap_or_default()
-    }
-
-    fn title(self, s: &Strings) -> &'static str {
-        match self {
-            Self::Folders => s.ob_folders,
-            Self::Features => s.ob_features,
-            Self::Background => s.ob_background,
-            Self::Indexing => s.ob_done,
-        }
-    }
-
-    fn intro(self, s: &Strings) -> Option<&'static str> {
-        match self {
-            Self::Folders => Some(s.ob_folders_note),
-            Self::Features => Some(s.ob_features_note),
-            Self::Background => Some(s.ob_background_note),
-            // Depends on how far the files are: `indexing` says it.
-            Self::Indexing => None,
-        }
-    }
-
-    /// Indexing has started on the last step: nothing to go back to.
-    fn back(self) -> Option<Self> {
-        match self {
-            Self::Features => Some(Self::Folders),
-            Self::Background => Some(Self::Features),
-            Self::Folders | Self::Indexing => None,
+            Onboarding::Folders | Onboarding::Features | Onboarding::Background => Self::Setup,
         }
     }
 }
@@ -111,6 +68,22 @@ pub fn preselected(features: &[FeatureStatus]) -> Vec<Feature> {
         .filter(|f| f.enabled)
         .map(|f| f.feature)
         .collect()
+}
+
+/// The user's folders still worth offering: not chosen, and not inside a
+/// chosen folder (already searched).
+pub fn suggestions(user: &[PathBuf], roots: &[RootStatus]) -> Vec<PathBuf> {
+    user.iter()
+        .filter(|dir| !roots.iter().any(|root| dir.starts_with(&root.path)))
+        .cloned()
+        .collect()
+}
+
+/// A folder's name, or the whole path for a drive's root.
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Not on disk and not on its way.
@@ -170,19 +143,24 @@ pub struct Cap {
     pub label: String,
     /// The space bar.
     pub wide: bool,
+    /// Held down right now.
+    pub held: bool,
 }
 
-/// `keystroke` as keycaps, modifiers first in the platform's order;
-/// `symbols` is [`magi_core::platform::SYMBOL_MODIFIERS`].
-pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
+/// `keystroke` as keycaps, modifiers first in the platform's order, those
+/// in `held` lit; `symbols` is [`magi_core::platform::SYMBOL_MODIFIERS`].
+/// The last key never lights: the registered hotkey swallows it.
+pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool, held: &Modifiers) -> Vec<Cap> {
     let cap = |icon, label: &str| Cap {
         icon,
         label: label.into(),
         wide: false,
+        held: false,
     };
     // Each modifier: its symbol on macOS, its name elsewhere.
-    let pick = |symbol, name| {
-        if symbols {
+    let pick = |symbol, name, down| Cap {
+        held: down,
+        ..if symbols {
             cap(Some(symbol), "")
         } else {
             cap(None, name)
@@ -191,20 +169,23 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
     let m = &keystroke.modifiers;
     let mut caps = Vec::new();
     if m.control {
-        caps.push(pick(IconName::ChevronUp, "Ctrl"));
+        caps.push(pick(IconName::ChevronUp, "Ctrl", held.control));
     }
     if m.alt {
-        caps.push(pick(IconName::Option, "Alt"));
+        caps.push(pick(IconName::Option, "Alt", held.alt));
     }
     if m.shift {
         // The arrow is printed on Shift keys everywhere.
-        caps.push(cap(
-            Some(IconName::ArrowBigUp),
-            if symbols { "" } else { s.key_shift },
-        ));
+        caps.push(Cap {
+            held: held.shift,
+            ..cap(
+                Some(IconName::ArrowBigUp),
+                if symbols { "" } else { s.key_shift },
+            )
+        });
     }
     if m.platform {
-        caps.push(pick(IconName::Command, "Win"));
+        caps.push(pick(IconName::Command, "Win", held.platform));
     }
     let key = keystroke.key.as_str();
     caps.push(match key {
@@ -212,6 +193,7 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
             icon: None,
             label: s.key_space.into(),
             wide: true,
+            held: false,
         },
         // `k`, `f1`: as printed. `enter`, `tab`: capitalized.
         _ if key.chars().count() <= 3 => cap(None, &key.to_uppercase()),
@@ -225,6 +207,24 @@ pub fn key_caps(keystroke: &Keystroke, s: &Strings, symbols: bool) -> Vec<Cap> {
         }
     });
     caps
+}
+
+/// `keystroke` as one line of text, where keycaps cannot be drawn (the
+/// tray's tooltip): names joined by `+`, or macOS's symbols run together.
+pub fn shortcut_text(keystroke: &Keystroke, s: &Strings, symbols: bool) -> String {
+    let label = |c: Cap| match c.icon {
+        _ if !c.label.is_empty() => c.label,
+        Some(IconName::ChevronUp) => "⌃".into(),
+        Some(IconName::Option) => "⌥".into(),
+        Some(IconName::ArrowBigUp) => "⇧".into(),
+        Some(IconName::Command) => "⌘".into(),
+        _ => String::new(),
+    };
+    key_caps(keystroke, s, symbols, &Modifiers::default())
+        .into_iter()
+        .map(label)
+        .collect::<Vec<_>>()
+        .join(if symbols { "" } else { "+" })
 }
 
 pub fn progress(st: &IndexStatus) -> Option<f32> {
@@ -255,6 +255,8 @@ pub struct OnboardingView {
     chosen: Option<Vec<Feature>>,
     /// "Start with your computer", checked by default (ADR-0010).
     launch_at_login: bool,
+    /// Documents, Desktop and Pictures, offered with one click.
+    user_folders: Vec<PathBuf>,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
     /// `ui.hotkey`, shown on the background step.
@@ -264,7 +266,8 @@ pub struct OnboardingView {
     /// The last change that failed, until the next one.
     error: Option<ErrorCode>,
     dark: bool,
-    /// Which way the last step change went; the new step slides in from it.
+    /// Which way the last screen change went; the new screen slides in
+    /// from that side.
     forward: bool,
     /// `hotkey_presses` when the window opened: a press after it is the
     /// user trying the hotkey.
@@ -273,6 +276,10 @@ pub struct OnboardingView {
     /// Focused while the finish step's shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
+    /// The modifiers held down, lit on the finish screen's keycaps.
+    held: Modifiers,
+    /// The window title last set; it follows the step.
+    title: &'static str,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -295,12 +302,19 @@ impl OnboardingView {
             .inspect_err(|error| tracing::warn!(%error, "could not list the roots"))
             .ok();
         let subscriptions = vec![
-            cx.observe_in(&live, window, |this, live, window, cx| {
-                window.set_window_title(live.read(cx).lang.strings().welcome);
+            cx.observe_in(&live, window, |this, _, window, cx| {
                 this.sync_appearance(window, cx);
             }),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
+            }),
+            // The key-ups go to whichever window is active by then (search,
+            // after the hotkey): unlight them all.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.held = Modifiers::default();
+                    cx.notify();
+                }
             }),
         ];
         let hotkey_presses = live.read(cx).hotkey_presses;
@@ -311,6 +325,7 @@ impl OnboardingView {
             step: ui.onboarding.into(),
             chosen: None,
             launch_at_login: true,
+            user_folders: magi_core::paths::user_folders(),
             opening_roots,
             hotkey: ui.hotkey,
             busy: false,
@@ -321,6 +336,8 @@ impl OnboardingView {
             focus: cx.focus_handle(),
             recorder: cx.focus_handle(),
             recording: false,
+            held: Modifiers::default(),
+            title: "",
             _subscriptions: subscriptions,
         };
         window.focus(&view.focus, cx);
@@ -365,31 +382,33 @@ impl OnboardingView {
         cx.notify();
     }
 
-    /// Folders needs one folder; features needs the features to show.
+    /// Setup needs one folder and the features to show.
     fn can_continue(&self, cx: &App) -> bool {
         !self.busy
             && match self.step {
-                Step::Folders => self.roots(cx).is_some_and(|roots| !roots.is_empty()),
-                Step::Features => !self.live.read(cx).features.is_empty(),
-                Step::Background | Step::Indexing => true,
+                Step::Setup => {
+                    self.roots(cx).is_some_and(|roots| !roots.is_empty())
+                        && !self.live.read(cx).features.is_empty()
+                }
+                Step::Indexing => true,
             }
     }
 
-    /// Applies the step's choices, then moves on; the last step opens search.
+    /// Setup applies the features and the login choice and finishes
+    /// onboarding in one go; the last screen opens search.
     pub fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_continue(cx) {
             return;
         }
         match self.step {
-            Step::Folders => self.apply(
-                Step::Features,
-                |host| save_step(host, json!({ "onboarding": Onboarding::Features })),
-                cx,
-            ),
-            Step::Features => {
+            Step::Setup => {
                 let changes = feature_changes(&self.live.read(cx).features, &self.chosen(cx));
+                let ui = json!({
+                    "launch_at_login": self.launch_at_login,
+                    "onboarding": Onboarding::Done,
+                });
                 self.apply(
-                    Step::Background,
+                    Step::Indexing,
                     move |host| {
                         for (feature, on) in changes {
                             if on {
@@ -398,17 +417,10 @@ impl OnboardingView {
                                 host.set_feature_enabled(feature, false)?;
                             }
                         }
-                        save_step(host, json!({ "onboarding": Onboarding::Background }))
+                        save_step(host, ui)
                     },
                     cx,
                 );
-            }
-            Step::Background => {
-                let ui = json!({
-                    "launch_at_login": self.launch_at_login,
-                    "onboarding": Onboarding::Done,
-                });
-                self.apply(Step::Indexing, move |host| save_step(host, ui), cx);
             }
             Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
         }
@@ -423,8 +435,16 @@ impl OnboardingView {
         }
     }
 
+    /// From the finish screen back to setup, to change a choice. Setup is
+    /// already applied; confirming it again applies only what changed.
+    pub fn back(&mut self, cx: &mut Context<Self>) {
+        if self.step == Step::Indexing && !self.busy && !self.recording {
+            self.go(Step::Setup, cx);
+        }
+    }
+
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
-        self.forward = step.index() > self.step.index();
+        self.forward = step == Step::Indexing;
         self.step = step;
         self.error = None;
         cx.notify();
@@ -505,172 +525,297 @@ impl OnboardingView {
         .detach();
     }
 
-    /// FR-10's permission check: each folder's status says whether Magi can
-    /// read it.
-    fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let rows = self.roots(cx).map(|roots| {
-            if roots.is_empty() {
-                return stack().child(card(p).text_color(p.mute).child(s.no_folders));
-            }
-            stack().children(roots.iter().map(|root| {
-                let (badge, tone, explain) = root_state(root, s);
-                let id = root.id;
-                let icon = match tone {
-                    Tone::Warn | Tone::Err => {
-                        Icon::new(IconName::TriangleAlert).text_color(p.tone(tone))
-                    }
-                    _ => Icon::new(IconName::Folder).text_color(p.mute),
-                };
-                card(p)
-                    .child(icon.size(px(16.)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis_middle()
-                                    .child(root.path.clone()),
-                            )
-                            .children(explain.map(|e| note(p).child(e))),
-                    )
-                    .child(p.status(badge, tone))
-                    // A rescan probes each root again: a fixed permission or
-                    // a reconnected drive clears the badge.
-                    .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
-                        row.child(
-                            Button::new(("retry-root", id as u64))
-                                .ghost()
-                                .small()
-                                .label(s.try_again)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_root(
-                                        |host| host.engine().map(|e| drop(e.rescan())),
-                                        cx,
-                                    );
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new(("remove-root", id as u64))
-                            .ghost()
-                            .small()
-                            .icon(IconName::Trash)
-                            .tooltip(s.remove)
-                            .accessibility_label(format!("{} {}", s.remove, root.path))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.run_root(move |host| host.engine()?.remove_root(id), cx);
-                            })),
-                    )
-            }))
-        });
-        let none_yet = self.roots(cx).is_none_or(|roots| roots.is_empty());
-        stack().children(rows).child(
-            div().mt(px(6.)).flex().child(
-                Button::new("add-folder")
-                    .when(none_yet, |b| b.primary())
-                    .small()
-                    .icon(IconName::Plus)
-                    .label(s.add_folder)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-            ),
-        )
+    /// Folders dropped from the file manager: the user picking them, as
+    /// with the picker. Dropped files are ignored.
+    fn drop_folders(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        let paths = paths.paths().to_vec();
+        self.run_root(
+            move |host| {
+                let engine = host.engine()?;
+                for path in paths.iter().filter(|p| p.is_dir()) {
+                    engine.add_root(path)?;
+                }
+                Ok(())
+            },
+            cx,
+        );
     }
 
-    /// The download consent (FR-10, ADR-0010): each feature's exact size, and
-    /// the total the chosen ones download.
-    fn features(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let live = self.live.read(cx);
-        let lang = live.lang;
-        let chosen = self.chosen(cx);
-        let rows = live.features.iter().map(|f| {
-            let feature = f.feature;
-            let text = s.feature(feature);
-            let size = match f.install {
-                Install::Installed { size_bytes } => {
-                    s.installed.replace("{size}", &lang.size(size_bytes))
-                }
-                _ => s
-                    .not_downloaded
-                    .replace("{size}", &lang.size(f.download_size)),
-            };
-            card(p).items_start().child(
+    /// FR-10's permission check: each folder's status says whether Magi can
+    /// read it. With none yet, a drop zone; folders can be dropped either way.
+    fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let accent = p.accent;
+        let roots = self.roots(cx).filter(|roots| !roots.is_empty());
+        let body = match roots {
+            None => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .py(px(22.))
+                .rounded(px(10.))
+                .border_1()
+                .border_dashed()
+                .border_color(p.mute.opacity(0.4))
+                .child(
+                    Icon::new(IconName::FolderPlus)
+                        .size(px(26.))
+                        .text_color(p.accent),
+                )
+                .child(div().text_color(p.mute).child(s.ob_drop_folders))
+                .child(
+                    Button::new("add-folder")
+                        .cursor_pointer()
+                        .primary()
+                        .xsmall()
+                        .label(s.add_folder)
+                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                ),
+            // The same grouped list as the features, Add folder its last row.
+            Some(roots) => group(p)
+                .children(roots.iter().enumerate().map(|(ix, root)| {
+                    div()
+                        .children((ix > 0).then(|| divider(p)))
+                        .child(self.root_row(root, s, p, cx))
+                }))
+                .child(divider(p))
+                // The whole row is the button: click and hover anywhere on it.
+                .child(
+                    // gpui-component centers a button's content; one child
+                    // that fills it keeps the icon and label at the left,
+                    // the icon in the column of the folder icons above.
+                    Button::new("add-folder")
+                        .cursor_pointer()
+                        .ghost()
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(Icon::new(IconName::Plus).size(px(18.)).text_color(p.accent))
+                                .child(s.add_folder),
+                        )
+                        .w_full()
+                        .h(px(40.))
+                        .px(px(12.))
+                        .rounded_none()
+                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                ),
+        };
+        let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
+        let chips = (!offered.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .children(offered.into_iter().enumerate().map(|(ix, dir)| {
+                    Button::new(("suggest-folder", ix))
+                        .cursor_pointer()
+                        .outline()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label(folder_name(&dir))
+                        .tooltip(dir.display().to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let dir = dir.clone();
+                            this.run_root(move |host| host.engine()?.add_root(&dir).map(drop), cx);
+                        }))
+                }))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                body.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style.border_color(accent).bg(accent.opacity(0.08))
+                })
+                .on_drop(
+                    cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)),
+                ),
+            )
+            .children(chips)
+    }
+
+    fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let (badge, tone, explain) = root_state(root, s);
+        let id = root.id;
+        let icon = match tone {
+            Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
+            _ => Icon::new(IconName::Folder).text_color(p.accent),
+        };
+        // Spaced as `row`: the folder's name, its parent under it, as file
+        // managers show folders.
+        let path = Path::new(&root.path);
+        let parent = path.parent().map(|parent| parent.display().to_string());
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(12.))
+            .py(px(6.))
+            .min_h(px(44.))
+            .child(icon.size(px(18.)).flex_none())
+            .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .child(
-                        Checkbox::new(("feature", feature as usize))
-                            .label(text.name)
-                            .checked(chosen.contains(&feature))
-                            .on_click(cx.listener(move |this, &on: &bool, _, cx| {
-                                this.toggle_feature(feature, on, cx)
-                            })),
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(folder_name(path)),
                     )
-                    .child(note(p).pl(px(24.)).child(text.pitch))
-                    .child(note(p).pl(px(24.)).child(size)),
+                    .children(parent.map(|parent| {
+                        note(p)
+                            .mt_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(parent)
+                    }))
+                    .children(explain.map(|e| note(p).child(e))),
             )
-        });
-        stack().children(rows)
-    }
-
-    /// Beside "Download and continue": the size is read as it is agreed to.
-    fn download_summary(&self, s: &Strings, cx: &App) -> String {
-        let live = self.live.read(cx);
-        let total = download_total(&live.features, &self.chosen(cx));
-        if total > 0 {
-            s.ob_download_total
-                .replace("{size}", &live.lang.size(total))
-        } else {
-            s.ob_nothing_to_download.into()
-        }
-    }
-
-    fn background(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let hotkey = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
-            .ok()
-            .map(Kbd::new);
-        stack()
+            .children(badge.map(|badge| p.status(badge, tone)))
+            // A rescan probes each root again: a fixed permission or
+            // a reconnected drive clears the badge.
+            .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
+                row.child(
+                    Button::new(("retry-root", id as u64))
+                        .cursor_pointer()
+                        .ghost()
+                        .small()
+                        .label(s.try_again)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.run_root(|host| host.engine().map(|e| drop(e.rescan())), cx);
+                        })),
+                )
+            })
             .child(
-                card(p).items_start().child(
-                    div()
-                        .flex_1()
-                        .child(
-                            Checkbox::new("start-at-login")
-                                .label(s.launch_at_login)
-                                .checked(self.launch_at_login)
-                                .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                                    this.launch_at_login = on;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(note(p).pl(px(24.)).child(s.launch_at_login_note)),
-                ),
+                // Minus, not a trash can: it only leaves Magi's list.
+                Button::new(("remove-root", id as u64))
+                    .cursor_pointer()
+                    .ghost()
+                    .small()
+                    .icon(IconName::Minus)
+                    .tooltip(s.remove)
+                    .accessibility_label(format!("{} {}", s.remove, root.path))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.run_root(move |host| host.engine()?.remove_root(id), cx);
+                    })),
             )
+    }
+
+    /// The download consent (FR-10, ADR-0010): each feature's exact size;
+    /// the button states the total. One grouped list, as in system
+    /// settings: a switch shows the choice, ⓘ says what a feature does.
+    fn features(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        let lang = live.lang;
+        let chosen = self.chosen(cx);
+        let defaults = FeaturesConfig::default();
+        let rows = live.features.iter().enumerate().map(|(ix, f)| {
+            let feature = f.feature;
+            let text = s.feature(feature);
+            let pitch = text.pitch;
+            // Downloaded: a green check in place of the size.
+            let size = match f.install {
+                Install::Installed { .. } => div()
+                    .id(("installed", ix))
+                    .flex_none()
+                    .aria_label(s.ob_installed)
+                    .child(Icon::new(IconName::Check).size(px(16.)).text_color(p.ok))
+                    .into_any_element(),
+                _ => note(p)
+                    .mt_0()
+                    .flex_none()
+                    .child(lang.size(f.download_size))
+                    .into_any_element(),
+            };
+            let sub = defaults.enabled(feature).then_some(s.ob_recommended);
+            let row = row(feature_icon(feature), text.name, sub, p)
+                .child(size)
+                .child(
+                    Popover::new(("feature-info", ix))
+                        .trigger(
+                            Button::new(("feature-info-button", ix))
+                                .cursor_pointer()
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Info)
+                                .accessibility_label(text.name),
+                        )
+                        .content(move |_, _, _| div().max_w(px(260.)).text_sm().child(pitch)),
+                )
+                .child(
+                    Switch::new(("feature", feature as usize))
+                        .cursor_pointer()
+                        .checked(chosen.contains(&feature))
+                        .color(p.accent)
+                        .accessibility_label(text.name)
+                        .on_click(cx.listener(move |this, &on: &bool, _, cx| {
+                            this.toggle_feature(feature, on, cx)
+                        })),
+                );
+            stagger_in(row, ix)
+        });
+        group(p).children(
+            rows.enumerate()
+                .map(|(ix, row)| div().children((ix > 0).then(|| divider(p))).child(row)),
+        )
+    }
+
+    /// "Start with your computer" (FR-10), on by default.
+    fn launch_row(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        group(p).child(
+            row(IconName::Power, s.launch_at_login, None, p).child(
+                Switch::new("start-at-login")
+                    .cursor_pointer()
+                    .checked(self.launch_at_login)
+                    .color(p.accent)
+                    .tooltip(s.launch_at_login_note)
+                    .accessibility_label(s.launch_at_login)
+                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                        this.launch_at_login = on;
+                        cx.notify();
+                    })),
+            ),
+        )
+    }
+
+    /// The one setup screen: the welcome over two columns, folders on the
+    /// left, features and startup on the right.
+    fn setup(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let column = || div().flex_1().min_w_0().flex().flex_col().gap(px(16.));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .child(heading(s.welcome).mb_0().text_center().text_size(px(28.)))
             .child(
                 div()
-                    .mt(px(8.))
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_color(p.mute)
-                    .child(s.ob_search_with)
-                    .children(hotkey),
+                    .items_start()
+                    .gap(px(24.))
+                    .child(column().child(section(
+                        s.ob_folders,
+                        s.ob_folders_note,
+                        self.folders(s, p, cx),
+                        p,
+                    )))
+                    .child(
+                        column()
+                            .child(section(
+                                s.ob_features,
+                                s.ob_features_note,
+                                self.features(s, p, cx),
+                                p,
+                            ))
+                            .child(self.launch_row(s, p, cx)),
+                    ),
             )
-            .children(self.hotkey_tried(cx).then(|| {
-                theme::fade_in(
-                    note(p)
-                        .mt(px(6.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_color(p.tone(Tone::Ok))
-                        .child(Icon::new(IconName::Check).size(px(14.)))
-                        .child(self.works(s, cx)),
-                    "hotkey-works",
-                )
-            }))
     }
 
     fn hotkey_tried(&self, cx: &App) -> bool {
@@ -728,9 +873,6 @@ impl OnboardingView {
         cx.notify();
     }
 
-    /// The finish line: setup is done, so it leads with the shortcut and
-    /// says how far along the files are in one plain sentence, no counts
-    /// (Settings › Index has those).
     /// The finish line, centered: setup is done, so a check, the title, the
     /// shortcut as keycaps, and one plain sentence on how far the files are,
     /// no counts (Settings › Index has those).
@@ -742,20 +884,31 @@ impl OnboardingView {
             Readiness::Ready => s.ob_done_note_ready,
             Readiness::Preparing(_) => s.ob_done_note,
         };
+        // Seen once, so it may arrive with a little life: it grows into its
+        // fixed 52px slot (nothing around it moves) as it fades in.
+        let accent = p.accent;
         let check = div()
             .size(px(52.))
-            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
-            .bg(p.accent.opacity(0.14))
             .child(
-                Icon::new(IconName::Check)
-                    .size(px(26.))
-                    .text_color(p.accent),
+                div()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(accent.opacity(0.14))
+                    .child(Icon::new(IconName::Check).size(px(26.)).text_color(accent))
+                    .with_animation(
+                        "done-check",
+                        Animation::new(CHECK_IN).with_easing(ease_out_quint()),
+                        |el, t| el.size(px(44. + 8. * t)).opacity(t),
+                    ),
             );
+        let recording = self.recording;
         let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
-            .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS))
+            .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS, &self.held))
             .unwrap_or_default();
         let plus = !magi_core::platform::SYMBOL_MODIFIERS;
         let keys =
@@ -766,10 +919,17 @@ impl OnboardingView {
                 .children(caps.into_iter().enumerate().flat_map(|(ix, c)| {
                     let sep = (plus && ix > 0)
                         .then(|| div().text_color(p.mute).child("+").into_any_element());
-                    sep.into_iter().chain([keycap(c, p).into_any_element()])
+                    sep.into_iter()
+                        .chain([keycap(c, recording, p).into_any_element()])
                 }));
         let tried = self.hotkey_tried(cx);
-        let try_it = if tried {
+        let try_it = if recording {
+            // In the try-it line's place, so the card keeps its height.
+            note(p)
+                .mt_0()
+                .child(s.shortcut_recording)
+                .into_any_element()
+        } else if tried {
             theme::fade_in(
                 div()
                     .flex()
@@ -782,16 +942,26 @@ impl OnboardingView {
                 "done-hotkey-works",
             )
             .into_any_element()
-        } else {
-            note(p).mt_0().child(s.ob_try_it).into_any_element()
-        };
-        let conflict = live.hotkey_conflict.is_some().then(|| {
-            note(p)
-                .mt_0()
+        } else if live.hotkey_conflict.is_some() {
+            // Taken: said right under the keys, with Change just below it;
+            // "Try it now" would be wrong.
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
                 .text_color(p.warn)
+                .child(Icon::new(IconName::TriangleAlert).size(px(14.)))
                 .child(format!("{}. {}", s.shortcut_taken, s.shortcut_taken_note))
-        });
-        let recording = self.recording;
+                .into_any_element()
+        } else {
+            // A hint, not a link: the keys themselves answer it.
+            div()
+                .text_sm()
+                .text_color(p.mute)
+                .child(s.ob_try_it)
+                .into_any_element()
+        };
         let shortcut = card(p)
             .w_full()
             .flex_col()
@@ -808,20 +978,16 @@ impl OnboardingView {
                 ))
             })
             .child(div().text_color(p.mute).child(s.ob_try_hotkey))
-            .child(if recording {
-                note(p)
-                    .mt_0()
-                    .child(s.shortcut_recording)
-                    .into_any_element()
-            } else {
-                keys.into_any_element()
-            })
-            .children((!recording).then_some(try_it))
-            .children(conflict)
+            .child(keys)
+            // One height for every line in this slot, so swapping them
+            // moves nothing.
+            .child(div().min_h(px(20.)).flex().items_center().child(try_it))
             .child(
+                // Outlined: it is a control, so it looks like one.
                 Button::new("change-hotkey")
+                    .cursor_pointer()
                     .small()
-                    .ghost()
+                    .outline()
                     .label(if recording {
                         s.cancel
                     } else {
@@ -829,29 +995,42 @@ impl OnboardingView {
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_recording(window, cx))),
             );
-        let sentence = match ready {
-            Readiness::Ready => s.ob_ready.to_string(),
-            Readiness::Preparing(Some(feature)) => s
-                .ob_preparing_feature
-                .replace("{name}", s.feature(feature).name),
-            Readiness::Preparing(None) => s.ob_preparing.to_string(),
-        };
-        let state_icon = match ready {
-            Readiness::Ready => Icon::new(IconName::Check)
-                .size(px(14.))
-                .text_color(p.ok)
-                .into_any_element(),
-            Readiness::Preparing(_) => p.dot(Tone::Busy).into_any_element(),
-        };
-        // A thin bar while preparing; it has no numbers next to it.
-        let bar = (ready != Readiness::Ready).then(|| {
+        // Only while preparing: once ready, the intro already says so. A
+        // thin bar under it, with no numbers.
+        let preparing = match ready {
+            Readiness::Ready => None,
+            Readiness::Preparing(feature) => Some(feature),
+        }
+        .map(|feature| {
+            let sentence = match feature {
+                Some(feature) => s
+                    .ob_preparing_feature
+                    .replace("{name}", s.feature(feature).name),
+                None => s.ob_preparing.to_string(),
+            };
             let bar = Progress::new("preparing").color(p.accent);
             div()
-                .w(px(260.))
-                .child(match live.status.as_ref().and_then(progress) {
-                    Some(value) => bar.value(value),
-                    None => bar.loading(true),
-                })
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .child(p.dot(Tone::Busy))
+                        .child(sentence),
+                )
+                .child(
+                    div()
+                        .w(px(260.))
+                        .child(match live.status.as_ref().and_then(progress) {
+                            Some(value) => bar.value(value),
+                            None => bar.loading(true),
+                        }),
+                )
         });
         let failed = live
             .features
@@ -880,24 +1059,40 @@ impl OnboardingView {
                     .flex_col()
                     .items_center()
                     .gap_2()
+                    .children(preparing)
+                    .children(failed)
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .child(state_icon)
-                            .child(sentence),
-                    )
-                    .children(bar)
-                    .children(failed),
+                        // A quiet way out: muted, full ink on hover.
+                        Button::new("open-settings")
+                            .cursor_pointer()
+                            .text()
+                            .small()
+                            .text_color(p.mute)
+                            .label(s.open_settings)
+                            .on_click(cx.listener(|this, _, window, _| {
+                                this.leave(Some(AppEvent::Settings), window)
+                            })),
+                    ),
             )
     }
 }
 
-/// A key drawn as a keycap: a deeper bottom edge, like a real key.
-fn keycap(cap: Cap, p: &Palette) -> Div {
-    div()
+/// A key drawn as a keycap: a deeper bottom edge, like a real key, its
+/// face lighter than the card in dark mode (raised reads lighter there).
+/// Held, it sinks 2px and takes the accent, instantly: it is the user's own
+/// keypress. While recording, an empty dashed outline of the same size.
+fn keycap(cap: Cap, recording: bool, p: &Palette) -> Div {
+    let face: Hsla = if p.dark {
+        rgb(0x3a3a3a).into()
+    } else {
+        p.solid
+    };
+    let edge: Hsla = if p.dark {
+        rgb(0x151515).into()
+    } else {
+        p.mute.opacity(0.45)
+    };
+    let key = div()
         .flex()
         .items_center()
         .justify_center()
@@ -905,62 +1100,102 @@ fn keycap(cap: Cap, p: &Palette) -> Div {
         .h(px(42.))
         .min_w(px(42.))
         .px_3()
-        .when(cap.wide, |d| d.w(px(150.)))
+        .when(cap.wide, |d| d.w(px(110.)))
         .rounded(px(8.))
         .border_1()
-        .border_b(px(3.))
-        .border_color(p.mute.opacity(0.45))
-        .bg(p.solid)
         .text_size(px(16.))
         .font_weight(FontWeight::MEDIUM)
         .children(cap.icon.map(|i| Icon::new(i).size(px(17.))))
-        .when(!cap.label.is_empty(), |d| d.child(cap.label))
+        .when(!cap.label.is_empty(), |d| d.child(cap.label));
+    // In a fixed slot, so a sinking key moves nothing around it.
+    let slot = div().h(px(47.)).flex().items_end();
+    slot.child(if recording {
+        key.mb(px(2.))
+            .border_dashed()
+            .border_color(p.mute.opacity(0.6))
+            .text_color(transparent_black())
+    } else if cap.held {
+        key.border_b(px(3.))
+            .border_color(p.accent)
+            .bg(p.accent.opacity(0.14))
+            .text_color(p.accent)
+    } else {
+        key.mb(px(2.)).border_b(px(3.)).border_color(edge).bg(face)
+    })
 }
 
 impl Render for OnboardingView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
+        let title = match self.step {
+            Step::Setup => s.welcome,
+            Step::Indexing => s.ob_done,
+        };
+        if self.title != title {
+            window.set_window_title(title);
+            self.title = title;
+        }
         let body = match self.step {
-            Step::Folders => self.folders(s, &p, cx),
-            Step::Features => self.features(s, &p, cx),
-            Step::Background => self.background(s, &p, cx),
+            Step::Setup => self.setup(s, &p, cx),
             Step::Indexing => self.indexing(s, &p, cx),
         };
         let can_continue = self.can_continue(cx);
-        let next_label = match self.step {
-            Step::Features
-                if download_total(&self.live.read(cx).features, &self.chosen(cx)) > 0 =>
-            {
-                s.download_and_continue
-            }
-            Step::Indexing => s.ob_start_searching,
-            _ => s.continue_,
+        let no_folder = self.roots(cx).is_none_or(|roots| roots.is_empty());
+        let total = download_total(&self.live.read(cx).features, &self.chosen(cx));
+        // The consent is the button: it says what agreeing downloads.
+        let next_label: SharedString = match self.step {
+            Step::Setup if total > 0 => s
+                .ob_download_and_start
+                .replace("{size}", &self.live.read(cx).lang.size(total))
+                .into(),
+            Step::Setup => s.ob_start.into(),
+            Step::Indexing => s.ob_start_searching.into(),
         };
+        // A soft wash of the accent behind the top of the window: light mode
+        // otherwise has no color but the button.
+        let wash = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w_full()
+            .h(px(260.))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(p.accent.opacity(if self.dark { 0.20 } else { 0.16 }), 0.),
+                linear_color_stop(p.accent.opacity(0.), 1.),
+            ));
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             // Bindings run before the recorder's keys: while it waits, Enter
-            // does nothing and Esc cancels it.
+            // does nothing and Esc cancels it. On setup Enter does nothing
+            // either: a stray key must not start a download; the focused
+            // button still takes it.
             .on_action(cx.listener(|this, _: &Next, window, cx| {
-                if !this.recording {
+                if !this.recording && this.step == Step::Indexing {
                     this.next(window, cx);
                 }
             }))
+            .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| {
+                this.held = e.modifiers;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 if this.recording {
-                    return this.toggle_recording(window, cx);
-                }
-                if let Some(step) = this.step.back().filter(|_| !this.busy) {
-                    this.go(step, cx);
+                    this.toggle_recording(window, cx);
+                } else {
+                    this.back(cx);
                 }
             }))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
             .bg(p.solid)
             .text_color(p.ink)
             .text_size(px(14.))
+            .child(wash)
             .child(
                 div()
                     .id("onboarding")
@@ -968,26 +1203,13 @@ impl Render for OnboardingView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(32.))
-                    .pt(px(24.))
-                    // The last step is a finish line, not a step to do.
-                    .child(div().mb(px(4.)).text_xs().text_color(p.mute).when(
-                        self.step != Step::Indexing,
-                        |d| {
-                            d.child(
-                                s.step_of
-                                    .replace("{n}", &(self.step.index() + 1).to_string())
-                                    .replace("{total}", &(STEPS.len() - 1).to_string()),
-                            )
-                        },
-                    ))
-                    .when(self.step != Step::Indexing, |d| {
-                        d.child(heading(self.step.title(s)).mb(px(6.)))
-                    })
-                    .children(
-                        self.step
-                            .intro(s)
-                            .map(|text| note(&p).mb(px(16.)).text_sm().child(text)),
-                    )
+                    .pt(px(32.))
+                    .pb(px(16.))
+                    // The finish screen is short: centered in the space,
+                    // not stacked at the top.
+                    .flex()
+                    .flex_col()
+                    .when(self.step == Step::Indexing, |d| d.justify_center())
                     .child(slide_in(body, self.step, self.forward))
                     .children(self.error.as_ref().map(|error| {
                         note(&p)
@@ -1005,41 +1227,30 @@ impl Render for OnboardingView {
                     .py(px(16.))
                     .border_t_1()
                     .border_color(p.line)
-                    .when(self.step == Step::Features, |bar| {
-                        bar.child(
-                            note(&p)
-                                .text_color(p.ink)
-                                .child(self.download_summary(s, cx)),
-                        )
+                    // Why Start is off, or that nothing downloads.
+                    .when(self.step == Step::Setup, |bar| {
+                        let hint = if no_folder {
+                            Some(s.ob_need_folder)
+                        } else {
+                            (total == 0).then_some(s.ob_nothing_to_download)
+                        };
+                        bar.children(hint.map(|h| note(&p).mt_0().child(h)))
                     })
-                    // The last step: onboarding is saved, any way out is fine.
+                    // Back across from the way forward, where wizards keep it.
                     .when(self.step == Step::Indexing, |bar| {
                         bar.child(
-                            Button::new("open-settings")
+                            Button::new("back")
+                                .cursor_pointer()
                                 .ghost()
-                                .label(s.open_settings)
-                                .on_click(cx.listener(|this, _, window, _| {
-                                    this.leave(Some(AppEvent::Settings), window)
-                                })),
+                                .icon(IconName::ArrowLeft)
+                                .label(s.back)
+                                .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
                         )
                     })
                     .child(div().flex_1())
-                    .when(self.step == Step::Indexing, |bar| {
-                        bar.child(
-                            Button::new("close").ghost().label(s.close).on_click(
-                                cx.listener(|this, _, window, _| this.leave(None, window)),
-                            ),
-                        )
-                    })
-                    .children(self.step.back().map(|step| {
-                        Button::new("back")
-                            .ghost()
-                            .label(s.back)
-                            .disabled(self.busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.go(step, cx)))
-                    }))
                     .child(
                         Button::new("next")
+                            .when(can_continue, |b| b.cursor_pointer())
                             .primary()
                             .label(next_label)
                             .loading(self.busy)
@@ -1050,20 +1261,120 @@ impl Render for OnboardingView {
     }
 }
 
-/// How long a step takes to slide in; onboarding is seen once, so a little
-/// longer than [`theme::FADE`].
+/// How long a screen takes to slide in; onboarding is seen once, so a
+/// little longer than [`theme::FADE`].
 const STEP_IN: Duration = Duration::from_millis(220);
+/// How far apart the feature tiles arrive.
+const STAGGER: Duration = Duration::from_millis(40);
+/// The finish screen's check growing in.
+const CHECK_IN: Duration = Duration::from_millis(320);
 
-/// A step's body fades in from 8px toward where it came from: forward from
-/// the right, back from the left. Under reduced motion GPUI shows the end
-/// state.
+/// A screen's body fades in from 8px toward where it came from: forward
+/// from the right, back from the left. Under reduced motion GPUI shows the
+/// end state.
 fn slide_in(body: Div, step: Step, forward: bool) -> impl IntoElement {
     let from = if forward { 8. } else { -8. };
     body.relative().with_animation(
-        ("step", step.index()),
+        ("step", step as usize),
         Animation::new(STEP_IN).with_easing(ease_out_quint()),
         move |el, t| el.opacity(t).left(px(from * (1. - t))),
     )
+}
+
+/// Tile `ix` of a list fades up 6px, [`STAGGER`] after the one before it.
+/// It plays when the tile first shows, never on later renders.
+fn stagger_in(el: Div, ix: usize) -> impl IntoElement {
+    let delay = STAGGER * ix as u32;
+    let total = STEP_IN + delay;
+    let start = delay.as_secs_f32() / total.as_secs_f32();
+    let ease = ease_out_quint();
+    el.relative()
+        .with_animation(("stagger-in", ix), Animation::new(total), move |el, t| {
+            let t = ease(((t - start) / (1. - start)).clamp(0., 1.));
+            el.opacity(t).top(px(6. * (1. - t)))
+        })
+}
+
+/// A titled part of the setup screen.
+fn section(title: &'static str, intro: &'static str, body: Div, p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        // Two lines tall either way, so the columns' boxes start level.
+        .child(
+            note(p)
+                .mt(px(2.))
+                .mb(px(10.))
+                .min_h(px(44.))
+                .text_sm()
+                .child(intro),
+        )
+        .child(body)
+}
+
+/// What each feature does, as a picture.
+fn feature_icon(feature: Feature) -> IconName {
+    match feature {
+        Feature::Meaning => IconName::TextSearch,
+        Feature::ImageText => IconName::ScanText,
+        Feature::ImageVisual => IconName::ScanEye,
+    }
+}
+
+/// Rows grouped in one rounded box, as in system settings.
+fn group(p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(p.line)
+        .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
+        .overflow_hidden()
+}
+
+/// A line between grouped rows, starting where the text does.
+fn divider(p: &Palette) -> Div {
+    div().h(px(1.)).ml(px(42.)).bg(p.line)
+}
+
+/// A grouped row: an icon in the accent, the name with an optional small
+/// line under it, then what follows.
+fn row(icon: IconName, name: &'static str, sub: Option<&'static str>, p: &Palette) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(6.))
+        .min_h(px(44.))
+        .child(
+            Icon::new(icon)
+                .size(px(18.))
+                .flex_none()
+                .text_color(p.accent),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(name),
+                )
+                .children(sub.map(|sub| {
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(14.))
+                        .text_color(p.mute)
+                        .child(sub)
+                })),
+        )
 }
 
 #[cfg(test)]
@@ -1071,9 +1382,10 @@ mod tests {
     // Not `super::*`: GPUI's prelude has its own `test` attribute.
     use super::{
         Readiness, download_total, feature_changes, key_caps, preselected, progress, readiness,
+        shortcut_text, suggestions,
     };
     use crate::i18n::Lang;
-    use gpui_kit::Keystroke;
+    use gpui_kit::{Keystroke, Modifiers};
     use magi_core::dto::{DownloadError, FeatureStatus, IndexState, IndexStatus, Install};
     use magi_core::features::Feature;
 
@@ -1094,6 +1406,34 @@ mod tests {
             feature(Feature::ImageText, true, Install::NotInstalled),
             feature(Feature::ImageVisual, false, Install::NotInstalled),
         ]
+    }
+
+    #[test]
+    fn a_suggested_folder_hides_once_it_or_a_parent_is_added() {
+        use magi_core::db::roots::Health;
+        use magi_core::dto::RootStatus;
+        use std::path::PathBuf;
+        let root = |path: &str| RootStatus {
+            id: 1,
+            path: path.into(),
+            enabled: true,
+            status: Health::Ok,
+            indexed: 0,
+        };
+        let user = [
+            PathBuf::from("/home/ana/Documents"),
+            PathBuf::from("/home/ana/Desktop"),
+            PathBuf::from("/home/ana/Pictures"),
+        ];
+        assert_eq!(suggestions(&user, &[]), user);
+        assert_eq!(
+            suggestions(&user, &[root("/home/ana/Desktop")]),
+            [user[0].clone(), user[2].clone()]
+        );
+        // Inside a chosen folder: already searched.
+        assert!(suggestions(&user, &[root("/home/ana")]).is_empty());
+        // A folder inside a suggestion does not cover all of it.
+        assert_eq!(suggestions(&user, &[root("/home/ana/Pictures/2024")]), user);
     }
 
     #[test]
@@ -1222,7 +1562,7 @@ mod tests {
     fn a_shortcut_becomes_keycaps_the_platform_way() {
         let caps = |key: &str, symbols: bool| {
             let k = Keystroke::parse(key).unwrap();
-            key_caps(&k, Lang::En.strings(), symbols)
+            key_caps(&k, Lang::En.strings(), symbols, &Modifiers::default())
                 .into_iter()
                 .map(|c| (c.label, c.icon.is_some(), c.wide))
                 .collect::<Vec<_>>()
@@ -1252,10 +1592,45 @@ mod tests {
         );
         // Spanish says Espacio; Shift stays Shift (eadfe73).
         let k = Keystroke::parse("ctrl-shift-space").unwrap();
-        let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false)
+        let es: Vec<_> = key_caps(&k, Lang::Es.strings(), false, &Modifiers::default())
             .into_iter()
             .map(|c| c.label)
             .collect();
         assert_eq!(es, ["Ctrl", "Shift", "Espacio"]);
+    }
+
+    #[test]
+    fn a_shortcut_reads_as_text_the_platform_way() {
+        let k = Keystroke::parse("ctrl-shift-space").unwrap();
+        assert_eq!(
+            shortcut_text(&k, Lang::Es.strings(), false),
+            "Ctrl+Shift+Espacio"
+        );
+        let k = Keystroke::parse("cmd-alt-k").unwrap();
+        assert_eq!(shortcut_text(&k, Lang::En.strings(), true), "⌥⌘K");
+    }
+
+    #[test]
+    fn the_modifiers_held_down_light_their_keycaps() {
+        let k = Keystroke::parse("ctrl-shift-space").unwrap();
+        let lit = |held: Modifiers| {
+            key_caps(&k, Lang::En.strings(), false, &held)
+                .into_iter()
+                .map(|c| c.held)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lit(Modifiers::default()), [false, false, false]);
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(lit(ctrl), [true, false, false]);
+        // A held modifier the shortcut does not use lights nothing.
+        let alt_shift = Modifiers {
+            alt: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(lit(alt_shift), [false, true, false]);
     }
 }

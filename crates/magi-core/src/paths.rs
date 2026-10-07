@@ -4,7 +4,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
+use directories::{ProjectDirs, UserDirs};
 
 use crate::error::{Error, Result};
 
@@ -20,6 +20,21 @@ pub fn data_dir() -> PathBuf {
 }
 
 /// Config directory: `config.toml`. Overridable via `MAGI_CONFIG_DIR`.
+/// The user's Documents, Desktop and Pictures folders that exist: what
+/// onboarding offers to add with one click. Only offered; nothing is
+/// indexed unless the user picks it.
+pub fn user_folders() -> Vec<PathBuf> {
+    let Some(dirs) = UserDirs::new() else {
+        return Vec::new();
+    };
+    [dirs.document_dir(), dirs.desktop_dir(), dirs.picture_dir()]
+        .into_iter()
+        .flatten()
+        .filter(|dir| dir.is_dir())
+        .map(Path::to_path_buf)
+        .collect()
+}
+
 pub fn config_dir() -> PathBuf {
     env::var_os("MAGI_CONFIG_DIR")
         .map(PathBuf::from)

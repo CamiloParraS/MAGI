@@ -3,7 +3,7 @@ use std::time::Instant;
 use gpui_kit::{AppContext as _, TestAppContext};
 use magi_core::host::{Host, HostPaths};
 use magi_desktop::i18n::Lang;
-use magi_desktop::search::view::{Live, SearchView};
+use magi_desktop::search::view::{Live, Opening, SearchView};
 use magi_desktop::theme::Backdrop;
 
 struct Counter(u32);
@@ -42,7 +42,10 @@ fn the_search_window_opens_empty_over_a_real_host(cx: &mut TestAppContext) {
             live,
             async_channel::unbounded().0,
             Backdrop::Solid,
-            Instant::now(),
+            Opening {
+                at: Instant::now(),
+                teach: None,
+            },
             window,
             cx,
         )

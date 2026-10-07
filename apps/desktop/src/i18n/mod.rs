@@ -77,6 +77,9 @@ pub struct Strings {
     /// `{name}` is the feature name.
     pub updating: Plural,
     pub dismiss: &'static str,
+    /// The search window opened from the tray or a launch; the shortcut's
+    /// keys follow it.
+    pub teach_shortcut: &'static str,
     pub tray_starting: &'static str,
     pub tray_open: &'static str,
     pub tray_pause: &'static str,
@@ -91,7 +94,6 @@ pub struct Strings {
     pub folders: &'static str,
     pub add_folder: &'static str,
     pub remove: &'static str,
-    pub root_watching: &'static str,
     pub root_polling: &'static str,
     pub root_disabled: &'static str,
     pub root_files: Plural,
@@ -220,25 +222,28 @@ pub struct Strings {
     pub quit_app_note: &'static str,
     /// The onboarding window's title.
     pub welcome: &'static str,
-    /// `{n}` is the step, `{total}` the number of steps.
-    pub step_of: &'static str,
+    /// In the empty folders drop zone, above Add folder.
+    pub ob_drop_folders: &'static str,
+    /// The setup button when the chosen features download something;
+    /// `{size}` is the total, read as it is agreed to (FR-10).
+    pub ob_download_and_start: &'static str,
+    /// The setup button when nothing downloads.
+    pub ob_start: &'static str,
+    /// Beside a feature on by default (ADR-0010).
+    /// The finish screen's arrow back to setup.
     pub back: &'static str,
-    pub continue_: &'static str,
-    /// Continue when the chosen features download something.
-    pub download_and_continue: &'static str,
+    /// Beside Start while no folder is chosen: why it is off.
+    pub ob_need_folder: &'static str,
+    pub ob_recommended: &'static str,
+    /// In place of a downloaded feature's size.
+    pub ob_installed: &'static str,
     pub ob_folders: &'static str,
     pub ob_folders_note: &'static str,
     pub ob_features: &'static str,
     /// The download consent (FR-10): nothing else goes over the network.
     pub ob_features_note: &'static str,
-    /// `{size}` is the total download.
-    pub ob_download_total: &'static str,
     pub ob_nothing_to_download: &'static str,
-    pub ob_background: &'static str,
-    pub ob_background_note: &'static str,
-    /// Followed by the hotkey.
-    pub ob_search_with: &'static str,
-    /// After the hotkey is pressed on the background step.
+    /// After the hotkey is pressed on the last step.
     pub ob_hotkey_works: &'static str,
     /// The same once search is closed again.
     pub ob_hotkey_worked: &'static str,

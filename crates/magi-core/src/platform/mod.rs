@@ -323,6 +323,10 @@ pub fn backdrop_support() -> BackdropSupport {
 /// name (Ctrl, Alt, Shift).
 pub const SYMBOL_MODIFIERS: bool = cfg!(target_os = "macos");
 
+/// A click on a Windows tray icon opens its app; a macOS menu-bar icon
+/// shows its menu, and Linux's AppIndicator reports no clicks at all.
+pub const TRAY_CLICK_OPENS_APP: bool = cfg!(target_os = "windows");
+
 /// The user asked the OS for less motion: Windows' "Show animations" off,
 /// macOS "Reduce motion", GNOME animations off. `false` when unknown.
 pub fn reduce_motion() -> bool {
