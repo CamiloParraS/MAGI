@@ -525,6 +525,7 @@ impl OnboardingView {
                 .child(div().text_color(p.mute).child(s.ob_drop_folders))
                 .child(
                     Button::new("add-folder")
+                        .cursor_pointer()
                         .primary()
                         .xsmall()
                         .label(s.add_folder)
@@ -544,6 +545,7 @@ impl OnboardingView {
                     // that fills it keeps the icon and label at the left,
                     // the icon in the column of the folder icons above.
                     Button::new("add-folder")
+                        .cursor_pointer()
                         .ghost()
                         .child(
                             div()
@@ -569,6 +571,7 @@ impl OnboardingView {
                 .gap_2()
                 .children(offered.into_iter().enumerate().map(|(ix, dir)| {
                     Button::new(("suggest-folder", ix))
+                        .cursor_pointer()
                         .outline()
                         .small()
                         .icon(IconName::Plus)
@@ -641,6 +644,7 @@ impl OnboardingView {
             .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
                 row.child(
                     Button::new(("retry-root", id as u64))
+                        .cursor_pointer()
                         .ghost()
                         .small()
                         .label(s.try_again)
@@ -652,6 +656,7 @@ impl OnboardingView {
             .child(
                 // Minus, not a trash can: it only leaves Magi's list.
                 Button::new(("remove-root", id as u64))
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .icon(IconName::Minus)
@@ -696,6 +701,7 @@ impl OnboardingView {
                     Popover::new(("feature-info", ix))
                         .trigger(
                             Button::new(("feature-info-button", ix))
+                                .cursor_pointer()
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Info)
@@ -705,6 +711,7 @@ impl OnboardingView {
                 )
                 .child(
                     Switch::new(("feature", feature as usize))
+                        .cursor_pointer()
                         .checked(chosen.contains(&feature))
                         .color(p.accent)
                         .accessibility_label(text.name)
@@ -725,6 +732,7 @@ impl OnboardingView {
         group(p).child(
             row(IconName::Power, s.launch_at_login, None, p).child(
                 Switch::new("start-at-login")
+                    .cursor_pointer()
                     .checked(self.launch_at_login)
                     .color(p.accent)
                     .tooltip(s.launch_at_login_note)
@@ -936,6 +944,7 @@ impl OnboardingView {
             .child(
                 // Outlined: it is a control, so it looks like one.
                 Button::new("change-hotkey")
+                    .cursor_pointer()
                     .small()
                     .outline()
                     .label(if recording {
@@ -1009,6 +1018,7 @@ impl OnboardingView {
                     .children(failed)
                     .child(
                         Button::new("open-settings")
+                            .cursor_pointer()
                             .link()
                             .small()
                             .label(s.open_settings)
@@ -1140,6 +1150,7 @@ impl Render for OnboardingView {
                     .child(div().flex_1())
                     .child(
                         Button::new("next")
+                            .when(can_continue, |b| b.cursor_pointer())
                             .primary()
                             .label(next_label)
                             .loading(self.busy)
@@ -1152,6 +1163,7 @@ impl Render for OnboardingView {
                 root.child(
                     div().absolute().top(px(12.)).left(px(12.)).child(
                         Button::new("back")
+                            .cursor_pointer()
                             .ghost()
                             .small()
                             .icon(IconName::ArrowLeft)

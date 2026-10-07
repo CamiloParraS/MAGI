@@ -382,6 +382,7 @@ impl SearchView {
                     .child(s.search_failed)
                     .child(
                         Button::new("retry")
+                            .cursor_pointer()
                             .label(s.try_again)
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
@@ -528,6 +529,7 @@ impl SearchView {
                 let off = s.feature_off.replace("{name}", text.name);
                 let name_at = s.feature_off.find("{name}");
                 let button = Button::new("turn-on")
+                    .cursor_pointer()
                     .primary()
                     .small()
                     .label(s.turn_on.replace("{size}", &lang.size(size)))
@@ -576,6 +578,7 @@ impl SearchView {
             .children(action)
             .child(
                 Button::new("dismiss")
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .icon(IconName::Close)
@@ -628,6 +631,7 @@ impl SearchView {
             .border_color(p.line)
             .child(
                 Button::new("settings")
+                    .cursor_pointer()
                     .ghost()
                     .xsmall()
                     .icon(IconName::Settings)
@@ -794,6 +798,8 @@ fn row(
     };
     div()
         .id(ix)
+        // A result opens like a link: the hand, as on every clickable thing.
+        .cursor_pointer()
         .relative()
         .flex()
         .items_center()

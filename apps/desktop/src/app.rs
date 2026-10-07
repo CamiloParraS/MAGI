@@ -510,11 +510,13 @@ impl Render for StartFailure {
                     .gap_2()
                     .child(
                         Button::new("show-log")
+                            .cursor_pointer()
                             .label(s.show_log)
                             .on_click(|_, _, cx| cx.reveal_path(&crate::logging::path())),
                     )
                     .child(
                         Button::new("quit")
+                            .cursor_pointer()
                             .primary()
                             .label(s.tray_quit)
                             .on_click(|_, _, cx| cx.quit()),
