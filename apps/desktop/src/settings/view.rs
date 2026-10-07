@@ -1609,7 +1609,8 @@ pub(crate) fn stack() -> Div {
 }
 
 /// A settings box, as in the variant A mockup. Fields inside it take
-/// `p.solid` so they stand out from the box.
+/// `p.solid` so they stand out from the box. In light mode a white box on a
+/// near-white window needs a faint shadow to read as a layer.
 pub(crate) fn card(p: &Palette) -> Div {
     div()
         .flex()
@@ -1621,6 +1622,7 @@ pub(crate) fn card(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
 }
 
 /// A setting's second line.
