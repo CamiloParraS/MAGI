@@ -870,10 +870,12 @@ impl SettingsView {
                     .children(self.problem(Field::Root(id), s, p)),
             )
             // A changed status fades in, so the change is seen.
-            .child(theme::fade_in(
-                p.status(badge, tone),
-                SharedString::from(format!("root-status-{id}-{badge}")),
-            ))
+            .children(badge.map(|badge| {
+                theme::fade_in(
+                    p.status(badge, tone),
+                    SharedString::from(format!("root-status-{id}-{badge}")),
+                )
+            }))
             .child(
                 Switch::new(("root-enabled", id as u64))
                     .checked(root.enabled)

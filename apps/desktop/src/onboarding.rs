@@ -17,6 +17,7 @@ use magi_core::dto::{ErrorCode, FeatureStatus, IndexState, IndexStatus, Install,
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::app::{AppEvent, Events};
@@ -67,6 +68,22 @@ pub fn preselected(features: &[FeatureStatus]) -> Vec<Feature> {
         .filter(|f| f.enabled)
         .map(|f| f.feature)
         .collect()
+}
+
+/// The user's folders still worth offering: not chosen, and not inside a
+/// chosen folder (already searched).
+pub fn suggestions(user: &[PathBuf], roots: &[RootStatus]) -> Vec<PathBuf> {
+    user.iter()
+        .filter(|dir| !roots.iter().any(|root| dir.starts_with(&root.path)))
+        .cloned()
+        .collect()
+}
+
+/// A folder's name, or the whole path for a drive's root.
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Not on disk and not on its way.
@@ -211,6 +228,8 @@ pub struct OnboardingView {
     chosen: Option<Vec<Feature>>,
     /// "Start with your computer", checked by default (ADR-0010).
     launch_at_login: bool,
+    /// Documents, Desktop and Pictures, offered with one click.
+    user_folders: Vec<PathBuf>,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
     /// `ui.hotkey`, shown on the background step.
@@ -268,6 +287,7 @@ impl OnboardingView {
             step: ui.onboarding.into(),
             chosen: None,
             launch_at_login: true,
+            user_folders: magi_core::paths::user_folders(),
             opening_roots,
             hotkey: ui.hotkey,
             busy: false,
@@ -518,21 +538,61 @@ impl OnboardingView {
                         .child(self.root_row(root, s, p, cx))
                 }))
                 .child(divider(p))
+                // The whole row is the button: click and hover anywhere on it.
                 .child(
-                    div().flex().px(px(6.)).py(px(4.)).child(
-                        Button::new("add-folder")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label(s.add_folder)
-                            .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-                    ),
+                    // gpui-component centers a button's content; one child
+                    // that fills it keeps the icon and label at the left,
+                    // the icon in the column of the folder icons above.
+                    Button::new("add-folder")
+                        .ghost()
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(Icon::new(IconName::Plus).size(px(18.)).text_color(p.accent))
+                                .child(s.add_folder),
+                        )
+                        .w_full()
+                        .h(px(40.))
+                        .px(px(12.))
+                        .rounded_none()
+                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
                 ),
         };
-        body.drag_over::<ExternalPaths>(move |style, _, _, _| {
-            style.border_color(accent).bg(accent.opacity(0.08))
-        })
-        .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)))
+        let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
+        let chips = (!offered.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .children(offered.into_iter().enumerate().map(|(ix, dir)| {
+                    Button::new(("suggest-folder", ix))
+                        .outline()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label(folder_name(&dir))
+                        .tooltip(dir.display().to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let dir = dir.clone();
+                            this.run_root(move |host| host.engine()?.add_root(&dir).map(drop), cx);
+                        }))
+                }))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                body.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style.border_color(accent).bg(accent.opacity(0.08))
+                })
+                .on_drop(
+                    cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)),
+                ),
+            )
+            .children(chips)
     }
 
     fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -542,8 +602,10 @@ impl OnboardingView {
             Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
             _ => Icon::new(IconName::Folder).text_color(p.accent),
         };
-        // Spaced as `row`; its own because a path is cut in the middle,
-        // where the folder's name survives.
+        // Spaced as `row`: the folder's name, its parent under it, as file
+        // managers show folders.
+        let path = Path::new(&root.path);
+        let parent = path.parent().map(|parent| parent.display().to_string());
         div()
             .flex()
             .items_center()
@@ -560,12 +622,20 @@ impl OnboardingView {
                         div()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_ellipsis_middle()
-                            .child(root.path.clone()),
+                            .text_ellipsis()
+                            .child(folder_name(path)),
                     )
+                    .children(parent.map(|parent| {
+                        note(p)
+                            .mt_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(parent)
+                    }))
                     .children(explain.map(|e| note(p).child(e))),
             )
-            .child(p.status(badge, tone))
+            .children(badge.map(|badge| p.status(badge, tone)))
             // A rescan probes each root again: a fixed permission or
             // a reconnected drive clears the badge.
             .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
@@ -580,10 +650,11 @@ impl OnboardingView {
                 )
             })
             .child(
+                // Minus, not a trash can: it only leaves Magi's list.
                 Button::new(("remove-root", id as u64))
                     .ghost()
                     .small()
-                    .icon(IconName::Trash)
+                    .icon(IconName::Minus)
                     .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1120,7 +1191,15 @@ fn section(title: &'static str, intro: &'static str, body: Div, p: &Palette) -> 
         .flex()
         .flex_col()
         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-        .child(note(p).mt(px(2.)).mb(px(10.)).text_sm().child(intro))
+        // Two lines tall either way, so the columns' boxes start level.
+        .child(
+            note(p)
+                .mt(px(2.))
+                .mb(px(10.))
+                .min_h(px(44.))
+                .text_sm()
+                .child(intro),
+        )
         .child(body)
 }
 
@@ -1193,6 +1272,7 @@ mod tests {
     // Not `super::*`: GPUI's prelude has its own `test` attribute.
     use super::{
         Readiness, download_total, feature_changes, key_caps, preselected, progress, readiness,
+        suggestions,
     };
     use crate::i18n::Lang;
     use gpui_kit::Keystroke;
@@ -1216,6 +1296,34 @@ mod tests {
             feature(Feature::ImageText, true, Install::NotInstalled),
             feature(Feature::ImageVisual, false, Install::NotInstalled),
         ]
+    }
+
+    #[test]
+    fn a_suggested_folder_hides_once_it_or_a_parent_is_added() {
+        use magi_core::db::roots::Health;
+        use magi_core::dto::RootStatus;
+        use std::path::PathBuf;
+        let root = |path: &str| RootStatus {
+            id: 1,
+            path: path.into(),
+            enabled: true,
+            status: Health::Ok,
+            indexed: 0,
+        };
+        let user = [
+            PathBuf::from("/home/ana/Documents"),
+            PathBuf::from("/home/ana/Desktop"),
+            PathBuf::from("/home/ana/Pictures"),
+        ];
+        assert_eq!(suggestions(&user, &[]), user);
+        assert_eq!(
+            suggestions(&user, &[root("/home/ana/Desktop")]),
+            [user[0].clone(), user[2].clone()]
+        );
+        // Inside a chosen folder: already searched.
+        assert!(suggestions(&user, &[root("/home/ana")]).is_empty());
+        // A folder inside a suggestion does not cover all of it.
+        assert_eq!(suggestions(&user, &[root("/home/ana/Pictures/2024")]), user);
     }
 
     #[test]

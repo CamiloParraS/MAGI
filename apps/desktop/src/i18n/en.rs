@@ -73,7 +73,6 @@ pub const STRINGS: Strings = Strings {
     folders: "Folders",
     add_folder: "Add folder",
     remove: "Remove",
-    root_watching: "Watching",
     root_polling: "Can't watch for changes here; checking now and then instead",
     root_disabled: "Paused, not searched",
     root_files: Plural {
@@ -199,7 +198,7 @@ pub const STRINGS: Strings = Strings {
     ob_recommended: "Recommended",
     ob_installed: "Installed",
     ob_folders: "Choose folders to search",
-    ob_folders_note: "Magi only reads these folders and never changes anything in them. You can add more later in Settings.",
+    ob_folders_note: "Magi only reads these folders. It never changes them.",
     ob_features: "Choose search features",
     ob_features_note: "Downloaded once, then everything runs on your computer. Nothing else goes over the internet.",
     ob_nothing_to_download: "Nothing to download. Files are found by their words and names.",

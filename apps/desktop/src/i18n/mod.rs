@@ -91,7 +91,6 @@ pub struct Strings {
     pub folders: &'static str,
     pub add_folder: &'static str,
     pub remove: &'static str,
-    pub root_watching: &'static str,
     pub root_polling: &'static str,
     pub root_disabled: &'static str,
     pub root_files: Plural,

@@ -15,15 +15,19 @@ use crate::theme::{self, Backdrop, Tone};
 
 /// A root's badge, and a line explaining anything but plain watching
 /// (FR-11).
-pub fn root_state(root: &RootStatus, s: &Strings) -> (&'static str, Tone, Option<&'static str>) {
+/// A healthy root has no badge: lists stay quiet until something is wrong.
+pub fn root_state(
+    root: &RootStatus,
+    s: &Strings,
+) -> (Option<&'static str>, Tone, Option<&'static str>) {
     if !root.enabled {
-        return (s.badge_paused, Tone::Neutral, Some(s.root_disabled));
+        return (Some(s.badge_paused), Tone::Neutral, Some(s.root_disabled));
     }
     match root.status {
-        Health::Ok => (s.root_watching, Tone::Ok, None),
-        Health::WatchFailed => (s.badge_polling, Tone::Neutral, Some(s.root_polling)),
-        Health::Missing => (s.badge_missing, Tone::Warn, Some(s.root_missing)),
-        Health::PermissionDenied => (s.badge_denied, Tone::Err, Some(s.root_denied)),
+        Health::Ok => (None, Tone::Ok, None),
+        Health::WatchFailed => (Some(s.badge_polling), Tone::Neutral, Some(s.root_polling)),
+        Health::Missing => (Some(s.badge_missing), Tone::Warn, Some(s.root_missing)),
+        Health::PermissionDenied => (Some(s.badge_denied), Tone::Err, Some(s.root_denied)),
     }
 }
 
@@ -258,14 +262,15 @@ mod tests {
     }
 
     #[test]
-    fn a_root_has_a_badge_and_explains_anything_but_watching() {
+    fn a_healthy_root_is_quiet_and_anything_else_says_why() {
         let s = Lang::En.strings();
         let state = |enabled, status| root_state(&root(enabled, status), s);
-        assert_eq!(state(true, Health::Ok), ("Watching", Tone::Ok, None));
+        // Nothing to say when it works: no badge, no explanation.
+        assert_eq!(state(true, Health::Ok), (None, Tone::Ok, None));
         assert_eq!(
             state(true, Health::WatchFailed),
             (
-                "Checking",
+                Some("Checking"),
                 Tone::Neutral,
                 Some("Can't watch for changes here; checking now and then instead")
             )
@@ -273,7 +278,7 @@ mod tests {
         assert_eq!(
             state(true, Health::Missing),
             (
-                "Not found",
+                Some("Not found"),
                 Tone::Warn,
                 Some("Folder not found. Reconnect the drive; the index is kept.")
             )
@@ -281,7 +286,7 @@ mod tests {
         assert_eq!(
             state(true, Health::PermissionDenied),
             (
-                "No access",
+                Some("No access"),
                 Tone::Err,
                 Some("Magi isn't allowed to read this folder.")
             )
@@ -289,7 +294,7 @@ mod tests {
         // A switched-off root is not probed, so its last status is stale.
         assert_eq!(
             state(false, Health::Missing),
-            ("Paused", Tone::Neutral, Some("Paused, not searched"))
+            (Some("Paused"), Tone::Neutral, Some("Paused, not searched"))
         );
     }
 
