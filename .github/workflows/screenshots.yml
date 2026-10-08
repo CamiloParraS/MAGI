@@ -1,7 +1,7 @@
 name: Screenshots
 
 # Manual only: launches the desktop app on a hosted Mac and photographs
-# onboarding, search, settings and the menu-bar icon in light and dark,
+# onboarding, search and settings in light and dark,
 # over a wallpaper, plus search and settings with the blur forced
 # (.github/scripts/macos-screenshots.sh).
 # The images are the run's `macos-screenshots` artifact.

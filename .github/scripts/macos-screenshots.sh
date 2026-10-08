@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Screenshots of onboarding, search, settings and the menu-bar icon on
+# Screenshots of onboarding, search and settings on
 # macOS, light and dark, for the Screenshots workflows: a hosted Mac runner
 # has a logged-in desktop.
 #
@@ -39,13 +39,6 @@ SET_H=620
 NAV_X=100
 nav_y() { echo $((52 + 34 * $1)); }
 SECTIONS=(folders features general appearance index)
-# The menu-bar icon's middle, from the screen's right edge: Spotlight,
-# Control Center and the clock sit to its right, so it is ~236pt in on
-# both runners seen (1920 wide: 1683; 1024 wide: ~790). macOS does not say
-# where it is there: TrayIcon::rect reports an unplaced frame (0,768) on
-# the VM, and System Events gets no access.
-TRAY_FROM_RIGHT=236
-TRAY_Y=11
 
 pid=""
 stop() {
@@ -93,14 +86,6 @@ click() {
   sleep 2
 }
 
-# The menu-bar icon's middle, "x y". The runners' screens are 1x, so the
-# resolution in pixels is the width in points.
-tray_spot() {
-  local width
-  width=$(system_profiler SPDisplaysDataType | awk '/Resolution:/ { print $2; exit }')
-  echo "$((width - TRAY_FROM_RIGHT)) $TRAY_Y"
-}
-
 shot() {
   screencapture -x "$OUT/$1.png"
   echo "saved $OUT/$1.png"
@@ -146,17 +131,9 @@ EOF
     shot "$theme-5-settings-$((i + 1))-${SECTIONS[$i]}"
   done
 
-  # The menu-bar icon: its tooltip on hover, then its menu (a click opens
-  # it on macOS), closed again with Esc.
-  read -r tx ty <<<"$(tray_spot)"
-  echo "menu-bar icon at $tx,$ty"
-  cliclick "m:$tx,$ty"
-  sleep 3
-  shot "$theme-6-tray-tooltip"
-  cliclick "c:$tx,$ty"
-  sleep 2
-  shot "$theme-7-tray-menu"
-  cliclick kp:esc
+  # No menu-bar shots: on the runner VMs the icon ignores cliclick's hover
+  # and click (three runs, the spot right on it), so the tray is checked by
+  # hand on a real Mac.
   stop
   # Magi's own log rides along in the artifact (errors, what it saw).
   cp "$MAGI_DATA_DIR/logs/magi.log" "$OUT/$theme-magi.log" 2>/dev/null || true
