@@ -1,5 +1,6 @@
 //! Tray / menu-bar icon (FR-8). The app stays usable without it (SPEC.md §6.3).
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use gpui_kit::Keystroke;
@@ -53,6 +54,8 @@ pub struct Tray {
     lang: Lang,
     /// `ui.hotkey` while it is registered: the tooltip and Open search show it.
     hotkey: Option<String>,
+    /// Where the OS put the icon has been logged (see [`Self::log_spot`]).
+    spot_logged: Cell<bool>,
 }
 
 impl Tray {
@@ -111,17 +114,6 @@ impl Tray {
             .with_icon(placeholder_icon()?)
             .build()
             .map_err(|e| e.to_string())?;
-        // Where the OS put it (not known on Linux): the macOS screenshots
-        // workflow clicks there.
-        if let Some(r) = icon.rect() {
-            tracing::info!(
-                x = r.position.x,
-                y = r.position.y,
-                w = r.size.width,
-                h = r.size.height,
-                "tray icon placed"
-            );
-        }
         let mut tray = Self {
             icon,
             status,
@@ -131,6 +123,7 @@ impl Tray {
             quit,
             lang,
             hotkey: None,
+            spot_logged: Cell::new(false),
         };
         tray.set_lang(lang, None);
         Ok(tray)
@@ -151,6 +144,25 @@ impl Tray {
             }
         }
         self.show_hotkey();
+    }
+
+    /// Logs once where the OS put the icon (unknown on Linux), for the
+    /// macOS screenshots workflow to click it. Not at creation: macOS has
+    /// not placed it yet then, so it waits for a status update.
+    fn log_spot(&self) {
+        if self.spot_logged.get() {
+            return;
+        }
+        if let Some(r) = self.icon.rect().filter(|r| r.size.width > 0) {
+            tracing::info!(
+                x = r.position.x,
+                y = r.position.y,
+                w = r.size.width,
+                h = r.size.height,
+                "tray icon placed"
+            );
+            self.spot_logged.set(true);
+        }
     }
 
     /// `None` while the hotkey is not registered: a shortcut that does
@@ -178,6 +190,7 @@ impl Tray {
     }
 
     pub fn show_status(&self, status: &IndexStatus) {
+        self.log_spot();
         let s = self.lang.strings();
         self.status.set_text(status_line(status, self.lang));
         self.pause.set_text(if status.state == IndexState::Paused {

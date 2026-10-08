@@ -102,8 +102,9 @@ tray_spot() {
   echo "${spot:-$TRAY_X $TRAY_Y}"
 }
 
+# Extra screencapture flags go after the name (-C: with the pointer).
 shot() {
-  screencapture -x "$OUT/$1.png"
+  screencapture -x "${@:2}" "$OUT/$1.png"
   echo "saved $OUT/$1.png"
 }
 
@@ -153,12 +154,14 @@ EOF
   echo "menu-bar icon at $tx,$ty"
   cliclick "m:$tx,$ty"
   sleep 3
-  shot "$theme-6-tray-tooltip"
+  shot "$theme-6-tray-tooltip" -C
   cliclick "c:$tx,$ty"
   sleep 2
-  shot "$theme-7-tray-menu"
+  shot "$theme-7-tray-menu" -C
   cliclick kp:esc
   stop
+  # Magi's own log rides along in the artifact (the tray's spot, errors).
+  cp "$MAGI_DATA_DIR/logs/magi.log" "$OUT/$theme-magi.log" 2>/dev/null || true
 
   # The blurred background, which macOS does not get yet (ADR-0011: "if it
   # proves to be real vibrancy"): search and settings over the wallpaper.
