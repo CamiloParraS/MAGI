@@ -15,6 +15,12 @@ mkdir -p "$OUT" "$WORK/corpus"
 export MAGI_FAKE_EMBEDDER=1
 for i in 1 2 3; do echo "note $i about invoices" > "$WORK/corpus/n$i.txt"; done
 
+# A busy wallpaper, so a see-through window shows it. Best effort: the shots
+# are still taken over the runner's plain desktop if neither way is allowed.
+WALLPAPER=${WALLPAPER:-$PWD/fixtures/corpus/images/doroWallpaper.jpg}
+osascript -e "tell application \"System Events\" to tell every desktop to set picture to \"$WALLPAPER\"" 2>/dev/null   || osascript -e "tell application \"Finder\" to set desktop picture to POSIX file \"$WALLPAPER\""   || echo "could not set the wallpaper" >&2
+sleep 2
+
 # The onboarding window's content size (onboarding::SIZE), and where to
 # click, in points from the content's top-left. The footer's right button
 # is Start on setup and Start searching on the finish screen.
@@ -150,4 +156,17 @@ EOF
   shot "$theme-7-tray-menu"
   cliclick kp:esc
   stop
+
+  # The blurred background, which macOS does not get yet (ADR-0011: "if it
+  # proves to be real vibrancy"): search and settings over the wallpaper.
+  export MAGI_BACKDROP=blurred
+  launch
+  shot "$theme-8-blurred-search"
+  cliclick kd:cmd t:, ku:cmd
+  sleep 3
+  shot "$theme-9-blurred-settings-folders"
+  click "$NAV_X" "$(nav_y 3)" "$SET_W" "$SET_H"
+  shot "$theme-10-blurred-settings-appearance"
+  stop
+  unset MAGI_BACKDROP
 done
