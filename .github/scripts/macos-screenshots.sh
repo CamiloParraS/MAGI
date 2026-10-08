@@ -39,8 +39,8 @@ SET_H=620
 NAV_X=100
 nav_y() { echo $((52 + 34 * $1)); }
 SECTIONS=(folders features general appearance index)
-# The menu-bar icon, where System Events cannot say: its spot on the
-# 1920x1080 runner in the first run.
+# The menu-bar icon when the log does not say where it is: its spot on
+# the 1920x1080 macos-14 runner.
 TRAY_X=1683
 TRAY_Y=11
 
@@ -90,13 +90,16 @@ click() {
   sleep 2
 }
 
-# The menu-bar icon's middle, "x y": from System Events, else TRAY_X/Y.
+# The menu-bar icon's middle, "x y": the app logs where macOS put it ("tray
+# icon placed x=.. y=.. w=.. h=..", physical pixels: points on the runner's
+# 1x screen), so it is found whatever the icon looks like. Else TRAY_X/Y.
 tray_spot() {
-  osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
-      set {x, y} to position of menu bar item 1 of menu bar 2
-      set {w, h} to size of menu bar item 1 of menu bar 2
-      return ((x + w div 2) as text) & \" \" & ((y + h div 2) as text)
-    end tell" 2>/dev/null || echo "$TRAY_X $TRAY_Y"
+  local spot
+  spot=$(grep "tray icon placed" "$MAGI_DATA_DIR/logs/magi.log" 2>/dev/null | tail -1 |
+    awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+           if (v["w"] > 0) printf "%d %d
+", v["x"] + v["w"] / 2, v["y"] + v["h"] / 2 }')
+  echo "${spot:-$TRAY_X $TRAY_Y}"
 }
 
 shot() {

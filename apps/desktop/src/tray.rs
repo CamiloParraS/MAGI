@@ -111,6 +111,17 @@ impl Tray {
             .with_icon(placeholder_icon()?)
             .build()
             .map_err(|e| e.to_string())?;
+        // Where the OS put it (not known on Linux): the macOS screenshots
+        // workflow clicks there.
+        if let Some(r) = icon.rect() {
+            tracing::info!(
+                x = r.position.x,
+                y = r.position.y,
+                w = r.size.width,
+                h = r.size.height,
+                "tray icon placed"
+            );
+        }
         let mut tray = Self {
             icon,
             status,
