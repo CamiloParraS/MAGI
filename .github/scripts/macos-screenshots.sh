@@ -39,9 +39,12 @@ SET_H=620
 NAV_X=100
 nav_y() { echo $((52 + 34 * $1)); }
 SECTIONS=(folders features general appearance index)
-# The menu-bar icon when the log does not say where it is: its spot on
-# the 1920x1080 macos-14 runner.
-TRAY_X=1683
+# The menu-bar icon's middle, from the screen's right edge: Spotlight,
+# Control Center and the clock sit to its right, so it is ~236pt in on
+# both runners seen (1920 wide: 1683; 1024 wide: ~790). macOS does not say
+# where it is there: TrayIcon::rect reports an unplaced frame (0,768) on
+# the VM, and System Events gets no access.
+TRAY_FROM_RIGHT=236
 TRAY_Y=11
 
 pid=""
@@ -90,21 +93,16 @@ click() {
   sleep 2
 }
 
-# The menu-bar icon's middle, "x y": the app logs where macOS put it ("tray
-# icon placed x=.. y=.. w=.. h=..", physical pixels: points on the runner's
-# 1x screen), so it is found whatever the icon looks like. Else TRAY_X/Y.
+# The menu-bar icon's middle, "x y". The runners' screens are 1x, so the
+# resolution in pixels is the width in points.
 tray_spot() {
-  local spot
-  spot=$(grep "tray icon placed" "$MAGI_DATA_DIR/logs/magi.log" 2>/dev/null | tail -1 |
-    awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
-           if (v["w"] > 0) printf "%d %d
-", v["x"] + v["w"] / 2, v["y"] + v["h"] / 2 }')
-  echo "${spot:-$TRAY_X $TRAY_Y}"
+  local width
+  width=$(system_profiler SPDisplaysDataType | awk '/Resolution:/ { print $2; exit }')
+  echo "$((width - TRAY_FROM_RIGHT)) $TRAY_Y"
 }
 
-# Extra screencapture flags go after the name (-C: with the pointer).
 shot() {
-  screencapture -x "${@:2}" "$OUT/$1.png"
+  screencapture -x "$OUT/$1.png"
   echo "saved $OUT/$1.png"
 }
 
@@ -154,13 +152,13 @@ EOF
   echo "menu-bar icon at $tx,$ty"
   cliclick "m:$tx,$ty"
   sleep 3
-  shot "$theme-6-tray-tooltip" -C
+  shot "$theme-6-tray-tooltip"
   cliclick "c:$tx,$ty"
   sleep 2
-  shot "$theme-7-tray-menu" -C
+  shot "$theme-7-tray-menu"
   cliclick kp:esc
   stop
-  # Magi's own log rides along in the artifact (the tray's spot, errors).
+  # Magi's own log rides along in the artifact (errors, what it saw).
   cp "$MAGI_DATA_DIR/logs/magi.log" "$OUT/$theme-magi.log" 2>/dev/null || true
 
   # The blurred background, which macOS does not get yet (ADR-0011: "if it
