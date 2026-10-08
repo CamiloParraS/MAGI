@@ -211,6 +211,7 @@ Use **one repository (monorepo)** containing a Cargo workspace (core, CLI, deskt
 | `MAGI_CONFIG_DIR`      | Override the config directory.                                                               |
 | `MAGI_LOG`             | `tracing` env-filter (e.g. `info,magi_core::watch=debug`).                                   |
 | `MAGI_FAKE_EMBEDDER=1` | Use the deterministic fake embedder (tests, CI, UI development without models).              |
+| `MAGI_BACKDROP=blurred` | Force the blurred window background where it is off (macOS until M6 Plan 4 decides, Windows 10); for trying it, e.g. the macOS screenshots workflow. |
 
 ---
 

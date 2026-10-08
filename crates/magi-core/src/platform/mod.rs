@@ -307,15 +307,26 @@ pub fn mica_supported_on_build(build: u32) -> bool {
 }
 
 /// This machine's [`BackdropSupport`]. Only Windows offers Mica for now; macOS
-/// vibrancy is decided in M6 Plan 4 (ADR-0011).
+/// vibrancy is decided in M6 Plan 4 (ADR-0011). `MAGI_BACKDROP=blurred`
+/// forces the blur (SPEC.md §4.5), for trying it where it is off.
 pub fn backdrop_support() -> BackdropSupport {
     #[cfg(target_os = "windows")]
-    {
-        windows::backdrop_support()
-    }
+    let detected = windows::backdrop_support();
     #[cfg(not(target_os = "windows"))]
-    {
-        BackdropSupport::default()
+    let detected = BackdropSupport::default();
+    backdrop_override(std::env::var("MAGI_BACKDROP").ok().as_deref(), detected)
+}
+
+/// `MAGI_BACKDROP` over what the OS offers: `blurred` turns the blur on and
+/// ignores the OS's reduce-transparency setting; anything else changes
+/// nothing.
+fn backdrop_override(var: Option<&str>, detected: BackdropSupport) -> BackdropSupport {
+    match var {
+        Some("blurred") => BackdropSupport {
+            mica: true,
+            reduce_transparency: false,
+        },
+        _ => detected,
     }
 }
 
@@ -392,6 +403,22 @@ pub fn display_under_cursor() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn magi_backdrop_blurred_forces_the_blur_anywhere() {
+        let solid = BackdropSupport {
+            mica: false,
+            reduce_transparency: true,
+        };
+        let forced = BackdropSupport {
+            mica: true,
+            reduce_transparency: false,
+        };
+        assert_eq!(backdrop_override(Some("blurred"), solid), forced);
+        // Unset or anything else: what the OS offers.
+        assert_eq!(backdrop_override(None, solid), solid);
+        assert_eq!(backdrop_override(Some("1"), solid), solid);
+    }
 
     #[test]
     fn mica_needs_windows_11_22h2() {
