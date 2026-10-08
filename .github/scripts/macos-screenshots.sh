@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Screenshots of onboarding and search on macOS, light and dark, for the
-# Screenshots workflow: a hosted Mac runner has a logged-in desktop.
+# Screenshots of onboarding, search, settings and the menu-bar icon on
+# macOS, light and dark, for the Screenshots workflows: a hosted Mac runner
+# has a logged-in desktop.
 #
 # Needs target/debug/magi and magi-cli built, and `cliclick` (brew). Each
 # theme gets a scratch profile (MAGI_CONFIG_DIR / MAGI_DATA_DIR), a three-file
@@ -24,6 +25,18 @@ NEXT_Y=568
 # "Start with your computer": turned off, so no LaunchAgent is registered.
 LOGIN_X=818
 LOGIN_Y=361
+# The settings window's content size (settings::SIZE). Its sidebar: 8pt
+# padding, the "Settings" label (~28pt), then a 32pt button per section,
+# 2pt apart, in SECTIONS order.
+SET_W=900
+SET_H=620
+NAV_X=100
+nav_y() { echo $((52 + 34 * $1)); }
+SECTIONS=(folders features general appearance index)
+# The menu-bar icon, where System Events cannot say: its spot on the
+# 1920x1080 runner in the first run.
+TRAY_X=1683
+TRAY_Y=11
 
 pid=""
 stop() {
@@ -42,13 +55,15 @@ launch() {
   sleep 10
 }
 
-# The content's top-left on screen, "x y". System Events gives the window's
-# frame, title bar included, so the content is its bottom WIN_H points.
+# The front window's content top-left on screen, "x y", for content $1 x $2
+# points (default: onboarding). System Events gives the window's frame,
+# title bar included, so the content is its bottom $2 points.
 origin() {
+  local cw=${1:-$WIN_W} ch=${2:-$WIN_H}
   if osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
       set {x, y} to position of window 1
       set {w, h} to size of window 1
-      return (x as text) & \" \" & ((y + h - $WIN_H) as text)
+      return (x as text) & \" \" & ((y + h - $ch) as text)
     end tell" 2>/dev/null; then
     return
   fi
@@ -57,15 +72,25 @@ origin() {
   local bounds
   bounds=$(osascript -e 'tell application "Finder" to get bounds of window of desktop' | tr -d ,)
   read -r _ _ sw sh <<<"$bounds"
-  echo "$(((sw - WIN_W) / 2)) $(((sh - WIN_H) / 2 + 14))"
+  echo "$(((sw - cw) / 2)) $(((sh - ch) / 2 + 14))"
 }
 
+# Click at $1,$2 in a window whose content is $3 x $4 (default: onboarding).
 click() {
   local ox oy
-  read -r ox oy <<<"$(origin)"
+  read -r ox oy <<<"$(origin "${3:-$WIN_W}" "${4:-$WIN_H}")"
   echo "click $1,$2 in a window at $ox,$oy"
   cliclick "c:$((ox + $1)),$((oy + $2))"
   sleep 2
+}
+
+# The menu-bar icon's middle, "x y": from System Events, else TRAY_X/Y.
+tray_spot() {
+  osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
+      set {x, y} to position of menu bar item 1 of menu bar 2
+      set {w, h} to size of menu bar item 1 of menu bar 2
+      return ((x + w div 2) as text) & \" \" & ((y + h div 2) as text)
+    end tell" 2>/dev/null || echo "$TRAY_X $TRAY_Y"
 }
 
 shot() {
@@ -104,5 +129,25 @@ EOF
   # Opening Magi again once onboarding is done: search, with the hint.
   launch
   shot "$theme-4-search-on-launch"
+
+  # Cmd+, in search opens settings (search closes as it loses focus).
+  cliclick kd:cmd t:, ku:cmd
+  sleep 3
+  for i in "${!SECTIONS[@]}"; do
+    click "$NAV_X" "$(nav_y "$i")" "$SET_W" "$SET_H"
+    shot "$theme-5-settings-$((i + 1))-${SECTIONS[$i]}"
+  done
+
+  # The menu-bar icon: its tooltip on hover, then its menu (a click opens
+  # it on macOS), closed again with Esc.
+  read -r tx ty <<<"$(tray_spot)"
+  echo "menu-bar icon at $tx,$ty"
+  cliclick "m:$tx,$ty"
+  sleep 3
+  shot "$theme-6-tray-tooltip"
+  cliclick "c:$tx,$ty"
+  sleep 2
+  shot "$theme-7-tray-menu"
+  cliclick kp:esc
   stop
 done
