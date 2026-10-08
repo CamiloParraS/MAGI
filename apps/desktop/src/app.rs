@@ -84,6 +84,7 @@ pub fn run(
         .with_assets(AppAssets)
         .run(move |cx| {
         gpui_kit::init(cx);
+        cx.set_window_appearance(theme::chrome(&ui.theme));
         SearchView::bind_keys(cx);
         onboarding::bind_keys(cx);
         // `with_animation` then renders each animation's static state.
@@ -193,6 +194,7 @@ impl Shell {
                 if let Some(tray) = &mut self.tray {
                     tray.set_lang(lang, self.live.read(cx).status.as_ref());
                 }
+                cx.set_window_appearance(theme::chrome(&ui.theme));
                 self.live.update(cx, |live, cx| {
                     live.lang = lang;
                     live.theme = ui.theme.clone();

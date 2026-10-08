@@ -110,6 +110,17 @@ pub fn is_dark(theme: &str, appearance: WindowAppearance) -> bool {
     }
 }
 
+/// The native window chrome for `ui.theme`: forced with a forced theme, so
+/// a dark Magi has a dark title bar on a light system, else following the
+/// OS. GPUI applies it on macOS only (`App::set_window_appearance`).
+pub fn chrome(theme: &str) -> Option<WindowAppearance> {
+    match theme {
+        "dark" => Some(WindowAppearance::Dark),
+        "light" => Some(WindowAppearance::Light),
+        _ => None,
+    }
+}
+
 /// Applies `ui.theme` (or the OS appearance) to gpui-component's theme,
 /// which colors its widgets; returns whether it is dark.
 pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
@@ -307,6 +318,14 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forced_theme_forces_the_window_chrome_too() {
+        assert_eq!(chrome("dark"), Some(WindowAppearance::Dark));
+        assert_eq!(chrome("light"), Some(WindowAppearance::Light));
+        // Following the OS: no override, the chrome follows it too.
+        assert_eq!(chrome("system"), None);
+    }
 
     #[test]
     fn the_theme_setting_overrides_the_os_appearance() {
