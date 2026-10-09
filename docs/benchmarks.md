@@ -316,6 +316,39 @@ Manual, read by the user from Task Manager (column not recorded), Windows 11,
 Single readings, not the plan's `PrivateUsage` + working-set pair; CPU not
 recorded.
 
+## Query embedding: SigLIP text tower threads, and why the towers stay sequential (2026-10-08)
+
+Release build, real e5 + SigLIP 2 (q4f16), reference machine on AC power.
+
+**The SigLIP text session ran on 1 intra-op thread**, a leftover from when
+every session did; e5 and the vision tower had since moved to
+`onnx::indexing_threads()` (4 on AC, 2 on battery). Now the text tower uses it
+too. Warm, 100 queries, in process:
+
+| | 1 thread | 4 threads |
+| --- | --: | --: |
+| SigLIP text tower, p50 / p95 | 236 / 264 ms | **94 / 110 ms** |
+| e5 + SigLIP (`QueryVectors::embed`), p50 / p95 | 245 / 267 ms | **101 / 109 ms** |
+
+A standalone bench of the text session alone (q4f16, ORT `2.0.0-rc.13`)
+measured p50 ~180 ms at 2 threads and ~95 ms at 6, with a build peak of
+~835 MB at 1, 2, 4 and 6 threads: **the thread count does not move memory.**
+
+**Embedding the two towers in parallel was tried and reverted.** NFR-12,
+method as above (`PeakWorkingSet64` every 10 ms, one cold `magi-cli search
+--mode hybrid` process per query, 5 queries, empty index, models linked in),
+the two builds interleaved:
+
+| Build | Peak working set | Cold wall time |
+| --- | --: | --: |
+| towers in parallel | 1,206–1,207 MB (10 runs) | 2.8–3.2 s |
+| **towers one after the other** | **843–846 MB** (10 runs) | 3.3–4.2 s |
+
+In parallel, SigLIP's ~800 MB session build lands on top of e5 instead of after
+`OneShotQuery` has freed it, which fails NFR-12 (≤ 900 MB) to save ~7 ms on a
+warm query. `QueryVectors::embed` runs them in order and a unit test pins it.
+What was kept: the Host embeds before taking the shared reader lock.
+
 ## Reproducing
 
 ```

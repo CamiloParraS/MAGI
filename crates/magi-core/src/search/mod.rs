@@ -204,10 +204,14 @@ pub struct QueryVectors {
 }
 
 impl QueryVectors {
-    /// Embeds `query` with both towers at once: they are separate ONNX
-    /// sessions, so the query waits for the slower one, not for both. A
-    /// missing or broken visual model degrades to text-only search rather
-    /// than failing the query.
+    /// Embeds `query` with the text tower, then the visual one. A missing or
+    /// broken visual model degrades to text-only search rather than failing
+    /// the query.
+    ///
+    /// One after the other on purpose (NFR-12): a cold query builds each
+    /// tower's session, and SigLIP's briefly takes ~800 MB. In parallel a
+    /// cold search peaked at 1,206 MB instead of 844 and saved ~7 ms warm
+    /// (docs/benchmarks.md).
     pub fn embed(
         text: Option<&dyn TextEmbedder>,
         image: Option<&dyn ImageEmbedder>,
@@ -216,20 +220,16 @@ impl QueryVectors {
         if query.trim().is_empty() {
             return Ok(Self::default());
         }
-        std::thread::scope(|scope| {
-            let image = image.map(|e| scope.spawn(|| e.embed_query(query)));
-            let text = text.map(|e| e.embed_query(query)).transpose()?;
-            let image =
-                match image.map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))) {
-                    Some(Ok(embedding)) => Some(embedding),
-                    Some(Err(e)) => {
-                        tracing::warn!(error = %e, "visual search unavailable");
-                        None
-                    }
-                    None => None,
-                };
-            Ok(Self { text, image })
-        })
+        let text = text.map(|e| e.embed_query(query)).transpose()?;
+        let image = match image.map(|e| e.embed_query(query)) {
+            Some(Ok(embedding)) => Some(embedding),
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "visual search unavailable");
+                None
+            }
+            None => None,
+        };
+        Ok(Self { text, image })
     }
 }
 
@@ -416,41 +416,19 @@ mod tests {
         );
     }
 
-    /// A tower that, asked for a query vector, signals it started and waits
-    /// for the other tower to start too: embedded one after the other, the
-    /// first gives up and the query fails.
-    struct Rendezvous {
-        mine: crossbeam_channel::Sender<()>,
-        theirs: crossbeam_channel::Receiver<()>,
+    /// Both towers in one: the visual one says it started, and the text one
+    /// waits a moment to see whether that happens while it is still running.
+    struct Watch {
+        image_started: (
+            crossbeam_channel::Sender<()>,
+            crossbeam_channel::Receiver<()>,
+        ),
+        overlapped: std::sync::atomic::AtomicBool,
     }
 
-    impl Rendezvous {
-        fn pair() -> (Self, Self) {
-            let (a_tx, a_rx) = crossbeam_channel::bounded(1);
-            let (b_tx, b_rx) = crossbeam_channel::bounded(1);
-            let text = Rendezvous {
-                mine: a_tx,
-                theirs: b_rx,
-            };
-            let image = Rendezvous {
-                mine: b_tx,
-                theirs: a_rx,
-            };
-            (text, image)
-        }
-
-        fn meet(&self, dim: usize) -> Result<Vec<f32>> {
-            let _ = self.mine.send(());
-            self.theirs
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .map_err(|_| crate::error::Error::Engine("embedded one after the other".into()))?;
-            Ok(vec![1.0; dim])
-        }
-    }
-
-    impl TextEmbedder for Rendezvous {
+    impl TextEmbedder for Watch {
         fn model_id(&self) -> &str {
-            "rendezvous"
+            "watch"
         }
         fn dim(&self) -> usize {
             crate::embed::TEXT_EMBEDDING_DIM
@@ -459,13 +437,18 @@ mod tests {
             unreachable!("only queries are embedded")
         }
         fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
-            self.meet(crate::embed::TEXT_EMBEDDING_DIM)
+            let wait = std::time::Duration::from_millis(200);
+            if self.image_started.1.recv_timeout(wait).is_ok() {
+                self.overlapped
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(vec![1.0; crate::embed::TEXT_EMBEDDING_DIM])
         }
     }
 
-    impl ImageEmbedder for Rendezvous {
+    impl ImageEmbedder for Watch {
         fn model_id(&self) -> &str {
-            "rendezvous"
+            "watch"
         }
         fn dim(&self) -> usize {
             crate::embed::IMAGE_EMBEDDING_DIM
@@ -474,24 +457,23 @@ mod tests {
             unreachable!("only queries are embedded")
         }
         fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
-            self.meet(crate::embed::IMAGE_EMBEDDING_DIM)
+            let _ = self.image_started.0.try_send(());
+            Ok(vec![1.0; crate::embed::IMAGE_EMBEDDING_DIM])
         }
     }
 
+    /// NFR-12: a cold query loads each tower's session, and building
+    /// SigLIP's briefly takes ~800 MB. Loaded alongside e5, a cold search
+    /// peaked at 1,206 MB instead of 844 (docs/benchmarks.md).
     #[test]
-    fn both_towers_embed_the_query_at_once() {
-        let (text, image) = Rendezvous::pair();
-        let vectors = QueryVectors::embed(Some(&text), Some(&image), "harbor").unwrap();
-        assert_eq!(
-            (
-                vectors.text.map(|v| v.len()),
-                vectors.image.map(|v| v.len())
-            ),
-            (
-                Some(crate::embed::TEXT_EMBEDDING_DIM),
-                Some(crate::embed::IMAGE_EMBEDDING_DIM)
-            )
-        );
+    fn the_visual_tower_starts_only_after_the_text_one() {
+        let towers = Watch {
+            image_started: crossbeam_channel::bounded(1),
+            overlapped: Default::default(),
+        };
+        let vectors = QueryVectors::embed(Some(&towers), Some(&towers), "harbor").unwrap();
+        assert!(vectors.text.is_some() && vectors.image.is_some());
+        assert!(!towers.overlapped.into_inner(), "the towers ran at once");
     }
 
     #[test]
@@ -517,11 +499,9 @@ mod tests {
 
     #[test]
     fn a_blank_query_is_not_embedded() {
-        let (text, image) = Rendezvous::pair();
-        // Its partner gone, the text tower fails at once if it is called.
-        drop(image);
-        let vectors = QueryVectors::embed(Some(&text), None, "   ").unwrap();
-        assert_eq!(vectors, QueryVectors::default());
+        use crate::embed::FakeImageEmbedder;
+        let vectors = QueryVectors::embed(Some(&FakeEmbedder), Some(&FakeImageEmbedder), "   ");
+        assert_eq!(vectors.unwrap(), QueryVectors::default());
     }
 
     #[test]
