@@ -671,15 +671,22 @@ impl SettingsView {
         .detach();
     }
 
-    /// The native folder picker (FR-1), then `add_root`.
+    /// The native folder picker (FR-1), then `add_root` for each.
     fn add_folder(&mut self, cx: &mut Context<Self>) {
-        let picked = pick_folder(cx);
+        let picked = pick_folders(cx);
         cx.spawn(async move |this, cx| {
-            if let Some(path) = picked.await {
+            let paths = picked.await;
+            if !paths.is_empty() {
                 let _ = this.update(cx, |view, cx| {
                     view.run(
                         Field::AddFolder,
-                        move |host| host.engine()?.add_root(&path).map(drop),
+                        move |host| {
+                            let engine = host.engine()?;
+                            for path in &paths {
+                                engine.add_root(path)?;
+                            }
+                            Ok(())
+                        },
                         cx,
                     );
                 });
@@ -1607,22 +1614,22 @@ impl Render for SettingsView {
     }
 }
 
-/// The native folder picker (FR-1): the folder chosen, if any.
-pub(crate) fn pick_folder(cx: &App) -> impl Future<Output = Option<std::path::PathBuf>> + use<> {
+/// The native folder picker (FR-1): the folders chosen, several at once.
+pub(crate) fn pick_folders(cx: &App) -> impl Future<Output = Vec<std::path::PathBuf>> + use<> {
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: false,
         directories: true,
-        multiple: false,
+        multiple: true,
         prompt: None,
     });
     async move {
         match picked.await {
-            Ok(Ok(Some(mut paths))) => paths.pop(),
+            Ok(Ok(Some(paths))) => paths,
             Ok(Err(error)) => {
                 tracing::warn!(%error, "the folder picker failed");
-                None
+                Vec::new()
             }
-            _ => None,
+            _ => Vec::new(),
         }
     }
 }

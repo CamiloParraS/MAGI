@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::app::{AppEvent, Events};
 use crate::i18n::Strings;
 use crate::search::view::{Live, turn_on};
-use crate::settings::view::{card, heading, note, pick_folder};
+use crate::settings::view::{card, heading, note, pick_folders};
 use crate::settings::{error_text, hotkey_keystroke, root_state};
 use crate::theme::{self, Palette, Tone};
 
@@ -514,12 +514,11 @@ impl OnboardingView {
     }
 
     fn add_folder(&mut self, cx: &mut Context<Self>) {
-        let picked = pick_folder(cx);
+        let picked = pick_folders(cx);
         cx.spawn(async move |this, cx| {
-            if let Some(path) = picked.await {
-                let _ = this.update(cx, |view, cx| {
-                    view.run_root(move |host| host.engine()?.add_root(&path).map(drop), cx);
-                });
+            let paths = picked.await;
+            if !paths.is_empty() {
+                let _ = this.update(cx, |view, cx| view.add_folders(paths, cx));
             }
         })
         .detach();
@@ -528,7 +527,10 @@ impl OnboardingView {
     /// Folders dropped from the file manager: the user picking them, as
     /// with the picker. Dropped files are ignored.
     fn drop_folders(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        let paths = paths.paths().to_vec();
+        self.add_folders(paths.paths().to_vec(), cx);
+    }
+
+    fn add_folders(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.run_root(
             move |host| {
                 let engine = host.engine()?;
@@ -605,23 +607,41 @@ impl OnboardingView {
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
         let chips = (!offered.is_empty()).then(|| {
+            let mute = p.mute;
             div()
                 .flex()
-                .flex_wrap()
-                .gap_2()
-                .children(offered.into_iter().enumerate().map(|(ix, dir)| {
-                    Button::new(("suggest-folder", ix))
-                        .cursor_pointer()
-                        .outline()
-                        .small()
-                        .icon(IconName::Plus)
-                        .label(folder_name(&dir))
-                        .tooltip(dir.display().to_string())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let dir = dir.clone();
-                            this.run_root(move |host| host.engine()?.add_root(&dir).map(drop), cx);
-                        }))
-                }))
+                .flex_col()
+                .gap(px(6.))
+                .child(note(p).child(s.ob_suggested_folders))
+                .child(div().flex().flex_wrap().gap_2().children(
+                    offered.into_iter().enumerate().map(move |(ix, dir)| {
+                        // Where it is, so it reads as a folder on this computer.
+                        let place = dir.parent().map(|parent| parent.display().to_string());
+                        Button::new(("suggest-folder", ix))
+                            .cursor_pointer()
+                            .outline()
+                            .small()
+                            .icon(IconName::Plus)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(folder_name(&dir))
+                                    .children(
+                                        place.map(|place| div().text_color(mute).child(place)),
+                                    ),
+                            )
+                            .tooltip(dir.display().to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let dir = dir.clone();
+                                this.run_root(
+                                    move |host| host.engine()?.add_root(&dir).map(drop),
+                                    cx,
+                                );
+                            }))
+                    }),
+                ))
         });
         div()
             .flex()

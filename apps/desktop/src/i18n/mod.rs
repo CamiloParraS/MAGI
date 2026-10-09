@@ -224,6 +224,8 @@ pub struct Strings {
     pub welcome: &'static str,
     /// In the empty folders drop zone, above Add folder.
     pub ob_drop_folders: &'static str,
+    /// Above the one-click folder suggestions.
+    pub ob_suggested_folders: &'static str,
     /// The setup button when the chosen features download something;
     /// `{size}` is the total, read as it is agreed to (FR-10).
     pub ob_download_and_start: &'static str,
