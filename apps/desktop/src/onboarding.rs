@@ -131,6 +131,8 @@ pub(crate) fn suggested_folders<V: 'static>(
                         Button::new(("suggest-folder", ix))
                             .cursor_pointer()
                             .outline()
+                            // The dark theme's outline (`input`) reads as white.
+                            .when(p.dark, |b| b.border_0())
                             // xsmall keeps all four on one row under onboarding's
                             // folder list.
                             .xsmall()
