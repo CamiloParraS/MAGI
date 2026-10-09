@@ -193,6 +193,7 @@ pub const STRINGS: Strings = Strings {
     welcome: "Te damos la bienvenida a Magi",
     ob_drop_folders: "Suelta carpetas aquí, o selecciona una o varias",
     ob_suggested_folders: "Carpetas sugeridas",
+    ob_add_all_folders: "Agregar todas",
     ob_download_and_start: "Descargar {size} y empezar",
     ob_start: "Empezar",
     back: "Volver",

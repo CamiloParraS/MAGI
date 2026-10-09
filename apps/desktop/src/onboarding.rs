@@ -8,6 +8,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -273,6 +274,8 @@ pub struct OnboardingView {
     /// user trying the hotkey.
     hotkey_presses: u32,
     focus: FocusHandle,
+    /// The folder list's scroll, shared with its scrollbar.
+    scroll: ScrollHandle,
     /// Focused while the finish step's shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
@@ -334,6 +337,7 @@ impl OnboardingView {
             forward: true,
             hotkey_presses,
             focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
             recorder: cx.focus_handle(),
             recording: false,
             held: Modifiers::default(),
@@ -574,12 +578,33 @@ impl OnboardingView {
                         .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
                 ),
             // The same grouped list as the features, Add folder its last row.
+            // The folders scroll on their own past a few rows, so a long list
+            // leaves Add folder, the suggestions and the footer in view.
             Some(roots) => group(p)
-                .children(roots.iter().enumerate().map(|(ix, root)| {
+                .child(
+                    // Not overflow_y_scrollbar(): its scroll area is 100% of
+                    // a box with only a max height, so it grows, unscrollable.
                     div()
-                        .children((ix > 0).then(|| divider(p)))
-                        .child(self.root_row(root, s, p, cx))
-                }))
+                        .relative()
+                        .child(
+                            div()
+                                .id("folder-list")
+                                .max_h(px(240.))
+                                // A lane for the scrollbar, clear of the
+                                // remove buttons.
+                                .pr(px(10.))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.scroll)
+                                .flex()
+                                .flex_col()
+                                .children(roots.iter().enumerate().map(|(ix, root)| {
+                                    div()
+                                        .children((ix > 0).then(|| divider(p)))
+                                        .child(self.root_row(root, s, p, cx))
+                                })),
+                        )
+                        .vertical_scrollbar(&self.scroll),
+                )
                 .child(divider(p))
                 // The whole row is the button: click and hover anywhere on it.
                 .child(
@@ -607,31 +632,39 @@ impl OnboardingView {
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
         let chips = (!offered.is_empty()).then(|| {
-            let mute = p.mute;
+            let all = offered.clone();
             div()
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .child(note(p).child(s.ob_suggested_folders))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(note(p).mt_0().child(s.ob_suggested_folders))
+                        // Several at once, as the picker allows.
+                        .children((all.len() > 1).then(|| {
+                            Button::new("suggest-all")
+                                .cursor_pointer()
+                                .ghost()
+                                .xsmall()
+                                .label(s.ob_add_all_folders)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.add_folders(all.clone(), cx)
+                                }))
+                        })),
+                )
                 .child(div().flex().flex_wrap().gap_2().children(
                     offered.into_iter().enumerate().map(move |(ix, dir)| {
-                        // Where it is, so it reads as a folder on this computer.
-                        let place = dir.parent().map(|parent| parent.display().to_string());
                         Button::new(("suggest-folder", ix))
                             .cursor_pointer()
                             .outline()
-                            .small()
+                            // xsmall keeps all four on one row under the
+                            // taller folder list.
+                            .xsmall()
                             .icon(IconName::Plus)
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(folder_name(&dir))
-                                    .children(
-                                        place.map(|place| div().text_color(mute).child(place)),
-                                    ),
-                            )
+                            .label(folder_name(&dir))
                             .tooltip(dir.display().to_string())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let dir = dir.clone();
