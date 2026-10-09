@@ -35,7 +35,7 @@ fn split_words(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn split_camel_case(s: &str) -> Vec<&str> {
+pub(crate) fn split_camel_case(s: &str) -> Vec<&str> {
     let chars: Vec<(usize, char)> = s.char_indices().collect();
     let mut result = Vec::new();
     let mut start = 0;

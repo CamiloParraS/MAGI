@@ -518,6 +518,37 @@ filename chunk is doing real work and should stay as the spec says.
 `walls-io-whiteboard.jpg` (a weekly schedule) in through the visual list, and the
 0.10 cosine floor was calibrated on 15 images. Not changed.
 
+## 2026-10-08: one tokenizer for the filename boost, and a baseline that fell
+
+`filename_boost` split the query on whitespace only and the file name on
+non-alphanumerics, without camelCase or accent folding, so `budget_report`,
+`invoice,`, `irradiacion solar` (vs `irradiacionSolar.py`) and `cancion` (vs
+`canción.mp3`, composed or macOS-decomposed) got no boost. Both sides now go
+through `fuse::match_words`. Same 164 queries, release build, real models,
+fresh DB, run back to back on the same machine:
+
+| Mode        | r@5 before → after | MRR before → after |
+| ----------- | -----------------: | -----------------: |
+| fts-only    |      0.311 → 0.311 |      0.202 → 0.202 |
+| vector-only |      0.848 → 0.848 |      0.579 → 0.585 |
+| visual-only |      0.488 → 0.488 |      0.367 → 0.381 |
+| **hybrid**  |  **0.951 → 0.951** |  **0.730 → 0.733** |
+
+Small and one-directional: no recall changes, the hybrid miss list is
+identical, the only dip is vector-only `img` MRR 0.606 → 0.601. `cross` is
+untouched (the boost is still language-blind).
+
+**Open: the "before" column is well below the last recorded state** (the OCR
+fix above: hybrid r@5 0.982 / MRR 0.880; vector-only MRR 0.710 at the photo
+batch). Hybrid by bucket now: `en` 0.727, `es` 0.700, `kw` 0.550, `cross`
+0.205 MRR, against 0.967 / 0.925 / 0.925 / 0.312 recorded. Not attributed. The
+two 2026-10-08 search refactors (typed hits, parallel query embedding) don't
+touch ranking, and vector-only fell too. One unverified suspect is
+`recency_boost`: it reads the fixtures' working-tree mtimes, which now span
+more than the 30-day window, so it can reorder near-ties by up to ×1.1.
+Re-running the photo-batch commit on this machine would settle whether it is
+the code or the environment.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

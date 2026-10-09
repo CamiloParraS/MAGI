@@ -15,7 +15,9 @@ use crate::dto::MatchSource;
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::Result;
 use crate::extract::ChunkSource;
-use crate::search::fuse::{RankedList, filename_boost, recency_boost, reciprocal_rank_fusion};
+use crate::search::fuse::{
+    RankedList, filename_boost, match_words, recency_boost, reciprocal_rank_fusion,
+};
 
 pub const FTS_FETCH_LIMIT: u32 = 100;
 pub const VECTOR_FETCH_LIMIT: u32 = 100;
@@ -129,11 +131,7 @@ pub fn rank_and_boost(
         },
     ]);
 
-    let query_tokens: Vec<String> = query
-        .to_lowercase()
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    let query_tokens = match_words(query);
     let now = now_unix();
 
     let mut by_id: HashMap<i64, [Option<&FileHit>; 3]> = HashMap::new();

@@ -1,7 +1,12 @@
 //! Reciprocal Rank Fusion plus filename/recency boosts. Implemented in M3
 //! (see SPEC.md §5.6).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
+
+use crate::extract::filename::split_camel_case;
 
 /// RRF's rank-damping constant (SPEC.md §5.6 step 4: `score = Σ w_i / (60 + rank_i)`).
 const RRF_K: f64 = 60.0;
@@ -33,25 +38,30 @@ pub fn reciprocal_rank_fusion(lists: &[RankedList]) -> Vec<(i64, f64)> {
     ranked
 }
 
-fn tokenize_filename(file_name: &str) -> std::collections::HashSet<String> {
-    file_name
-        .to_lowercase()
+/// The words a query and a file name are compared by: accents dropped (from
+/// composed or decomposed text alike), split on anything not alphanumeric
+/// and on camelCase like the filename chunk, lowercased.
+pub fn match_words(text: &str) -> Vec<String> {
+    let folded: String = text.nfd().filter(|&c| !is_combining_mark(c)).collect();
+    folded
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .flat_map(split_camel_case)
+        .map(str::to_lowercase)
         .collect()
 }
 
 /// Filename-token overlap boost (SPEC.md §5.6 step 5): up to ×1.2,
 /// scaled by the fraction of query tokens present in the file name.
+/// `query_tokens` are the query's [`match_words`].
 pub fn filename_boost(query_tokens: &[String], file_name: &str) -> f64 {
     if query_tokens.is_empty() {
         return 1.0;
     }
-    let name_tokens = tokenize_filename(file_name);
+    let name_tokens: HashSet<String> = match_words(file_name).into_iter().collect();
     let matched = query_tokens
         .iter()
-        .filter(|t| name_tokens.contains(&t.to_lowercase()))
+        .filter(|t| name_tokens.contains(*t))
         .count();
     let overlap = matched as f64 / query_tokens.len() as f64;
     1.0 + 0.2 * overlap
@@ -129,6 +139,28 @@ mod tests {
     fn filename_boost_no_overlap_is_one() {
         let tokens = vec!["recipe".to_string()];
         assert_eq!(filename_boost(&tokens, "quarterly_report.pdf"), 1.0);
+    }
+
+    /// The query is split like the file name, so neither side's spelling of
+    /// the same words costs the boost.
+    #[test]
+    fn filename_boost_matches_the_words_however_they_are_written() {
+        for (query, file_name) in [
+            ("budget_report", "budget_report.txt"),
+            ("invoice, march", "invoice-march.pdf"),
+            ("irradiacion solar", "irradiacionSolar.py"),
+            ("cancion", "canción.mp3"),
+            ("canción", "cancion.mp3"),
+            // macOS stores names decomposed: `o` then a combining acute.
+            ("cancion", "cancio\u{301}n.mp3"),
+            ("Invoice", "INVOICE.pdf"),
+        ] {
+            let boost = filename_boost(&match_words(query), file_name);
+            assert!(
+                (boost - 1.2).abs() < 1e-9,
+                "{query:?} vs {file_name:?}: {boost}"
+            );
+        }
     }
 
     #[test]
