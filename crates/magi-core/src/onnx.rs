@@ -46,7 +46,7 @@ pub(crate) fn init() -> Result<()> {
     Ok(())
 }
 
-/// Intra-op threads for the indexing models (e5, SigLIP vision, OCR): 4 on
+/// Intra-op threads for the models (e5, both SigLIP towers, OCR): 4 on
 /// AC power, 2 on battery or when the platform cannot tell (NFR-8).
 /// Measured in docs/perf-investigation.md: e5 7-8 -> ~12 chunks/s at 4.
 ///

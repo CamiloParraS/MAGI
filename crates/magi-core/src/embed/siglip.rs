@@ -63,9 +63,11 @@ fn load_text() -> Result<TextTower> {
     // Session first: building it briefly takes ~2x the model file (~800 MB),
     // and the Gemma tokenizer (~64 MB resident) shouldn't sit on top of that
     // peak (NFR-12, docs/benchmarks.md).
+    // Thread count doesn't move that peak (835 MB at 1, 4 or 6 threads);
+    // 1 thread made every visual query cost ~260 ms instead of ~110 ms.
     let session = Mutex::new(crate::onnx::session(
         &dir.join("text_model.onnx"),
-        1,
+        crate::onnx::indexing_threads(),
         false,
     )?);
     let tokenizer_path = dir.join("tokenizer.json");

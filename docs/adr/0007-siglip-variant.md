@@ -102,3 +102,15 @@ visual matches have a median of 0.139 (weakest non-OCR ~0.105). Measured with
 fp32 vectors; q4f16 cosines move by ~0.01, well inside that margin. **The
 number belongs to this model and this small fixture set.** Recalibrate on any
 model change and on a real photo library.
+
+## Follow-up: the text tower's threads (2026-10-08)
+
+The latency above was Python at 4 threads; the shipped text session ran on 1
+and cost ~236 ms per query. It now uses `onnx::indexing_threads()` (4 on AC, 2
+on battery): ~94 ms p50 on the reference machine, same q4f16 file. Thread
+count changes neither the session's ~835 MB build peak nor the embeddings
+(cosine 1.0000 against the 1-thread output), so `IMAGE_MIN_COSINE` is
+unchanged. Other text-tower files at the pinned revision were measured and
+rejected: int8/uint8 lose quality (top-1 image changes on 4-5 of 29 visual
+queries); fp32 and q4 are faster but peak at ~1.6-1.9 GB (NFR-12); fp16 and
+bnb4 are slower. Numbers in docs/benchmarks.md.
