@@ -589,6 +589,37 @@ output to the baseline, every bucket and the miss list: the queries are
 complete words, so only search-as-you-type gains (`arep` finds `arepas`
 before the word is finished).
 
+## 2026-10-08: random file names (`just eval-random`)
+
+The case magi exists for: the same files, but named `29ab99be9520eacd.txt`.
+`fixtures/random_names/` (local, byte-identical copies of the corpus) with
+`eval/random_names.jsonl` (the same queries, each answer swapped for its copy;
+`skip` left out, 163 queries). Same build as the prefix change above, release,
+real models. The other column is the clean `just eval` run above (164 queries,
+including the one `skip` query, which hits).
+
+| Hybrid, by bucket | named r@5 / MRR | random names r@5 / MRR |
+| ----------------- | --------------: | ---------------------: |
+| en                |   1.000 / 0.975 |          1.000 / 0.975 |
+| es                |   1.000 / 0.925 |          1.000 / 0.925 |
+| kw                |   1.000 / 1.000 |          1.000 / 1.000 |
+| **cross**         |   0.900 / 0.363 |      **0.400 / 0.215** |
+| img               |   1.000 / 0.940 |          0.862 / 0.833 |
+| img2              |   0.981 / 0.944 |          0.944 / 0.886 |
+| ocr / qr          |   1.000 / 1.000 |          1.000 / 1.000 |
+| **overall**       | **0.982 / 0.881** |    **0.883 / 0.824** |
+
+- **Same-language text loses nothing.** `en`, `es` and `kw` are identical:
+  content carries them.
+- **Photos mostly hold, through the visual list.** visual-only `img2` is
+  0.963 r@5 either way; the text-vector list drops from 0.815 to 0.130 there,
+  so for photos it was finding the file name, not the picture.
+- **Cross-lingual search collapses: r@5 0.900 -> 0.400.** With a name, the
+  filename chunk is the bridge (`receta_arepas.txt` for "arepas recipe", as
+  the `cross` fix above found). Without it, e5 alone puts the other-language
+  document in the top 5 for 8 of 20 queries. This is the largest gap on the
+  use case magi is for, and the next ranking target.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
