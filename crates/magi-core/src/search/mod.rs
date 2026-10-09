@@ -562,21 +562,19 @@ mod tests {
     #[test]
     fn filename_overlap_boosts_ranking() {
         let (_dir, mut conn) = open_test_db();
-        // Identical body text (so FTS and vector scores are exactly tied
-        // pre-boost, up to KNN tie-break order) and only the filename
-        // differs — isolates filename_boost's effect on the final order.
-        // Neither body contains "budget", so FTS's implicit AND across
-        // query terms can't match either file on it; only the vector list
-        // and the filename boost are in play for that term.
+        // Identical body text, so FTS and vector scores tie exactly and
+        // both lists break the tie by row id: `other.txt`, inserted first,
+        // leads both. Only filename_boost (×1.1 for "budget") can overcome
+        // that (RRF 1/61 vs 1/62 per list, a ~1.6% gap).
         index_text(
             &mut conn,
-            "/roots/a/budget_report.txt",
+            "/roots/a/other.txt",
             "the quarterly numbers were reviewed",
             0,
         );
         index_text(
             &mut conn,
-            "/roots/a/other.txt",
+            "/roots/a/budget_report.txt",
             "the quarterly numbers were reviewed",
             0,
         );

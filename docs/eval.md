@@ -568,6 +568,27 @@ absolute numbers are not comparable with the rest of this file.
 **Keep `fixtures/corpus/` to the tracked fixtures plus `local/`**: anything
 else in it is indexed by `magi-cli eval` and scored against.
 
+## 2026-10-08: keyword search, OR-ed words rejected, last-word prefix kept
+
+Same build, clean corpus (`random_names/` moved to `fixtures/random_names/`),
+164 queries, against the clean baseline above (hybrid r@5 0.982 / MRR 0.881).
+
+**OR-ing the query words (plus a last-word prefix): rejected.** fts-only
+improved a lot (r@5 0.311 -> 0.707, `en`/`es` MRR 0.550/0.700 -> 1.000), but
+hybrid fell: r@5 0.982 -> **0.890**, MRR 0.881 -> **0.773**; `cross` r@5
+0.900 -> 0.600, `img` / `img2` 1.000 / 0.981 -> 0.897 / 0.870, `kw` MRR
+1.000 -> 0.900. Small words (`a`, `de`, `with`, `of`) match nearly every
+chunk, so the keyword list fills to 100 files of noise and RRF credits each
+of them; `a stack of pancakes with syrup and walnuts` then ranks a photo of
+paper pages first. Making OR work would need a stopword list per language or
+a BM25 floor, each a tuning problem of its own. Every word stays required
+(`fts::tests::a_chunk_missing_a_word_is_not_a_keyword_match` pins it).
+
+**Last word as a prefix (`"receta" "arep"*`): kept.** Byte-identical eval
+output to the baseline, every bucket and the miss list: the queries are
+complete words, so only search-as-you-type gains (`arep` finds `arepas`
+before the word is finished).
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

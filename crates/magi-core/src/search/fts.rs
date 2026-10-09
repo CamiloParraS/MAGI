@@ -13,13 +13,17 @@ use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
 /// Escapes `query` for FTS5 by wrapping each whitespace-separated term in
 /// double quotes (doubling any embedded quotes), so user input can never
-/// inject FTS syntax (see SPEC.md §5.6 step 1).
+/// inject FTS syntax (see SPEC.md §5.6 step 1). Every term must match; the
+/// last is a prefix, since search runs as the user types.
 pub fn sanitize_query(query: &str) -> String {
-    query
+    let terms: Vec<String> = query
         .split_whitespace()
         .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect();
+    if terms.is_empty() {
+        return String::new();
+    }
+    terms.join(" ") + "*"
 }
 
 /// Markers `snippet()` puts around matched terms. Unicode private-use
@@ -125,9 +129,45 @@ mod tests {
 
     #[test]
     fn sanitizes_query_terms() {
-        assert_eq!(sanitize_query("hello world"), "\"hello\" \"world\"");
-        assert_eq!(sanitize_query("a\"b"), "\"a\"\"b\"");
+        assert_eq!(sanitize_query("hello world"), "\"hello\" \"world\"*");
+        assert_eq!(sanitize_query("a\"b"), "\"a\"\"b\"*");
+        assert_eq!(sanitize_query("OR"), "\"OR\"*");
         assert_eq!(sanitize_query(""), "");
+    }
+
+    /// Every word must match. OR-ing them was measured and rejected: small
+    /// words (`a`, `de`, `with`) match nearly every chunk, the keyword list
+    /// fills with noise that RRF still credits, and hybrid recall@5 fell
+    /// 0.982 -> 0.890 (docs/eval.md).
+    #[test]
+    fn a_chunk_missing_a_word_is_not_a_keyword_match() {
+        let (_dir, mut conn) = open_test_db();
+        index_text(
+            &mut conn,
+            "/roots/a/recipe.txt",
+            "receta de arepas con queso",
+        );
+        assert!(
+            search_fts(&conn, "arepas from grandma", 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Search runs as the user types: the last word may be unfinished.
+    #[test]
+    fn the_last_word_matches_as_a_prefix() {
+        let (_dir, mut conn) = open_test_db();
+        index_text(
+            &mut conn,
+            "/roots/a/recipe.txt",
+            "receta de arepas con queso",
+        );
+        assert_eq!(search_fts(&conn, "receta arep", 10).unwrap().len(), 1);
+        // Only the last: an unfinished earlier word is a typo, not a prefix.
+        assert!(search_fts(&conn, "arep receta", 10).unwrap().is_empty());
+        assert_eq!(search_fts(&conn, "arep", 10).unwrap().len(), 1);
+        assert!(search_fts(&conn, "arep zzz", 10).unwrap().is_empty());
     }
 
     #[test]
