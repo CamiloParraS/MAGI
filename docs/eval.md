@@ -126,6 +126,9 @@ from measuring the right thing.
 
 ### Open finding: the filename/recency boosts look net-negative
 
+_Superseded 2026-10-08: on the clean corpus both boosts are neutral for
+hybrid; see "Pricing the boosts" below._
+
 Now that baselines run boosted, the boosts can be priced. On the original 60
 queries, vector-only's int8 MRR was 0.814 unboosted (the figure recorded in
 `docs/progress.md` before this change) and is 0.796 boosted — the boosts **cost** ~0.018 MRR, and hybrid was already paying it.
@@ -620,6 +623,33 @@ including the one `skip` query, which hits).
   document in the top 5 for 8 of 20 queries. This is the largest gap on the
   use case magi is for, and the next ranking target.
 
+## 2026-10-08: pricing the boosts (clean corpus)
+
+Each boost switched off in a throwaway build, everything else as shipped,
+the 164 queries over the clean `fixtures/corpus`:
+
+| Hybrid                | r@5   | MRR       | cross MRR | es MRR | img / img2 MRR |
+| --------------------- | ----- | --------- | --------- | ------ | -------------- |
+| both boosts (shipped) | 0.982 | **0.881** | 0.363     | 0.925  | 0.940 / 0.944  |
+| no `filename_boost`   | 0.982 | 0.880     | 0.380     | 0.900  | 0.957 / 0.935  |
+| no `recency_boost`    | 0.982 | 0.881     | 0.363     | 0.925  | 0.940 / 0.944  |
+
+- **`recency_boost` does nothing here**: hybrid output is identical without
+  it. The fixtures' mtimes span a few weeks of checkouts, so this corpus
+  cannot price it; it is for a real library with years of mtimes. Kept as the
+  spec says.
+- **`filename_boost` is neutral overall** (+0.001 MRR) and trades buckets:
+  +0.025 on `es`, +0.009 on `img2`, -0.017 on `cross`, -0.017 on `img`. The
+  -0.018 of the open finding above was measured before the tokenizer fix and
+  on 70 queries; it does not hold now. Kept.
+- **`cross` MRR is not a boost problem.** No boost lifts it past 0.380, and
+  every one of the 20 `cross` queries has a same-language twin in the corpus
+  (`team meeting notes` -> `en/meeting_notes.txt`, ahead of the expected
+  Spanish notes), so a correct ranking puts the expected file second: MRR
+  sits near 0.5 by design. The `cross` gap that matters is recall without names
+  (0.400 above), which no boost can touch: with random names
+  `filename_boost` has nothing to match and the copies share one mtime.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
@@ -627,8 +657,6 @@ including the one `skip` query, which hits).
   hand-written queries over synthetic fixtures, and the quantization recall
   comparison stays provisional until the corpus has real ambiguity and
   near-duplicates in it.
-- Pricing the filename/recency boosts per bucket (see the open finding
-  above): they cost ~0.018 MRR on `en`/`cross` and help on `kw`.
 - Vector search's brute-force scaling beyond 100k chunks (above) — 100k
   now passes with headroom, but the growth is linear, so a much larger
   corpus will need sqlite-vec's partitioning/quantization or an
