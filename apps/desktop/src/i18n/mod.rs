@@ -227,9 +227,9 @@ pub struct Strings {
     /// At the right of the Add folders row, once folders are listed.
     pub ob_or_drop_folders: &'static str,
     /// Above the one-click folder suggestions.
-    pub ob_suggested_folders: &'static str,
+    pub suggested_folders: &'static str,
     /// Beside that heading: adds every suggestion at once.
-    pub ob_add_all_folders: &'static str,
+    pub add_all_folders: &'static str,
     /// The setup button when the chosen features download something;
     /// `{size}` is the total, read as it is agreed to (FR-10).
     pub ob_download_and_start: &'static str,

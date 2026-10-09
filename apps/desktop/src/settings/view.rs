@@ -49,6 +49,7 @@ use super::{
 };
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
+use crate::onboarding::{suggested_folders, suggestions};
 use crate::search::view::{Live, turn_on};
 use crate::theme::{self, Backdrop, Palette, Tone};
 
@@ -231,6 +232,8 @@ pub struct SettingsView {
     dark: bool,
     /// The roots when the window opened, shown until the first status.
     opening_roots: Option<Vec<RootStatus>>,
+    /// Offered for one-click adding, as in onboarding.
+    user_folders: Vec<std::path::PathBuf>,
     /// Read when the Index section opens, after its actions, and when the
     /// error count changes.
     unreadable: Option<Vec<FileError>>,
@@ -395,6 +398,7 @@ impl SettingsView {
             pane_scroll: ScrollHandle::new(),
             dark: false,
             opening_roots,
+            user_folders: magi_core::paths::user_folders(),
             unreadable: None,
             errors_listed: None,
             error: None,
@@ -677,22 +681,24 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let paths = picked.await;
             if !paths.is_empty() {
-                let _ = this.update(cx, |view, cx| {
-                    view.run(
-                        Field::AddFolder,
-                        move |host| {
-                            let engine = host.engine()?;
-                            for path in &paths {
-                                engine.add_root(path)?;
-                            }
-                            Ok(())
-                        },
-                        cx,
-                    );
-                });
+                let _ = this.update(cx, |view, cx| view.add_folders(paths, cx));
             }
         })
         .detach();
+    }
+
+    fn add_folders(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        self.run(
+            Field::AddFolder,
+            move |host| {
+                let engine = host.engine()?;
+                for path in &paths {
+                    engine.add_root(path)?;
+                }
+                Ok(())
+            },
+            cx,
+        );
     }
 
     /// Asks first: clearing forgets every indexed file.
@@ -844,6 +850,11 @@ impl SettingsView {
                     ),
             )
             .child(stack().children(list).children(add_problem))
+            .children(roots.and_then(|roots| {
+                let offered = suggestions(&self.user_folders, roots);
+                suggested_folders(offered, s, p, cx, Self::add_folders)
+                    .map(|chips| chips.mt(px(12.)))
+            }))
             .child(
                 div()
                     .mt(px(22.))

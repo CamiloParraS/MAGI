@@ -87,6 +87,64 @@ fn folder_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// The one-click folder suggestions, with "Add all" when there are several;
+/// `None` with none left. Onboarding and Settings share it; `add` takes the
+/// chosen folders.
+pub(crate) fn suggested_folders<V: 'static>(
+    offered: Vec<PathBuf>,
+    s: &Strings,
+    p: &Palette,
+    cx: &Context<V>,
+    add: fn(&mut V, Vec<PathBuf>, &mut Context<V>),
+) -> Option<Div> {
+    if offered.is_empty() {
+        return None;
+    }
+    let all = offered.clone();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(note(p).mt_0().child(s.suggested_folders))
+                    // Several at once, as the picker allows.
+                    .children((all.len() > 1).then(|| {
+                        Button::new("suggest-all")
+                            .cursor_pointer()
+                            .ghost()
+                            .xsmall()
+                            .label(s.add_all_folders)
+                            .on_click(cx.listener(move |this, _, _, cx| add(this, all.clone(), cx)))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(offered.into_iter().enumerate().map(|(ix, dir)| {
+                        Button::new(("suggest-folder", ix))
+                            .cursor_pointer()
+                            .outline()
+                            // xsmall keeps all four on one row under onboarding's
+                            // folder list.
+                            .xsmall()
+                            .icon(IconName::Plus)
+                            .label(folder_name(&dir))
+                            .tooltip(dir.display().to_string())
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| add(this, vec![dir.clone()], cx)),
+                            )
+                    })),
+            ),
+    )
+}
+
 /// Not on disk and not on its way.
 fn missing(f: &FeatureStatus) -> bool {
     matches!(f.install, Install::NotInstalled | Install::Failed { .. })
@@ -640,51 +698,7 @@ impl OnboardingView {
                 ),
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
-        let chips = (!offered.is_empty()).then(|| {
-            let all = offered.clone();
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(note(p).mt_0().child(s.ob_suggested_folders))
-                        // Several at once, as the picker allows.
-                        .children((all.len() > 1).then(|| {
-                            Button::new("suggest-all")
-                                .cursor_pointer()
-                                .ghost()
-                                .xsmall()
-                                .label(s.ob_add_all_folders)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.add_folders(all.clone(), cx)
-                                }))
-                        })),
-                )
-                .child(div().flex().flex_wrap().gap_2().children(
-                    offered.into_iter().enumerate().map(move |(ix, dir)| {
-                        Button::new(("suggest-folder", ix))
-                            .cursor_pointer()
-                            .outline()
-                            // xsmall keeps all four on one row under the
-                            // taller folder list.
-                            .xsmall()
-                            .icon(IconName::Plus)
-                            .label(folder_name(&dir))
-                            .tooltip(dir.display().to_string())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let dir = dir.clone();
-                                this.run_root(
-                                    move |host| host.engine()?.add_root(&dir).map(drop),
-                                    cx,
-                                );
-                            }))
-                    }),
-                ))
-        });
+        let chips = suggested_folders(offered, s, p, cx, Self::add_folders);
         div()
             .flex()
             .flex_col()
