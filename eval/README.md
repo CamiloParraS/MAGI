@@ -48,6 +48,10 @@ Same queries and answers, so the gap between the two runs is what names were
 contributing. `skip` is left out: it checks that a file is found by its name.
 The folder must stay outside `fixtures/corpus/`, or `just eval` indexes the
 copies and scores them as wrong answers (docs/eval.md).
+`fixtures/realistic_names/` is the same files under camera-style and
+"New Text Document" names (`python tools/realistic_names.py`, then
+`python tools/random_names_queries.py realistic_names`; run with
+`just eval-random realistic_names`), also local only.
 
 Run with `just eval` (`magi-cli eval eval/queries.jsonl --corpus
 fixtures/corpus`) — indexes the corpus into a fresh temp DB with the real

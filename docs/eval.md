@@ -650,6 +650,47 @@ the 164 queries over the clean `fixtures/corpus`:
   (0.400 above), which no boost can touch: with random names
   `filename_boost` has nothing to match and the copies share one mtime.
 
+## 2026-10-09: realistic file names, and the opaque-name fix rejected
+
+The hex names above are not what a user's folders look like. Real ones are
+`IMG_0042.JPG`, `DSC_4301.JPG`, `PXL_20240827_...jpg`, WhatsApp's
+`IMG-20240711-WA0967.jpg`, `Screenshot_...png`, `New Text Document (3).txt`,
+`Book3.xlsx`, with some hex and UUID downloads. `tools/realistic_names.py`
+copies `fixtures/random_names/` (same 126 files, same bytes) to
+`fixtures/realistic_names/` under a seeded mix of those;
+`just eval-random realistic_names` runs it (163 queries).
+
+**The opaque-name fix** (tried, not committed): no `vec_text` row for a
+filename chunk with no word in it (`has_words`: no run of 3+ letters other
+than hex digits and the extension). Hybrid, release, real models:
+
+| Hybrid r@5 / MRR     |     overall | cross | img   | img2  |
+| -------------------- | ----------: | ----: | ----- | ----- |
+| hex names            | 0.883 / 0.824 | 0.400 | 0.862 | 0.944 |
+| hex + fix            | 0.613 / 0.535 | 0.650 |       | 0.370 |
+| **realistic names**  | **0.902 / 0.834** | **0.600** | 0.931 | 0.889 |
+| realistic + fix      | 0.847 / 0.773 | 0.650 | 0.793 | 0.778 |
+
+(A cosine floor of 0.80 on the text-vector list, on top of the fix, brought
+hex names to 0.804 / 0.629 but cost the named corpus 0.982 -> 0.957; rejected.)
+
+- **The hex corpus overstated the `cross` gap.** With realistic names `cross`
+  is 0.600, not 0.400, and the misses are not crowding: all 8 have their
+  same-language twin as the top hit, and vector-only `cross` recall@10 equals
+  hybrid's (0.650). It is e5's cross-lingual reach against a twin, which no
+  fusion change touches.
+- **The fix is a net loss either way** (-0.055 r@5 on realistic names). Every
+  photo's junk name vector puts it in the text-vector list as well as the
+  visual one, and RRF rewards being in two lists over being #1 in one. The fix
+  takes that away from some photos (hex, UUID, `20240107_094959.jpg`) and not
+  from others (`IMG_`, `DSC_`, `PXL_` count as words), so the ones that keep it
+  outrank the ones that lost it: `a double-decker bus` now ranks `IMG_0494.JPG`
+  first. Rejected; `filename_chunk` stays embedded for every file, as the spec
+  says.
+- Raising the visual list's weight was the next candidate, to let a visual #1
+  beat text-vector junk. With the fix gone every photo is in both lists again,
+  so it would be tuning against the accident rather than removing it; not run.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

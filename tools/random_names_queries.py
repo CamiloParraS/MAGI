@@ -5,15 +5,19 @@ queries and answers stay the same and only the names stop helping.
 
 The `skip` bucket is left out: it checks that a file is found by its name.
 
-Run from the repo root: python tools/random_names_queries.py
+Run from the repo root: python tools/random_names_queries.py [folder]
+`folder` defaults to random_names; `realistic_names` writes
+eval/realistic_names.jsonl from fixtures/realistic_names/ the same way.
 """
 
 import collections
 import hashlib
 import json
 import pathlib
+import sys
 
 FIXTURES = pathlib.Path("fixtures")
+FOLDER = sys.argv[1] if len(sys.argv) > 1 else "random_names"
 
 
 def sha256(path):
@@ -21,7 +25,7 @@ def sha256(path):
 
 
 copies = collections.defaultdict(list)
-for path in sorted((FIXTURES / "random_names").iterdir()):
+for path in sorted((FIXTURES / FOLDER).iterdir()):
     if path.is_file():
         copies[sha256(path)].append(path.name)
 
@@ -32,7 +36,7 @@ original = {
 
 written = 0
 with open("eval/queries.jsonl", encoding="utf-8") as src, open(
-    "eval/random_names.jsonl", "w", encoding="utf-8", newline="\n"
+    f"eval/{FOLDER}.jsonl", "w", encoding="utf-8", newline="\n"
 ) as out:
     for line in src:
         if not line.strip():
@@ -51,4 +55,4 @@ with open("eval/queries.jsonl", encoding="utf-8") as src, open(
         out.write(json.dumps(query, ensure_ascii=False) + "\n")
         written += 1
 
-print(f"wrote {written} queries to eval/random_names.jsonl")
+print(f"wrote {written} queries to eval/{FOLDER}.jsonl")

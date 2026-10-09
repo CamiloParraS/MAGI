@@ -39,9 +39,10 @@ eval:
     cargo run -p magi-cli --release -- eval eval/queries.jsonl --corpus fixtures/corpus
 
 # The same queries over local copies of the corpus with random file names
-# (fixtures/random_names/, not in git): search when names don't help
-eval-random:
-    cargo run -p magi-cli --release -- eval eval/random_names.jsonl --corpus fixtures/random_names
+# (fixtures/random_names/, not in git): search when names don't help.
+# `just eval-random realistic_names`: the same files under camera-style names
+eval-random names="random_names":
+    cargo run -p magi-cli --release -- eval eval/{{names}}.jsonl --corpus fixtures/{{names}}
 
 # Run the 100k-synthetic-chunk NFR-2/NFR-3 search-latency benchmark
 bench:
