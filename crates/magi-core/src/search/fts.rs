@@ -38,7 +38,8 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
 
     let mut stmt = conn.prepare(concat!(
         "SELECT f.id, f.path, f.file_name, f.mtime_ns,
-                    snippet(chunks_fts, 0, char(57344), char(57345), '...', 10), c.page, c.source
+                    snippet(chunks_fts, 0, char(57344), char(57345), '...', 10), c.page, c.source,
+                    f.kind, f.thumb_key
              FROM chunks_fts
              JOIN chunks c ON c.id = chunks_fts.rowid
              JOIN files f ON f.id = c.file_id
@@ -55,7 +56,9 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
                 file_id: row.get(0)?,
                 path: PathBuf::from(row.get::<_, String>(1)?),
                 file_name: row.get(2)?,
+                kind: row.get(7)?,
                 mtime_ns: row.get(3)?,
+                thumb_key: row.get(8)?,
                 snippet: row.get(4)?,
                 page: row.get(5)?,
                 source: Some(row.get(6)?),
@@ -165,7 +168,7 @@ mod tests {
         assert!(s.text.contains("[draft]"));
         let [start, end] = s.highlights[0];
         assert_eq!(&s.text[start as usize..end as usize], "invoice");
-        assert_eq!(hits[0].source.as_deref(), Some("body"));
+        assert_eq!(hits[0].source, Some(crate::extract::ChunkSource::Body));
     }
 
     #[test]

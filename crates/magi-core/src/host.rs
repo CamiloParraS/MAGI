@@ -11,11 +11,10 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender, select};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use crate::config::{self, Config};
 use crate::db::{self, files};
-use crate::discovery::Kind;
 use crate::dto::{
     FeatureStatus, FileError, IndexStatus, Install, MatchSource, RootStatus, SearchRequest,
     SearchResponse, SearchResult, Snippet,
@@ -189,20 +188,15 @@ impl Host {
         let running = self.inner.running();
         let _yield = running.as_ref().map(|r| r.engine.search_pending().guard());
         let components = running.map(|r| r.components).unwrap_or_default();
-        let conn = lock(&self.inner.reader);
         let hits = hybrid_search(
-            &conn,
+            &lock(&self.inner.reader),
             components.text.as_deref(),
             components.image.as_deref(),
             &request.query,
             limit,
         )?;
-        let mut results = Vec::with_capacity(hits.len());
-        for hit in hits {
-            results.extend(result_of(&conn, hit)?);
-        }
         Ok(SearchResponse {
-            results,
+            results: hits.into_iter().map(SearchResult::from).collect(),
             took_ms: started.elapsed().as_millis() as u64,
         })
     }
@@ -419,50 +413,32 @@ fn clear(db_path: &std::path::Path) -> Result<()> {
 
 /// Joins in what the UI shows. `None` when the file was deleted after it
 /// was ranked: that result is dropped, not the search.
-fn result_of(conn: &Connection, hit: SearchHit) -> Result<Option<SearchResult>> {
-    let Some((file_name, kind, mtime_ns, thumb_key)) = conn
-        .query_row(
-            "SELECT file_name, kind, mtime_ns, thumb_key FROM files WHERE id = ?1",
-            [hit.file_id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                ))
-            },
-        )
-        .optional()?
-    else {
-        return Ok(None);
-    };
-    let visual_only = hit.match_sources == ["visual"];
-    Ok(Some(SearchResult {
-        file_id: hit.file_id,
-        path: hit.path.to_string_lossy().into_owned(),
-        file_name,
-        kind: serde_json::from_value(serde_json::Value::String(kind)).unwrap_or(Kind::Other),
-        score: hit.score,
-        snippet: (!visual_only).then(|| Snippet::from_marked(&hit.snippet)),
-        page: hit.page,
-        thumb_path: thumb_key.map(|key| {
-            crate::thumbs::thumb_path(&key)
-                .to_string_lossy()
-                .into_owned()
-        }),
-        modified_at: mtime_ns / 1_000_000,
-        match_sources: hit
-            .match_sources
-            .iter()
-            .filter_map(|s| MatchSource::from_wire(s))
-            .collect(),
-    }))
+impl From<SearchHit> for SearchResult {
+    fn from(hit: SearchHit) -> Self {
+        let visual_only = hit.match_sources == [MatchSource::Visual];
+        SearchResult {
+            file_id: hit.file_id,
+            path: hit.path.to_string_lossy().into_owned(),
+            file_name: hit.file_name,
+            kind: hit.kind,
+            score: hit.score,
+            snippet: (!visual_only).then(|| Snippet::from_marked(&hit.snippet)),
+            page: hit.page,
+            thumb_path: hit.thumb_key.map(|key| {
+                crate::thumbs::thumb_path(&key)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+            modified_at: hit.mtime_ns / 1_000_000,
+            match_sources: hit.match_sources,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::Kind;
     use crate::dto::{Backfill, Install};
 
     fn status(install: Install, backfill: Option<Backfill>) -> Vec<FeatureStatus> {
@@ -476,18 +452,31 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_whose_file_is_gone_is_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = db::open(&dir.path().join("magi.db")).unwrap();
-        let hit = crate::search::SearchHit {
+    fn a_hit_becomes_a_result_without_the_database() {
+        let hit = |match_sources| SearchHit {
             file_id: 42,
-            path: PathBuf::from("/gone.txt"),
+            path: PathBuf::from("/photos/IMG_1.jpg"),
+            file_name: "IMG_1.jpg".into(),
+            kind: Kind::Image,
+            mtime_ns: 3_000_000_000,
+            thumb_key: None,
             score: 1.0,
-            snippet: "x".into(),
-            match_sources: vec!["keyword"],
+            snippet: "IMG_1.jpg".into(),
+            match_sources,
             page: None,
         };
-        assert!(result_of(&conn, hit).unwrap().is_none());
+        let visual = SearchResult::from(hit(vec![MatchSource::Visual]));
+        assert_eq!(
+            (
+                visual.kind,
+                visual.modified_at,
+                visual.snippet,
+                visual.thumb_path
+            ),
+            (Kind::Image, 3_000, None, None)
+        );
+        let keyword = SearchResult::from(hit(vec![MatchSource::Keyword]));
+        assert!(keyword.snippet.is_some(), "only a visual-only hit loses it");
     }
 
     #[test]

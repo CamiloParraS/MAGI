@@ -277,21 +277,6 @@ pub enum MatchSource {
     Filename,
 }
 
-impl MatchSource {
-    /// `search::SearchHit::match_sources` names.
-    pub fn from_wire(name: &str) -> Option<Self> {
-        Some(match name {
-            "keyword" => Self::Keyword,
-            "semantic" => Self::Semantic,
-            "visual" => Self::Visual,
-            "ocr" => Self::Ocr,
-            "qr" => Self::Qr,
-            "filename" => Self::Filename,
-            _ => return None,
-        })
-    }
-}
-
 /// One search result with what the UI needs to render it (`search`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResult {

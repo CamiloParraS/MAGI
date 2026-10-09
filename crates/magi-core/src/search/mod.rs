@@ -10,8 +10,11 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
+use crate::discovery::Kind;
+use crate::dto::MatchSource;
 use crate::embed::{ImageEmbedder, TextEmbedder};
 use crate::error::Result;
+use crate::extract::ChunkSource;
 use crate::search::fuse::{RankedList, filename_boost, recency_boost, reciprocal_rank_fusion};
 
 pub const FTS_FETCH_LIMIT: u32 = 100;
@@ -31,29 +34,34 @@ const IMAGE_WEIGHT: f64 = 0.8;
 pub struct SearchHit {
     pub file_id: i64,
     pub path: PathBuf,
+    pub file_name: String,
+    pub kind: Kind,
+    pub mtime_ns: i64,
+    pub thumb_key: Option<String>,
     pub score: f64,
     pub snippet: String,
-    pub match_sources: Vec<&'static str>,
+    pub match_sources: Vec<MatchSource>,
     /// Page of the best chunk (PDF page, slide), when it has one.
     pub page: Option<i64>,
 }
 
-/// One file's best-matching chunk from a single ranked source. Both
-/// [`fts::search_fts`] and [`vector::search_vector_text`] return these with
-/// the file's metadata already joined in, so `hybrid_search` never has to
-/// go back to the database per result.
+/// One file's best-matching chunk from a single ranked source. Every ranked
+/// list returns these with the file's row already joined in, so neither
+/// `hybrid_search` nor the Host goes back to the database per result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileHit {
     pub file_id: i64,
     pub path: PathBuf,
     pub file_name: String,
+    pub kind: Kind,
     pub mtime_ns: i64,
+    pub thumb_key: Option<String>,
     pub snippet: String,
     /// Page of the best chunk (PDF page, slide), when it has one.
     pub page: Option<i64>,
-    /// `chunks.source` of the best chunk (`body`, `ocr`, `qr`, `filename`,
-    /// `code_symbol`); `None` for a visual match, which has no chunk.
-    pub source: Option<String>,
+    /// The best chunk's source; `None` for a visual match, which has no
+    /// chunk.
+    pub source: Option<ChunkSource>,
 }
 
 /// How many chunk rows to read before per-file dedup: one file can
@@ -152,23 +160,27 @@ pub fn rank_and_boost(
                 * recency_boost(hit.mtime_ns / 1_000_000_000, now);
             let mut match_sources = Vec::new();
             if fts.is_some() {
-                match_sources.push("keyword");
+                match_sources.push(MatchSource::Keyword);
             }
             if vector.is_some() {
-                match_sources.push("semantic");
+                match_sources.push(MatchSource::Semantic);
             }
             if image.is_some() {
-                match_sources.push("visual");
+                match_sources.push(MatchSource::Visual);
             }
-            match hit.source.as_deref() {
-                Some("ocr") => match_sources.push("ocr"),
-                Some("qr") => match_sources.push("qr"),
-                Some("filename") => match_sources.push("filename"),
-                _ => {}
+            match hit.source {
+                Some(ChunkSource::Ocr) => match_sources.push(MatchSource::Ocr),
+                Some(ChunkSource::Qr) => match_sources.push(MatchSource::Qr),
+                Some(ChunkSource::Filename) => match_sources.push(MatchSource::Filename),
+                Some(ChunkSource::Body | ChunkSource::CodeSymbol) | None => {}
             }
             Some(SearchHit {
                 file_id,
                 path: hit.path.clone(),
+                file_name: hit.file_name.clone(),
+                kind: hit.kind,
+                mtime_ns: hit.mtime_ns,
+                thumb_key: hit.thumb_key.clone(),
                 score: base_score * boost,
                 snippet: hit.snippet.clone(),
                 match_sources,
@@ -342,7 +354,7 @@ mod tests {
         )
         .unwrap();
         let photo = hits.iter().find(|h| h.path == path).expect("photo found");
-        assert!(photo.match_sources.contains(&"visual"));
+        assert!(photo.match_sources.contains(&MatchSource::Visual));
         // An unrelated query is below the cosine floor: the photo is not
         // dragged into every search.
         let unrelated = hybrid_search(
@@ -356,7 +368,7 @@ mod tests {
         assert!(
             !unrelated
                 .iter()
-                .any(|h| h.match_sources.contains(&"visual")),
+                .any(|h| h.match_sources.contains(&MatchSource::Visual)),
             "{unrelated:?}"
         );
         // Without the image embedder the same query cannot reach it.
@@ -365,7 +377,7 @@ mod tests {
         assert!(
             !text_only
                 .iter()
-                .any(|h| h.match_sources.contains(&"visual"))
+                .any(|h| h.match_sources.contains(&MatchSource::Visual))
         );
     }
 
@@ -401,7 +413,7 @@ mod tests {
         let hits = hybrid_search(&conn, Some(&embedder), None, "arepas", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/recipe.txt"));
-        assert!(hits[0].match_sources.contains(&"keyword"));
+        assert!(hits[0].match_sources.contains(&MatchSource::Keyword));
     }
 
     #[test]
@@ -420,8 +432,8 @@ mod tests {
 
         let hits = hybrid_search(&conn, Some(&embedder), None, "cat sat mat", 10).unwrap();
         assert_eq!(hits[0].path, PathBuf::from("/roots/a/cats.txt"));
-        assert!(hits[0].match_sources.contains(&"keyword"));
-        assert!(hits[0].match_sources.contains(&"semantic"));
+        assert!(hits[0].match_sources.contains(&MatchSource::Keyword));
+        assert!(hits[0].match_sources.contains(&MatchSource::Semantic));
     }
 
     #[test]
@@ -453,28 +465,81 @@ mod tests {
 
     #[test]
     fn the_best_chunks_source_and_page_reach_the_hit() {
-        let hit = |id: i64, source: &str, page| FileHit {
+        use MatchSource::*;
+        let hit = |id: i64, source, page| FileHit {
             file_id: id,
             path: PathBuf::from(format!("/r/{id}")),
             file_name: format!("f{id}"),
+            kind: Kind::Text,
             mtime_ns: 0,
+            thumb_key: None,
             snippet: "s".into(),
             page,
-            source: Some(source.into()),
+            source: Some(source),
         };
         let hits = rank_and_boost(
             "zzz",
-            &[hit(1, "ocr", None), hit(2, "body", Some(3))],
-            &[hit(3, "qr", None)],
+            &[
+                hit(1, ChunkSource::Ocr, None),
+                hit(2, ChunkSource::Body, Some(3)),
+            ],
+            &[hit(3, ChunkSource::Qr, None)],
             &[],
             10,
         );
         let by_id = |id| hits.iter().find(|h| h.file_id == id).unwrap();
-        assert_eq!(by_id(1).match_sources, vec!["keyword", "ocr"]);
+        assert_eq!(by_id(1).match_sources, vec![Keyword, Ocr]);
         assert_eq!(
             (by_id(2).match_sources.clone(), by_id(2).page),
-            (vec!["keyword"], Some(3))
+            (vec![Keyword], Some(3))
         );
-        assert_eq!(by_id(3).match_sources, vec!["semantic", "qr"]);
+        assert_eq!(by_id(3).match_sources, vec![Semantic, Qr]);
+    }
+
+    /// Every ranked list joins the file's row, so the Host never goes back
+    /// to the database per result for what the UI shows.
+    #[test]
+    fn each_ranked_list_carries_the_files_kind_and_thumbnail() {
+        use crate::embed::FakeImageEmbedder;
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/IMG_0042.jpg");
+        let rel = PathBuf::from("IMG_0042.jpg");
+        let record = FileRecord {
+            root_id: 1,
+            path: &path,
+            rel_path: &rel,
+            file_name: "IMG_0042.jpg",
+            ext: Some("jpg"),
+            kind: "image",
+            size: 1,
+            mtime_ns: 7,
+            lang: None,
+            state: crate::db::files::FileState::Indexed,
+            skip_reason: None,
+            error: None,
+            seen_scan_id: 1,
+            content_hash: None,
+            thumb_key: Some("thumb42"),
+            features_missing: 0,
+        };
+        let chunks = vec![RawChunk::body("harbor at dawn".to_string())];
+        let text = FakeEmbedder.embed_passages(&["harbor at dawn"]).unwrap();
+        let visual = FakeImageEmbedder.embed_query("harbor at dawn").unwrap();
+        upsert_file(&mut conn, &record, &chunks, Some(&text), Some(&visual)).unwrap();
+
+        let query = FakeEmbedder.embed_query("harbor at dawn").unwrap();
+        let lists = [
+            fts::search_fts(&conn, "harbor", 10).unwrap(),
+            vector::search_vector_text(&conn, &query, 10).unwrap(),
+            vector::search_vector_image(&conn, &visual, 10, IMAGE_MIN_COSINE).unwrap(),
+        ];
+        for hits in lists {
+            let hit = &hits[0];
+            assert_eq!(
+                (hit.kind, hit.thumb_key.as_deref(), hit.mtime_ns),
+                (Kind::Image, Some("thumb42"), 7),
+                "{hit:?}"
+            );
+        }
     }
 }

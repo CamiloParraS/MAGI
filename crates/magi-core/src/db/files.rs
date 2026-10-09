@@ -6,10 +6,11 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{Connection, params};
 
 use crate::db::roots::indexable_sql;
+use crate::discovery::Kind;
 use crate::dto::{FileError, FileErrorCode};
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
-use crate::extract::RawChunk;
+use crate::extract::{ChunkSource, RawChunk};
 
 /// Everything needed to upsert one file's row.
 /// Where a file is in the index (`files.state`): queued, in the pipeline, or
@@ -51,6 +52,37 @@ impl FromSql for FileState {
             "error" => Ok(Self::Error),
             other => Err(FromSqlError::Other(
                 format!("unknown file state {other:?}").into(),
+            )),
+        }
+    }
+}
+
+impl FromSql for Kind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "text" => Ok(Self::Text),
+            "code" => Ok(Self::Code),
+            "pdf" => Ok(Self::Pdf),
+            "office" => Ok(Self::Office),
+            "image" => Ok(Self::Image),
+            "other" => Ok(Self::Other),
+            other => Err(FromSqlError::Other(
+                format!("unknown file kind {other:?}").into(),
+            )),
+        }
+    }
+}
+
+impl FromSql for ChunkSource {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "body" => Ok(Self::Body),
+            "ocr" => Ok(Self::Ocr),
+            "qr" => Ok(Self::Qr),
+            "filename" => Ok(Self::Filename),
+            "code_symbol" => Ok(Self::CodeSymbol),
+            other => Err(FromSqlError::Other(
+                format!("unknown chunk source {other:?}").into(),
             )),
         }
     }

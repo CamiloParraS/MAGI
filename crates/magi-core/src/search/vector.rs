@@ -33,7 +33,8 @@ pub fn search_vector_text(
             WHERE embedding MATCH vec_f32(?1) AND k = ?2
          )
          SELECT f.id, f.path, f.file_name, f.mtime_ns, substr(c.text, 1, 200),
-                knn_matches.distance, knn_matches.chunk_id, c.page, c.source
+                knn_matches.distance, knn_matches.chunk_id, c.page, c.source,
+                f.kind, f.thumb_key
          FROM knn_matches
          JOIN chunks c ON c.id = knn_matches.chunk_id
          JOIN files f ON f.id = c.file_id
@@ -57,7 +58,9 @@ pub fn search_vector_text(
                         file_id: row.get(0)?,
                         path: PathBuf::from(row.get::<_, String>(1)?),
                         file_name: row.get(2)?,
+                        kind: row.get(9)?,
                         mtime_ns: row.get(3)?,
+                        thumb_key: row.get(10)?,
                         snippet: row.get(4)?,
                         page: row.get(7)?,
                         source: Some(row.get(8)?),
@@ -103,7 +106,8 @@ pub fn search_vector_image(
             FROM vec_image
             WHERE embedding MATCH vec_f32(?1) AND k = ?2
          )
-         SELECT f.id, f.path, f.file_name, f.mtime_ns, knn_matches.distance
+         SELECT f.id, f.path, f.file_name, f.mtime_ns, knn_matches.distance,
+                f.kind, f.thumb_key
          FROM knn_matches
          JOIN files f ON f.id = knn_matches.file_id
          JOIN roots r ON r.id = f.root_id
@@ -121,7 +125,9 @@ pub fn search_vector_image(
                     path: PathBuf::from(row.get::<_, String>(1)?),
                     snippet: file_name.clone(),
                     file_name,
+                    kind: row.get(5)?,
                     mtime_ns: row.get(3)?,
+                    thumb_key: row.get(6)?,
                     page: None,
                     source: None,
                 },
