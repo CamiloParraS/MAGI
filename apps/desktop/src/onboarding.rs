@@ -621,7 +621,16 @@ impl OnboardingView {
                                 .items_center()
                                 .gap(px(10.))
                                 .child(Icon::new(IconName::Plus).size(px(18.)).text_color(p.accent))
-                                .child(s.add_folder),
+                                .child(s.add_folder)
+                                // Dropping still works once the drop zone
+                                // is gone; say so where the eye goes to add.
+                                .child(
+                                    div()
+                                        .ml_auto()
+                                        .text_sm()
+                                        .text_color(p.mute)
+                                        .child(s.ob_or_drop_folders),
+                                ),
                         )
                         .w_full()
                         .h(px(40.))

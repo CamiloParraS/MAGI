@@ -224,6 +224,8 @@ pub struct Strings {
     pub welcome: &'static str,
     /// In the empty folders drop zone, above Add folder.
     pub ob_drop_folders: &'static str,
+    /// At the right of the Add folders row, once folders are listed.
+    pub ob_or_drop_folders: &'static str,
     /// Above the one-click folder suggestions.
     pub ob_suggested_folders: &'static str,
     /// Beside that heading: adds every suggestion at once.
