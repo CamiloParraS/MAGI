@@ -538,16 +538,35 @@ Small and one-directional: no recall changes, the hybrid miss list is
 identical, the only dip is vector-only `img` MRR 0.606 → 0.601. `cross` is
 untouched (the boost is still language-blind).
 
-**Open: the "before" column is well below the last recorded state** (the OCR
-fix above: hybrid r@5 0.982 / MRR 0.880; vector-only MRR 0.710 at the photo
-batch). Hybrid by bucket now: `en` 0.727, `es` 0.700, `kw` 0.550, `cross`
-0.205 MRR, against 0.967 / 0.925 / 0.925 / 0.312 recorded. Not attributed. The
-two 2026-10-08 search refactors (typed hits, parallel query embedding) don't
-touch ranking, and vector-only fell too. One unverified suspect is
-`recency_boost`: it reads the fixtures' working-tree mtimes, which now span
-more than the 30-day window, so it can reorder near-ties by up to ×1.1.
-Re-running the photo-batch commit on this machine would settle whether it is
-the code or the environment.
+**Resolved: the "before" column was a polluted corpus, not a regression.**
+Both columns above sit well below the last recorded state (hybrid r@5 0.982 /
+MRR 0.880) because this machine's `fixtures/corpus/` also held
+`random_names/`: 126 local, untracked files (`.git/info/exclude`), 125 of them
+byte-identical copies of other fixtures under random names, made on
+2026-09-29 for a manual test (docs/progress.md). No query expects them, so
+each copy that outranked its original pushed the expected file to rank 2:
+recall unchanged, MRR roughly halved (`kw` 0.550, `en` 0.727). Newer mtimes
+gave the copies a slightly larger `recency_boost` too.
+
+Same build (with the tokenizer change), same 164 queries, on a copy of the
+corpus without `random_names/` (`cp` preserving mtimes, 115 indexed):
+
+| Mode        | recall@5 |   MRR |
+| ----------- | -------: | ----: |
+| fts-only    |    0.311 | 0.307 |
+| vector-only |    0.884 | 0.722 |
+| visual-only |    0.494 | 0.474 |
+| **hybrid**  |    0.982 | 0.881 |
+
+Hybrid by bucket, MRR: `en` 0.975, `es` 0.925, `kw` 1.000, `cross` 0.363,
+`img` 0.940, `img2` 0.944, `ocr` / `qr` 1.000. The misses are the three
+recorded after the OCR fix (`informe de ingresos trimestrales`, `doctor
+appointment reminder`, `a Hot Wheels package`). The tokenizer table above is
+still a valid before/after pair (both runs saw the same corpus), but its
+absolute numbers are not comparable with the rest of this file.
+
+**Keep `fixtures/corpus/` to the tracked fixtures plus `local/`**: anything
+else in it is indexed by `magi-cli eval` and scored against.
 
 ## Not yet done
 
