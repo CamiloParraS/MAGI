@@ -23,7 +23,7 @@ use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
 use crate::error::{Error, Result};
 use crate::features::{Components, Feature, Features, load_components};
-use crate::search::{SearchHit, hybrid_search};
+use crate::search::{QueryVectors, SearchHit, search_with};
 
 pub enum HostEvent {
     Status(IndexStatus),
@@ -188,13 +188,14 @@ impl Host {
         let running = self.inner.running();
         let _yield = running.as_ref().map(|r| r.engine.search_pending().guard());
         let components = running.map(|r| r.components).unwrap_or_default();
-        let hits = hybrid_search(
-            &lock(&self.inner.reader),
+        // Embedding (and a cold model load) happens before the reader lock,
+        // so it never holds up the status and roots reads.
+        let vectors = QueryVectors::embed(
             components.text.as_deref(),
             components.image.as_deref(),
             &request.query,
-            limit,
         )?;
+        let hits = search_with(&lock(&self.inner.reader), &vectors, &request.query, limit)?;
         Ok(SearchResponse {
             results: hits.into_iter().map(SearchResult::from).collect(),
             took_ms: started.elapsed().as_millis() as u64,

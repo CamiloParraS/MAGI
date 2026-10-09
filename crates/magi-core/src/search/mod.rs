@@ -197,20 +197,66 @@ pub fn rank_and_boost(
     hits
 }
 
-/// Runs FTS5, `vec_text` and (when `image_embedder` is given) `vec_image`
-/// search, fuses them with Reciprocal Rank
-/// Fusion, applies filename/recency boosts, and returns the top `limit`
-/// files (SPEC.md §5.6).
-///
-/// ponytail: the two queries run sequentially against `conn` here, not on
-/// separate parallel reader connections — SPEC.md's "run in parallel" is
-/// about not blocking one query behind the other on the engine's reader
-/// pool, which doesn't exist until M6. Fusion correctness doesn't depend
-/// on query order, so this defers threading to when that pool lands.
+/// The query's embeddings, one per tower that is loaded. Computed without
+/// the database, so a caller sharing a connection embeds before locking it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QueryVectors {
+    pub text: Option<Vec<f32>>,
+    pub image: Option<Vec<f32>>,
+}
+
+impl QueryVectors {
+    /// Embeds `query` with both towers at once: they are separate ONNX
+    /// sessions, so the query waits for the slower one, not for both. A
+    /// missing or broken visual model degrades to text-only search rather
+    /// than failing the query.
+    pub fn embed(
+        text: Option<&dyn TextEmbedder>,
+        image: Option<&dyn ImageEmbedder>,
+        query: &str,
+    ) -> Result<Self> {
+        if query.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        std::thread::scope(|scope| {
+            let image = image.map(|e| scope.spawn(|| e.embed_query(query)));
+            let text = text.map(|e| e.embed_query(query)).transpose()?;
+            let image =
+                match image.map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))) {
+                    Some(Ok(embedding)) => Some(embedding),
+                    Some(Err(e)) => {
+                        tracing::warn!(error = %e, "visual search unavailable");
+                        None
+                    }
+                    None => None,
+                };
+            Ok(Self { text, image })
+        })
+    }
+}
+
+/// Embeds the query ([`QueryVectors::embed`]), then [`search_with`].
 pub fn hybrid_search(
     conn: &Connection,
     embedder: Option<&dyn TextEmbedder>,
     image_embedder: Option<&dyn ImageEmbedder>,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SearchHit>> {
+    let vectors = QueryVectors::embed(embedder, image_embedder, query)?;
+    search_with(conn, &vectors, query, limit)
+}
+
+/// Runs FTS5, `vec_text` and `vec_image` search for the vectors given,
+/// fuses them with Reciprocal Rank Fusion, applies filename/recency boosts,
+/// and returns the top `limit` files (SPEC.md §5.6).
+///
+/// ponytail: the SQL runs sequentially on one connection; the embeddings,
+/// the expensive part, already run in parallel. A second reader connection
+/// would let FTS overlap the KNN scans if `vec_text` grows into the budget.
+pub fn search_with(
+    conn: &Connection,
+    vectors: &QueryVectors,
     query: &str,
     limit: u32,
 ) -> Result<Vec<SearchHit>> {
@@ -220,22 +266,13 @@ pub fn hybrid_search(
 
     let fts_hits = fts::search_fts(conn, query, FTS_FETCH_LIMIT)?;
     // Without meaning, old `vec_text` rows stay unused.
-    let vector_hits = match embedder {
-        Some(embedder) => {
-            vector::search_vector_text(conn, &embedder.embed_query(query)?, VECTOR_FETCH_LIMIT)?
-        }
+    let vector_hits = match &vectors.text {
+        Some(embedding) => vector::search_vector_text(conn, embedding, VECTOR_FETCH_LIMIT)?,
         None => Vec::new(),
     };
-
-    // A missing or broken visual model degrades to text-only search rather
-    // than failing the query.
-    let image_hits = match image_embedder.map(|e| e.embed_query(query)) {
-        Some(Ok(embedding)) => {
-            vector::search_vector_image(conn, &embedding, IMAGE_FETCH_LIMIT, IMAGE_MIN_COSINE)?
-        }
-        Some(Err(e)) => {
-            tracing::warn!(error = %e, "visual search unavailable");
-            Vec::new()
+    let image_hits = match &vectors.image {
+        Some(embedding) => {
+            vector::search_vector_image(conn, embedding, IMAGE_FETCH_LIMIT, IMAGE_MIN_COSINE)?
         }
         None => Vec::new(),
     };
@@ -379,6 +416,114 @@ mod tests {
                 .iter()
                 .any(|h| h.match_sources.contains(&MatchSource::Visual))
         );
+    }
+
+    /// A tower that, asked for a query vector, signals it started and waits
+    /// for the other tower to start too: embedded one after the other, the
+    /// first gives up and the query fails.
+    struct Rendezvous {
+        mine: crossbeam_channel::Sender<()>,
+        theirs: crossbeam_channel::Receiver<()>,
+    }
+
+    impl Rendezvous {
+        fn pair() -> (Self, Self) {
+            let (a_tx, a_rx) = crossbeam_channel::bounded(1);
+            let (b_tx, b_rx) = crossbeam_channel::bounded(1);
+            let text = Rendezvous {
+                mine: a_tx,
+                theirs: b_rx,
+            };
+            let image = Rendezvous {
+                mine: b_tx,
+                theirs: a_rx,
+            };
+            (text, image)
+        }
+
+        fn meet(&self, dim: usize) -> Result<Vec<f32>> {
+            let _ = self.mine.send(());
+            self.theirs
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| crate::error::Error::Engine("embedded one after the other".into()))?;
+            Ok(vec![1.0; dim])
+        }
+    }
+
+    impl TextEmbedder for Rendezvous {
+        fn model_id(&self) -> &str {
+            "rendezvous"
+        }
+        fn dim(&self) -> usize {
+            crate::embed::TEXT_EMBEDDING_DIM
+        }
+        fn embed_passages(&self, _: &[&str]) -> Result<Vec<Vec<f32>>> {
+            unreachable!("only queries are embedded")
+        }
+        fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+            self.meet(crate::embed::TEXT_EMBEDDING_DIM)
+        }
+    }
+
+    impl ImageEmbedder for Rendezvous {
+        fn model_id(&self) -> &str {
+            "rendezvous"
+        }
+        fn dim(&self) -> usize {
+            crate::embed::IMAGE_EMBEDDING_DIM
+        }
+        fn embed_image(&self, _: &image::RgbImage) -> Result<Vec<f32>> {
+            unreachable!("only queries are embedded")
+        }
+        fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+            self.meet(crate::embed::IMAGE_EMBEDDING_DIM)
+        }
+    }
+
+    #[test]
+    fn both_towers_embed_the_query_at_once() {
+        let (text, image) = Rendezvous::pair();
+        let vectors = QueryVectors::embed(Some(&text), Some(&image), "harbor").unwrap();
+        assert_eq!(
+            (
+                vectors.text.map(|v| v.len()),
+                vectors.image.map(|v| v.len())
+            ),
+            (
+                Some(crate::embed::TEXT_EMBEDDING_DIM),
+                Some(crate::embed::IMAGE_EMBEDDING_DIM)
+            )
+        );
+    }
+
+    #[test]
+    fn a_broken_visual_tower_degrades_to_text_only() {
+        struct Broken;
+        impl ImageEmbedder for Broken {
+            fn model_id(&self) -> &str {
+                "broken"
+            }
+            fn dim(&self) -> usize {
+                crate::embed::IMAGE_EMBEDDING_DIM
+            }
+            fn embed_image(&self, _: &image::RgbImage) -> Result<Vec<f32>> {
+                unreachable!()
+            }
+            fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+                Err(crate::error::Error::Engine("no session".into()))
+            }
+        }
+        let vectors = QueryVectors::embed(Some(&FakeEmbedder), Some(&Broken), "harbor").unwrap();
+        assert!(vectors.text.is_some() && vectors.image.is_none());
+    }
+
+    #[test]
+    fn a_blank_query_is_not_embedded() {
+        let (text, image) = Rendezvous::pair();
+        // Its partner gone, the text tower fails at once if it is called.
+        drop(image);
+        let vectors = QueryVectors::embed(Some(&text), None, "   ").unwrap();
+        assert_eq!(vectors, QueryVectors::default());
     }
 
     #[test]
