@@ -687,12 +687,13 @@ impl SettingsView {
         .detach();
     }
 
+    /// Picked, suggested or dropped folders. Dropped files are ignored.
     fn add_folders(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         self.run(
             Field::AddFolder,
             move |host| {
                 let engine = host.engine()?;
-                for path in &paths {
+                for path in paths.iter().filter(|p| p.is_dir()) {
                     engine.add_root(path)?;
                 }
                 Ok(())
@@ -813,6 +814,7 @@ impl SettingsView {
     }
 
     fn folders(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let accent = p.accent;
         let live = self.live.read(cx);
         let s = live.lang.strings();
         let roots = live
@@ -849,7 +851,19 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
                     ),
             )
-            .child(stack().children(list).children(add_problem))
+            // Folders dropped from the file manager, as in onboarding.
+            .child(
+                stack()
+                    .rounded(px(10.))
+                    .children(list)
+                    .children(add_problem)
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                        style.bg(accent.opacity(0.08))
+                    })
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                        this.add_folders(paths.paths().to_vec(), cx)
+                    })),
+            )
             .children(roots.and_then(|roots| {
                 let offered = suggestions(&self.user_folders, roots);
                 suggested_folders(offered, s, p, cx, Self::add_folders)

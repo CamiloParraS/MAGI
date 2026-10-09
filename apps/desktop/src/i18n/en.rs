@@ -82,7 +82,7 @@ pub const STRINGS: Strings = Strings {
     },
     root_missing: "Folder not found. Reconnect the drive; the index is kept.",
     root_denied: "Magi isn't allowed to read this folder.",
-    no_folders: "No folders yet. Add one to start searching it.",
+    no_folders: "No folders yet. Add one, or drop folders here, to start searching.",
     root_not_found: "{path} doesn't exist.",
     root_exists: "{path} is already in the list.",
     root_nested: "{path} is already searched as part of {other}.",

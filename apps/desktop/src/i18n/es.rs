@@ -82,7 +82,7 @@ pub const STRINGS: Strings = Strings {
     },
     root_missing: "No se encuentra la carpeta. Vuelve a conectar la unidad; el índice se conserva.",
     root_denied: "Magi no tiene permiso para leer esta carpeta.",
-    no_folders: "Aún no hay carpetas. Agrega una para buscar en ella.",
+    no_folders: "Aún no hay carpetas. Agrega una, o suelta carpetas aquí, para empezar a buscar.",
     root_not_found: "{path} no existe.",
     root_exists: "{path} ya está en la lista.",
     root_nested: "{path} ya se busca como parte de {other}.",
