@@ -59,6 +59,13 @@ use choices::{
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 
+/// A section button's height, and the space between two: the accent bar
+/// moves by their sum per section.
+const NAV_ITEM_H: f32 = 32.;
+const NAV_GAP: f32 = 2.;
+/// How long the accent bar takes to reach another section.
+const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(180);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Folders,
@@ -125,6 +132,8 @@ pub struct SettingsView {
     live: Entity<Live>,
     events: Events,
     section: Section,
+    /// The section before the last switch, where the accent bar slides from.
+    prev_section: Section,
     /// The saved `ui` settings; the General and Appearance controls show
     /// these.
     ui: UiConfig,
@@ -311,6 +320,7 @@ impl SettingsView {
             live,
             events,
             section: Section::Folders,
+            prev_section: Section::Folders,
             ui,
             indexing,
             max_size,
@@ -573,22 +583,30 @@ impl Render for SettingsView {
         // alpha, as the search window's panel does; the boxes stay opaque.
         let alpha = p.tint_alpha(self.backdrop());
         let tint = |color: Hsla| color.opacity(alpha);
-        let nav = div()
+        // The accent bar slides from the section before; under reduced motion
+        // GPUI shows it in place.
+        let (from, to) = (self.prev_section as usize, self.section as usize);
+        let pitch = NAV_ITEM_H + NAV_GAP;
+        let bar = div()
+            .absolute()
+            .left_0()
+            .w(px(3.))
+            .h(px(NAV_ITEM_H * 0.35))
+            .rounded_full()
+            .bg(p.accent)
+            .with_animation(
+                ("nav-bar", from * SECTIONS.len() + to),
+                Animation::new(NAV_SLIDE).with_easing(ease_in_out),
+                move |bar, t| {
+                    let row = from as f32 + (to as f32 - from as f32) * t;
+                    bar.top(px(row * pitch + NAV_ITEM_H * 0.375))
+                },
+            );
+        let sections = div()
+            .relative()
             .flex()
             .flex_col()
-            .flex_none()
-            .w(px(210.))
-            .gap(px(2.))
-            .p_2()
-            .bg(tint(p.side))
-            .child(
-                div()
-                    .px_3()
-                    .pb_3()
-                    .text_xs()
-                    .text_color(p.mute)
-                    .child(s.settings),
-            )
+            .gap(px(NAV_GAP))
             .children(SECTIONS.iter().enumerate().map(|(ix, &section)| {
                 let selected = section == self.section;
                 // A button, so Tab and Enter reach every section.
@@ -597,13 +615,13 @@ impl Render for SettingsView {
                     .ghost()
                     .selected(selected)
                     .w_full()
+                    .h(px(NAV_ITEM_H))
                     .px_0()
                     .rounded(px(6.))
-                    .when(selected, |b| b.bg(p.chip).child(p.accent_bar()))
+                    .when(selected, |b| b.bg(p.chip))
                     // The content row centers a label; a filling child sits
                     // left. The padding is the label's, so the content row
-                    // starts at the button's edge: an absolute child (the
-                    // accent bar) is placed against its direct parent.
+                    // starts at the button's edge.
                     .child(
                         div()
                             .flex_1()
@@ -621,6 +639,7 @@ impl Render for SettingsView {
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.recording = false;
+                        this.prev_section = this.section;
                         this.section = section;
                         this.error = None;
                         this.pane_scroll.set_offset(Point::default());
@@ -630,6 +649,24 @@ impl Render for SettingsView {
                         cx.notify();
                     }))
             }))
+            .child(bar);
+        let nav = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(210.))
+            .gap(px(NAV_GAP))
+            .p_2()
+            .bg(tint(p.side))
+            .child(
+                div()
+                    .px_3()
+                    .pb_3()
+                    .text_xs()
+                    .text_color(p.mute)
+                    .child(s.settings),
+            )
+            .child(sections)
             .child(
                 div()
                     .mt_auto()
