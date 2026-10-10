@@ -47,7 +47,7 @@ use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
 use serde_json::json;
 
-use super::{error_text, slider_from_intensity};
+use super::{Roll, error_text, slider_from_intensity};
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
@@ -166,6 +166,8 @@ pub struct SettingsView {
     /// Focused while the shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
+    /// The Index tiles' counts, each on its way to the latest status.
+    rolls: Option<[Roll; 4]>,
     /// Whether Folders' Advanced box is open.
     advanced_open: bool,
     /// How many times it was toggled: the chevron turns only after a click,
@@ -245,6 +247,9 @@ impl SettingsView {
                 }
                 if theme != this.theme {
                     this.sync_appearance(window, cx);
+                }
+                if let Some(status) = &live.read(cx).status {
+                    this.roll_stats(status);
                 }
                 // A file failed or a retry worked: the list follows.
                 let errors = live.read(cx).status.as_ref().map(|st| st.errors);
@@ -351,6 +356,7 @@ impl SettingsView {
             see_through_focus: cx.focus_handle().tab_stop(true),
             recorder: cx.focus_handle(),
             recording: false,
+            rolls: None,
             advanced_open: false,
             advanced_flips: 0,
             pane_scroll: ScrollHandle::new(),
@@ -366,6 +372,9 @@ impl SettingsView {
         };
         view.sync_appearance(window, cx);
         view.sync_controls(window, cx);
+        if let Some(status) = view.live.read(cx).status.clone() {
+            view.roll_stats(&status);
+        }
         view
     }
 

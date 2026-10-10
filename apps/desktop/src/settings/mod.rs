@@ -13,12 +13,65 @@ use magi_core::features::Feature;
 use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
 
+use std::time::{Duration, Instant};
+
 use crate::i18n::{Lang, Strings};
 use crate::theme::{self, Backdrop, Tone};
 
 /// With no unreadable file listed, whether files are still to be read: queued
 /// (retried ones among them), or counted as errors by a status from before a
 /// retry. Until then the list cannot say every file was read.
+/// How long a stat tile's count takes to reach a new value.
+pub const ROLL: Duration = Duration::from_millis(200);
+
+/// A stat tile's count on its way to a new value, so a number that changes
+/// while indexing runs counts up or down instead of jumping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Roll {
+    from: u64,
+    pub to: u64,
+    since: Instant,
+    /// Changes with each new target: keys the animation so it restarts.
+    pub generation: usize,
+}
+
+impl Roll {
+    /// Already at `value`: the first status animates nothing.
+    pub fn steady(value: u64) -> Self {
+        Self {
+            from: value,
+            to: value,
+            since: Instant::now(),
+            generation: 0,
+        }
+    }
+
+    /// The count `eased` (0 to 1, already through the easing) of the way.
+    pub fn at(&self, eased: f32) -> u64 {
+        let (from, to) = (self.from as f64, self.to as f64);
+        (from + (to - from) * f64::from(eased)).round() as u64
+    }
+
+    /// The count on screen at `now`.
+    pub fn shown(&self, now: Instant) -> u64 {
+        let t = now.saturating_duration_since(self.since).as_secs_f32() / ROLL.as_secs_f32();
+        self.at(gpui_kit::ease_out_quint()(t.clamp(0., 1.)))
+    }
+
+    /// Heads for `to` from whatever shows at `now`; the same target is a no-op.
+    pub fn retarget(self, to: u64, now: Instant) -> Self {
+        if to == self.to {
+            return self;
+        }
+        Self {
+            from: self.shown(now),
+            to,
+            since: now,
+            generation: self.generation + 1,
+        }
+    }
+}
+
 pub fn still_reading(status: Option<&IndexStatus>) -> bool {
     status.is_some_and(|st| st.queued > 0 || st.errors > 0)
 }
@@ -277,6 +330,28 @@ mod tests {
     use super::*;
     use crate::i18n::Lang;
     use magi_core::dto::IndexState;
+
+    #[test]
+    fn a_count_rolls_from_where_it_shows_to_the_new_value() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let roll = Roll::steady(10).retarget(110, t0);
+        assert_eq!(roll.shown(t0), 10);
+        assert!(roll.shown(at(60)) > 10 && roll.shown(at(60)) < 110);
+        assert_eq!(roll.shown(at(ROLL.as_millis() as u64)), 110);
+        assert_eq!(roll.shown(at(10_000)), 110, "stays there");
+
+        // Interrupted halfway, it carries on from the number on screen, not
+        // from the old target.
+        let mid = roll.shown(at(60));
+        let next = roll.retarget(50, at(60));
+        assert_eq!(next.shown(at(60)), mid);
+        assert_eq!(next.shown(at(10_000)), 50);
+
+        // The same target again changes nothing, so a status that repeats
+        // doesn't restart it.
+        assert_eq!(roll.retarget(110, at(60)), roll);
+    }
 
     fn root(enabled: bool, status: Health) -> RootStatus {
         RootStatus {

@@ -9,7 +9,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
-use crate::settings::{file_error_label, still_reading};
+use std::time::Instant;
+
+use magi_core::dto::IndexStatus;
+
+use crate::settings::{ROLL, Roll, file_error_label, still_reading};
 use crate::theme::{Palette, Tone};
 use crate::ui::{card, group, grouped, note, row, row_icon, subheading};
 
@@ -17,6 +21,16 @@ use crate::ui::{card, group, grouped, note, row, row_icon, subheading};
 const ERRORS_SHOWN: u32 = 50;
 
 impl SettingsView {
+    /// Points each tile's count at the latest status, from what it shows now.
+    pub(super) fn roll_stats(&mut self, status: &IndexStatus) {
+        let now = Instant::now();
+        let to = [status.indexed, status.queued, status.skipped, status.errors];
+        self.rolls = Some(match self.rolls {
+            None => to.map(Roll::steady),
+            Some(rolls) => std::array::from_fn(|ix| rolls[ix].retarget(to[ix], now)),
+        });
+    }
+
     /// A failed read leaves `None`, which shows no list rather than "every
     /// file was read".
     pub(super) fn load_unreadable(&mut self, cx: &mut Context<Self>) {
@@ -66,39 +80,57 @@ impl SettingsView {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
         let stats = live.status.as_ref().map(|st| {
-            let stat = |icon: IconName, value: u64, label: &'static str, tone: Option<Tone>| {
-                card(p)
-                    .flex_1()
-                    .flex_col()
-                    .items_start()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                Icon::new(icon)
-                                    .size(px(16.))
-                                    .text_color(tone.map_or(p.accent, |t| p.tone(t))),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(22.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .when_some(tone, |d, t| d.text_color(p.tone(t)))
-                                    .child(lang.number(value)),
-                            ),
-                    )
-                    .child(div().text_xs().text_color(p.mute).child(label))
-            };
+            let stat =
+                |ix: usize, icon: IconName, value: u64, label: &'static str, tone: Option<Tone>| {
+                    let roll = self.rolls.map_or(Roll::steady(value), |rolls| rolls[ix]);
+                    card(p)
+                        .flex_1()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    Icon::new(icon)
+                                        .size(px(16.))
+                                        .text_color(tone.map_or(p.accent, |t| p.tone(t))),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(22.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .when_some(tone, |d, t| d.text_color(p.tone(t)))
+                                        // The count rolls to a new value; a new
+                                        // target restarts it from what shows.
+                                        .with_animation(
+                                            SharedString::from(format!(
+                                                "stat-{ix}-{}",
+                                                roll.generation
+                                            )),
+                                            Animation::new(ROLL).with_easing(ease_out_quint()),
+                                            move |d, t| d.child(lang.number(roll.at(t))),
+                                        ),
+                                ),
+                        )
+                        .child(div().text_xs().text_color(p.mute).child(label))
+                };
             div()
                 .flex()
                 .gap(px(8.))
-                .child(stat(IconName::FileCheck, st.indexed, s.stat_indexed, None))
-                .child(stat(IconName::Clock, st.queued, s.stat_waiting, None))
-                .child(stat(IconName::Tag, st.skipped, s.stat_skipped, None))
                 .child(stat(
+                    0,
+                    IconName::FileCheck,
+                    st.indexed,
+                    s.stat_indexed,
+                    None,
+                ))
+                .child(stat(1, IconName::Clock, st.queued, s.stat_waiting, None))
+                .child(stat(2, IconName::Tag, st.skipped, s.stat_skipped, None))
+                .child(stat(
+                    3,
                     IconName::TriangleAlert,
                     st.errors,
                     s.stat_errors,
