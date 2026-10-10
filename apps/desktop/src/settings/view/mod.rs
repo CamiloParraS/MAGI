@@ -663,8 +663,11 @@ impl Render for SettingsView {
                     .px(px(32.))
                     .pt(px(22.))
                     .pb(px(28.))
-                    .child(heading(self.section.title(s)))
-                    .child(body),
+                    // Another section fades in, its heading with it.
+                    .child(theme::fade_in(
+                        div().child(heading(self.section.title(s))).child(body),
+                        ("pane-in", self.section as usize),
+                    )),
             )
     }
 }
