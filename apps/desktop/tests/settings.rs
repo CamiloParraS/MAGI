@@ -43,6 +43,13 @@ fn a_saved_setting_reaches_the_shell_and_a_rejected_one_its_box(cx: &mut TestApp
     }
     assert_eq!(host.settings().unwrap().ui.language, Language::Es);
 
+    // Advanced is closed until asked for.
+    assert!(
+        !window
+            .update(cx, |view, _, _| view.advanced_shown())
+            .unwrap()
+    );
+
     // A change the core rejects is shown in its own box and not saved.
     let globs = host.settings().unwrap().indexing.exclude_globs;
     window
@@ -58,6 +65,12 @@ fn a_saved_setting_reaches_the_shell_and_a_rejected_one_its_box(cx: &mut TestApp
     cx.run_until_parked();
     let failed = window.update(cx, |view, _, _| view.failed()).unwrap();
     assert_eq!(failed, Some(Field::Excludes));
+    // Its message is in the closed Advanced box, so that opens.
+    assert!(
+        window
+            .update(cx, |view, _, _| view.advanced_shown())
+            .unwrap()
+    );
     assert_eq!(host.settings().unwrap().indexing.exclude_globs, globs);
     assert!(rx.try_recv().is_err(), "nothing to apply");
 

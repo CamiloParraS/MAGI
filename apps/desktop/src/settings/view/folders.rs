@@ -5,6 +5,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
 use std::path::Path;
@@ -117,7 +118,37 @@ impl SettingsView {
                 suggested_folders(offered, s, p, cx, Self::add_folders)
                     .map(|chips| chips.mt(px(12.)))
             }))
-            .child(div().mt(px(22.)).child(self.excludes(s, p, cx)))
+            .child(self.advanced(s, p, cx))
+    }
+
+    /// The exclude patterns behind a toggle: raw globs are for few users.
+    fn advanced(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let shown = self.advanced_shown();
+        div()
+            .mt(px(16.))
+            .child(
+                Button::new("advanced")
+                    .cursor_pointer()
+                    .ghost()
+                    .small()
+                    .icon(if shown {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .label(s.advanced)
+                    // Open for a failed change, which a click can't hide.
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.advanced_open = !this.advanced_open;
+                        cx.notify();
+                    })),
+            )
+            .when(shown, |d| {
+                d.child(theme::fade_in(
+                    div().mt(px(8.)).child(self.excludes(s, p, cx)),
+                    "advanced-in",
+                ))
+            })
     }
 
     fn root_row(

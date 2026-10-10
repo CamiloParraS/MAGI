@@ -12,7 +12,7 @@ use magi_core::features::Feature;
 use crate::theme::Palette;
 
 /// The space between groups.
-const STACK_GAP: Pixels = px(12.);
+const STACK_GAP: Pixels = px(10.);
 
 pub(crate) fn stack() -> Div {
     div().flex().flex_col().gap(STACK_GAP)

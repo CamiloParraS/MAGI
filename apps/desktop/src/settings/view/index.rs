@@ -144,7 +144,7 @@ impl SettingsView {
             .children(stats)
             .child(
                 div()
-                    .mt(px(22.))
+                    .mt(px(16.))
                     .mb(px(8.))
                     .child(subheading(s.unreadable, p)),
             )
@@ -171,7 +171,7 @@ impl SettingsView {
             })
             .child(
                 div()
-                    .mt(px(22.))
+                    .mt(px(16.))
                     .mb(px(8.))
                     .child(subheading(s.danger_zone, p)),
             )

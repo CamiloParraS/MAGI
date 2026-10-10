@@ -166,6 +166,8 @@ pub struct SettingsView {
     /// Focused while the shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
+    /// Whether Folders' Advanced box is open.
+    advanced_open: bool,
     /// Back to the top on every section change.
     pane_scroll: ScrollHandle,
     dark: bool,
@@ -346,6 +348,7 @@ impl SettingsView {
             see_through_focus: cx.focus_handle().tab_stop(true),
             recorder: cx.focus_handle(),
             recording: false,
+            advanced_open: false,
             pane_scroll: ScrollHandle::new(),
             dark: false,
             opening_roots,
@@ -525,6 +528,12 @@ impl SettingsView {
     /// Whether a change in `field`'s row is still running.
     pub fn is_busy(&self, field: Field) -> bool {
         self.busy.contains(&field)
+    }
+
+    /// Advanced shows when opened, or when a change in it failed: its
+    /// message would otherwise be hidden.
+    pub fn advanced_shown(&self) -> bool {
+        self.advanced_open || self.has_problem(Field::Excludes)
     }
 
     fn has_problem(&self, field: Field) -> bool {
@@ -716,7 +725,7 @@ impl Render for SettingsView {
                             .child(heading(self.section.title(s)).mb(px(4.)))
                             .child(
                                 div()
-                                    .mb(px(18.))
+                                    .mb(px(14.))
                                     .text_color(p.mute)
                                     .child(self.section.blurb(s)),
                             )

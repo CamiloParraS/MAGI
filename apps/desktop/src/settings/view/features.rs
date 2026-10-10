@@ -31,7 +31,7 @@ impl SettingsView {
             .child(note(p).mt(px(10.)).child(s.features_footnote))
             .child(
                 div()
-                    .mt(px(22.))
+                    .mt(px(16.))
                     .mb(px(8.))
                     .child(subheading(s.what_to_index, p)),
             )
