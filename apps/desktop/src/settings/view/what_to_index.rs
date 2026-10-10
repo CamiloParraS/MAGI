@@ -4,8 +4,8 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -67,11 +67,87 @@ impl SettingsView {
         let images_needed = images_needed(types, &self.live.read(cx).features);
         let kinds = FILE_TYPES.into_iter().map(|kind| {
             let on = types.contains(&kind);
-            let checkbox = Checkbox::new(("kind", kind as usize))
+            // The frame fades in when the type is switched on; switching off
+            // is instant, like the rest of the window.
+            let frame = on.then(|| {
+                theme::fade_in(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(p.accent)
+                        .bg(p.accent.opacity(0.08)),
+                    ("kind-frame", kind as usize),
+                )
+            });
+            let tick = div()
+                .flex_none()
+                .size(px(18.))
+                .rounded_full()
+                .border_1()
+                .border_color(if on { p.accent } else { p.line })
+                .when(on, |d| {
+                    d.bg(p.accent)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Check).size(px(12.)).text_color(white()))
+                });
+            let warning = (kind == Kind::Image && images_needed)
+                .then(|| note(p).text_color(p.warn).child(s.images_needed));
+            // A button, so Tab and Enter reach every type; the cell makes
+            // tiles in a row the same height.
+            let tile = Button::new(("kind", kind as usize))
                 .cursor_pointer()
-                .label(kind_label(kind, s))
-                .checked(on)
-                .on_click(cx.listener(move |this, &on: &bool, window, cx| {
+                .ghost()
+                .w_full()
+                .h_auto()
+                .text_size(px(14.))
+                .bg(p.solid)
+                .border_1()
+                .border_color(p.line)
+                .p_0()
+                .rounded(px(8.))
+                .accessibility_label(kind_label(kind, s))
+                .child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap_2()
+                        .p_3()
+                        .children(frame)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .opacity(if on { 1. } else { 0.45 })
+                                        .child(theme::kind_glyph(kind, px(26.))),
+                                )
+                                .child(tick),
+                        )
+                        .child(
+                            div()
+                                .text_left()
+                                .child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(kind_label(kind, s)),
+                                )
+                                .children(kind_examples(kind).map(|e| note(p).child(e)))
+                                .children(warning),
+                        ),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let on = !this.indexing.file_types.contains(&kind);
                     let types = toggle_kind(&this.indexing.file_types, kind, on);
                     this.save(
                         Field::FileTypes,
@@ -80,20 +156,14 @@ impl SettingsView {
                         cx,
                     );
                 }));
-            let warning = (kind == Kind::Image && images_needed)
-                .then(|| note(p).text_color(p.warn).child(s.images_needed));
+            // An odd last tile takes the whole row.
             div()
                 .flex()
-                .items_start()
-                .gap_3()
-                .child(theme::kind_glyph(kind, px(22.)))
-                .child(
-                    div()
-                        .min_w_0()
-                        .child(checkbox)
-                        .children(kind_examples(kind).map(|e| note(p).child(e)))
-                        .children(warning),
+                .when(
+                    kind == FILE_TYPES[FILE_TYPES.len() - 1] && FILE_TYPES.len() % 2 == 1,
+                    |d| d.col_span(2),
                 )
+                .child(tile)
         });
         let none = types
             .is_empty()
@@ -111,15 +181,7 @@ impl SettingsView {
                 s,
                 p,
             ))
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(2)
-                    .w_full()
-                    .gap_x_6()
-                    .gap_y_3()
-                    .children(kinds),
-            )
+            .child(div().grid().grid_cols(2).w_full().gap_2().children(kinds))
             .children(none);
         let max_size = self.setting(
             Field::MaxSize,
