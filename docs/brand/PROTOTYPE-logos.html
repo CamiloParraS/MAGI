@@ -1,0 +1,199 @@
+<!doctype html>
+<!-- PROTOTYPE (throwaway): magi logo explorations. Open in a browser. Question: which mark direction feels right? -->
+<meta charset="utf-8">
+<title>magi logo prototypes</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 32px; background: #191919; color: #F3F3F5; font: 14px system-ui, "Segoe UI Variable", sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; } .sub { color: #A4A6AD; margin-bottom: 28px; }
+  .card { background: #2B2B2B; border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; } .card p { margin: 0 0 14px; color: #A4A6AD; max-width: 70ch; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .dark  { --accent: #4CC2FF; --ink: #F3F3F5; --bg: #202024; --mute: #A4A6AD; background: #202024; }
+  .light { --accent: #0A64D8; --ink: #1B1B1F; --bg: #F6F6F8; --mute: #45474D; background: #F6F6F8; color: #1B1B1F; }
+  .side-d { --accent: #4CC2FF; --ink: #F3F3F5; --bg: #191919; background: #191919; }
+  .side-l { --accent: #0A64D8; --ink: #1B1B1F; --bg: #ECECEC; background: #ECECEC; }
+  .mono { --accent: var(--ink); }
+  .on-accent-d { --bg: #4CC2FF; --accent: #0E1013; --ink: #0E1013; }
+  .on-accent-l { --bg: #0A64D8; --accent: #fff; --ink: #fff; }
+  .panel { border-radius: 12px; padding: 14px; display: flex; gap: 14px; align-items: center; }
+  .tile { border-radius: 22%; background: var(--bg); box-shadow: inset 0 0 0 1px #ffffff14; display: grid; place-items: center; }
+  .label { font-size: 11px; color: #A4A6AD; margin-bottom: 4px; }
+  .word { font-weight: 650; font-size: 30px; letter-spacing: -.01em; color: var(--ink); display: inline-flex; align-items: center; gap: 10px; }
+  .eva { font-family: Georgia, "Times New Roman", serif; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+         transform: scaleX(.82); transform-origin: left; border-block: 1px solid var(--mute); padding: 2px 0; font-size: 34px; line-height: 1; }
+  .eva small { display: block; font: 600 8px ui-monospace, Consolas, monospace; letter-spacing: .3em; color: var(--accent); }
+  svg { display: block; overflow: visible; }
+</style>
+<h1>magi — logo prototypes</h1>
+<div class="sub">Each concept: app icon (dark tile / accent tile), bare mark on both panels, mono (tray), 32 &amp; 16 px, and a lockup. Colors are the app tokens.</div>
+<div id="out"></div>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <path id="hex" d="M0-10 8.66-5 8.66 5 0 10-8.66 5-8.66-5Z" stroke-width="3" stroke-linejoin="round"/>
+  </defs>
+
+  <!-- A: Trinity — three MAGI hexes (Melchior/Balthasar/Casper); one lit = the match -->
+  <symbol id="A" viewBox="0 0 64 64">
+    <use href="#hex" x="32" y="21" fill="var(--accent)" stroke="var(--accent)"/>
+    <use href="#hex" x="19.5" y="42.65" fill="none" stroke="var(--ink)"/>
+    <use href="#hex" x="44.5" y="42.65" fill="none" stroke="var(--ink)"/>
+  </symbol>
+
+  <!-- B: Leaf — friendly nod to NERV's fig leaf, veins like text lines -->
+  <symbol id="B" viewBox="0 0 64 64">
+    <path d="M32 6C48 18 54 38 32 56 10 38 16 18 32 6Z" fill="var(--accent)" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M32 62V24M32 44 42 34M32 44 22 34M32 33 39 26M32 33 25 26" stroke="var(--bg)" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+    <path d="M32 56V62" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- C: Warning hexagon holding a document -->
+  <symbol id="C" viewBox="0 0 64 64">
+    <path d="M32 5 55.4 18.5V45.5L32 59 8.6 45.5V18.5Z" fill="none" stroke="var(--ink)" stroke-width="3.5" stroke-linejoin="round"/>
+    <path d="M23 20H34.5L42 27.5V43H23Z" fill="var(--accent)" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M34.5 20V27.5H42" fill="none" stroke="var(--bg)" stroke-width="2.4" stroke-linejoin="round"/>
+  </symbol>
+
+  <!-- D: EVA title-card serif "M" -->
+  <symbol id="D" viewBox="0 0 64 64">
+    <text transform="translate(32 49) scale(.85 1)" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="800" font-size="56" fill="var(--accent)">M</text>
+  </symbol>
+
+  <!-- E: Three overlapping circles — 2-of-3 consensus (keyword + text + image) -->
+  <symbol id="E" viewBox="0 0 64 64">
+    <g fill="var(--accent)" fill-opacity=".5">
+      <circle cx="32" cy="24.2" r="15"/><circle cx="23" cy="39.8" r="15"/><circle cx="41" cy="39.8" r="15"/>
+    </g>
+    <g fill="none" stroke="var(--accent)" stroke-width="1.6">
+      <circle cx="32" cy="24.2" r="15"/><circle cx="23" cy="39.8" r="15"/><circle cx="41" cy="39.8" r="15"/>
+    </g>
+  </symbol>
+
+  <g id="file" stroke-width="1.4" stroke-linejoin="round">
+    <path d="M-4.5-11H1.5L4.5-8V0H-4.5Z"/>
+    <path d="M1.5-11V-8H4.5Z" fill="#000" fill-opacity=".25" stroke="none"/>
+  </g>
+  <!-- G: microscope — focus cone onto the stage, fading layers below = searching deeper -->
+  <symbol id="G" viewBox="0 0 64 64">
+    <g fill="var(--accent)">
+      <g transform="rotate(20 30 19)">
+        <rect x="25" y="9.5" width="10" height="15.5" rx="2.5"/>
+        <rect x="27" y="4" width="6" height="5.5" rx="1.5"/>
+        <rect x="27.5" y="25" width="5" height="4.5" rx="1"/>
+      </g>
+      <path d="M26.4 28.9 37 46.7 16 46.7Z" fill-opacity=".3"/>
+    </g>
+    <g fill="none" stroke="var(--ink)" stroke-width="3.6" stroke-linecap="round">
+      <path d="M15 48.5H45"/>
+      <path d="M36 22C48 22 50 50 43 59.5"/>
+      <path d="M14 59.5H47"/>
+    </g>
+    <use href="#file" transform="translate(19.5 46.7) rotate(-10)" fill="var(--ink)" stroke="var(--ink)" opacity=".4"/>
+    <use href="#file" transform="translate(33.5 46.7) rotate(10)" fill="var(--ink)" stroke="var(--ink)" opacity=".4"/>
+    <use href="#file" transform="translate(26.5 46.7)" fill="var(--accent)" stroke="var(--accent)"/>
+  </symbol>
+
+  <!-- H: iOS-style full-color app icon (squircle + gradient + white microscope). Self-contained: ignores theme vars. -->
+  <linearGradient id="gH" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#5AD0FF"/><stop offset=".55" stop-color="#0A64D8"/><stop offset="1" stop-color="#5C2D91"/>
+  </linearGradient>
+  <linearGradient id="gHs" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+  </linearGradient>
+  <symbol id="H" viewBox="0 0 64 64">
+    <path d="M0 22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V42C64 57.5 57.5 64 42 64H22C6.5 64 0 57.5 0 42Z" fill="url(#gH)"/>
+    <path d="M0 32V22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V32Z" fill="url(#gHs)"/>
+    <g transform="translate(32 32) scale(.8) translate(-32 -32)" fill="#fff">
+      <g transform="rotate(20 30 19)">
+        <rect x="25" y="9.5" width="10" height="15.5" rx="2.5"/>
+        <rect x="27" y="4" width="6" height="5.5" rx="1.5"/>
+        <rect x="27.5" y="25" width="5" height="4.5" rx="1"/>
+      </g>
+      <path d="M26.4 28.9 37 46.7 16 46.7Z" fill-opacity=".3"/>
+      <g fill="none" stroke="#fff" stroke-width="3.8" stroke-linecap="round">
+      <path d="M15 48.5H45"/>
+      <path d="M36 22C48 22 50 50 43 59.5"/>
+      <path d="M14 59.5H47"/>
+      </g>
+      <use href="#file" transform="translate(19.5 46.7) rotate(-10)" fill="#fff" stroke="#fff" opacity=".5"/>
+    <use href="#file" transform="translate(33.5 46.7) rotate(10)" fill="#fff" stroke="#fff" opacity=".5"/>
+    <use href="#file" transform="translate(26.5 46.7)" fill="#fff" stroke="#fff"/>
+    </g>
+  </symbol>
+
+  <!-- I: MAGI vote display — three tapered arms (Melchior/Balthasar/Casper), 2-of-3 lit, arcs between, MAGI plaque at the center -->
+  <g id="mArc" fill="none" stroke="var(--ink)" stroke-width="2">
+    <path d="M45.42 51.9A24 24 0 0 1 18.58 51.9" stroke-opacity=".9"/>
+    <path d="M40.33 49.08A19 19 0 0 1 23.67 49.08" stroke-opacity=".5"/>
+  </g>
+  <symbol id="I" viewBox="0 0 64 64">
+    <use href="#mArc"/><use href="#mArc" transform="rotate(120 32 32)"/><use href="#mArc" transform="rotate(240 32 32)"/>
+    <g transform="translate(32 32)">
+      <path d="M-9-28H9V-10L0-2-9-10Z" fill="var(--accent)"/>
+      <path d="M-9-28H9V-10L0-2-9-10Z" fill="var(--accent)" transform="rotate(120)"/>
+      <path d="M-9-28H9V-10L0-2-9-10Z" fill="var(--ink)" opacity=".35" transform="rotate(240)"/>
+    </g>
+    <rect x="19.5" y="26.75" width="25" height="10.5" fill="var(--bg)" stroke="var(--ink)" stroke-width="1.6"/>
+    <rect x="21.4" y="28.65" width="21.2" height="6.7" fill="none" stroke="var(--ink)" stroke-width=".5"/>
+    <text x="32" y="34.2" text-anchor="middle" textLength="18" lengthAdjust="spacingAndGlyphs" font-family="'Arial Black','Segoe UI Black',Arial,sans-serif" font-weight="900" font-size="6.6" fill="var(--ink)">MAGI</text>
+  </symbol>
+
+  <!-- F: the "i" of magi = hex dot + text-cursor I-beam stem -->
+  <symbol id="F" viewBox="0 0 64 64">
+    <g transform="translate(0 3)">
+      <use href="#hex" x="32" y="15" fill="var(--accent)" stroke="var(--accent)" transform="translate(32 15) scale(.85) translate(-32 -15)"/>
+      <path d="M22 29H42V32.5H35V49.5H42V53H22V49.5H29V32.5H22Z" fill="var(--ink)" stroke="var(--ink)" stroke-width="1" stroke-linejoin="round"/>
+    </g>
+  </symbol>
+</svg>
+
+<script>
+  const ic = (id, s, cls = "") => `<svg class="${cls}" width="${s}" height="${s}"><use href="#${id}"/></svg>`;
+  const tile = (id, cls) => `<div class="tile ${cls}" style="width:88px;height:88px">${ic(id, 56)}</div>`;
+  const concepts = [
+    ["A", "Trinity", "The three MAGI supercomputers as honeycomb hexes (the show's UI motif). One lit in accent = the match. Friendly through rounded corners; reads as 'a few things voting', not a magnifier."],
+    ["B", "Fig leaf", "Direct, softened nod to the NERV leaf. Veins double as text lines. Closest to the original idea, but the leaf→search link is the weakest."],
+    ["C", "Hex + document", "EVA warning-hexagon framing a file. Most literal ('file search'), a bit generic as a file icon."],
+    ["D", "Title card", "Heavy condensed serif like the EVA title cards, with CODE:473 easter egg in the lockup. Most Evangelion, least friendly; icon loses meaning."],
+    ["E", "Consensus", "Three overlapping circles = keyword + text vector + image vector fused (hybrid search), also 2-of-3 MAGI voting. Softest and friendliest."],
+    ["F", "The i", "Hex dot over a text-cursor I-beam: the 'i' in magi is also the search box caret. Works great as wordmark; best with a lowercase lockup.", `mag${ic("F", 52, "inl")}`],
+    ["G", "Depth scope", "A friendly microscope: the lens focuses on a small fan of files on the stage, one lit in accent (the match, like A), so it reads as 'looking inside your files' (OCR, PDFs, embeddings). Not a magnifier, but the same 'look closer' idea."],
+    ["H", "iOS icon", "Full-color app icon: squircle with a diagonal sky-blue → accent-blue → EVA-01 purple gradient, soft top sheen, white microscope. Same idea as G: the lens is focused on a small fan of files, minimal single-weight strokes."],
+    ["I", "Vote display", "Straight from the MAGI voting screen, hard edges and no rounding: three rectangular arms (Melchior, Balthasar, Casper) with the arcs between them and only MAGI on the center plate. Two arms lit, one dimmed = a 2-of-3 vote. The plate is only readable at 48 px and up."],
+  ];
+  const sizes = cls => `<div class="panel ${cls}" style="align-items:flex-end">${[128, 64, 40, 32, 20].map(s => ic("H", s)).join("")}</div>`;
+  const dock = `<div class="panel" style="background:linear-gradient(160deg,#1b2a4a,#3b1f4d);gap:16px">
+    ${[["#34C759"], ["#FF9F0A"], ["#8E8E93"]].map(([c]) => `<svg width="64" height="64"><path d="M0 22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V42C64 57.5 57.5 64 42 64H22C6.5 64 0 57.5 0 42Z" fill="${c}"/></svg>`).join("")}${ic("H", 64)}</div>`;
+  document.getElementById("out").innerHTML = concepts.map(([id, name, why, custom]) => {
+    if (id === "H") return `<div class="card"><h2>${id} — ${name}</h2><p>${why}</p>
+      <div class="row">${sizes("dark")}${sizes("light")}${dock}</div></div>`;
+    const word = custom
+      ? `<span class="word">${custom}</span>`
+      : id === "D"
+        ? `<span class="word"><span class="eva">magi<small>CODE:473 · FILE SEARCH</small></span></span>`
+        : `<span class="word">${ic(id, 36)}magi</span>`;
+    return `<div class="card"><h2>${id} — ${name}</h2><p>${why}</p>
+      <div class="row">
+        <div><div class="label">icon · dark</div>${tile(id, "dark")}</div>
+        <div><div class="label">icon · accent (dark)</div>${tile(id, "on-accent-d")}</div>
+        <div><div class="label">icon · accent (light)</div>${tile(id, "on-accent-l")}</div>
+        <div><div class="label">on panel</div><div class="panel dark">${ic(id, 56)}</div></div>
+        <div><div class="label">on panel</div><div class="panel light">${ic(id, 56)}</div></div>
+        <div><div class="label">mono · tray 32/16</div>
+          <div class="panel side-d mono">${ic(id, 32)}${ic(id, 16)}</div></div>
+        <div><div class="label">mono · light</div>
+          <div class="panel side-l mono">${ic(id, 32)}${ic(id, 16)}</div></div>
+        <div><div class="label">color 32/16</div>
+          <div class="panel side-d">${ic(id, 32)}${ic(id, 16)}</div></div>
+        <div><div class="label">color 32/16</div>
+          <div class="panel side-l">${ic(id, 32)}${ic(id, 16)}</div></div>
+      </div>
+      <div class="row">
+        <div class="panel dark" style="padding:16px 22px">${word}</div>
+        <div class="panel light" style="padding:16px 22px">${word}</div>
+      </div></div>`;
+  }).join("");
+  // F's inline 'i' needs to sit on the baseline
+  document.querySelectorAll("svg.inl").forEach(s => s.style.margin = "-6px 0 -2px -18px");
+</script>
