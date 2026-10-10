@@ -81,10 +81,28 @@ impl OnboardingView {
     pub(super) fn indexing(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let ready = readiness(live.status.as_ref(), &live.features);
-        // "Results get better" only while they still will.
+        // "Results get better" only while they still will. Going ready, the
+        // old sentence fades out over the new one as it fades in.
+        let line = |text: &'static str| div().text_color(p.mute).max_w(px(460.)).child(text);
         let intro = match ready {
-            Readiness::Ready => s.ob_done_note_ready,
-            Readiness::Preparing(_) => s.ob_done_note,
+            Readiness::Ready if self.was_preparing.get() => div()
+                .relative()
+                .child(theme::fade_in(line(s.ob_done_note_ready), "intro-ready"))
+                .child(
+                    line(s.ob_done_note)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .with_animation(
+                            "intro-was",
+                            Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                            |el, t| el.opacity(1. - t),
+                        ),
+                )
+                .into_any_element(),
+            Readiness::Ready => line(s.ob_done_note_ready).into_any_element(),
+            Readiness::Preparing(_) => line(s.ob_done_note).into_any_element(),
         };
         // Seen once, so it may arrive with a little life: it grows into its
         // fixed 52px slot (nothing around it moves) as it fades in.
@@ -271,11 +289,7 @@ impl OnboardingView {
                 "done-heading",
                 1,
             ))
-            .child(stagger(
-                div().text_color(p.mute).max_w(px(460.)).child(intro),
-                "done-intro",
-                2,
-            ))
+            .child(stagger(div().child(intro), "done-intro", 2))
             .child(stagger(
                 div().mt(px(22.)).w_full().child(shortcut),
                 "done-card",
