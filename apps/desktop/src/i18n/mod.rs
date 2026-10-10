@@ -99,6 +99,8 @@ pub struct Strings {
     pub root_files: Plural,
     pub root_missing: &'static str,
     pub root_denied: &'static str,
+    /// Before Settings' Add folders button, read as one sentence with it.
+    pub drag_folders_or: &'static str,
     pub no_folders: &'static str,
     /// `{path}` is the folder.
     pub root_not_found: &'static str,

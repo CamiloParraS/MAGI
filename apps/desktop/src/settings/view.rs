@@ -841,6 +841,15 @@ impl SettingsView {
                     .items_center()
                     .mb(px(8.))
                     .child(div().flex_1().child(subheading(s.searched_folders, p)))
+                    // Read with the button: "Drag folders onto the list, or
+                    // [Add folders]".
+                    .child(
+                        div()
+                            .mr(px(8.))
+                            .text_sm()
+                            .text_color(p.mute)
+                            .child(s.drag_folders_or),
+                    )
                     .child(
                         Button::new("add-folder")
                             .cursor_pointer()
