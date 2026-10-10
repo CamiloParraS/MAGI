@@ -94,6 +94,16 @@ impl Section {
         }
     }
 
+    fn blurb(self, s: &Strings) -> &'static str {
+        match self {
+            Self::Folders => s.blurb_folders,
+            Self::Searched => s.blurb_searched,
+            Self::General => s.blurb_general,
+            Self::Appearance => s.blurb_appearance,
+            Self::Index => s.blurb_index,
+        }
+    }
+
     fn icon(self) -> IconName {
         match self {
             Self::Folders => IconName::Folder,
@@ -702,7 +712,15 @@ impl Render for SettingsView {
                     .pb(px(28.))
                     // Another section fades in, its heading with it.
                     .child(theme::fade_in(
-                        div().child(heading(self.section.title(s))).child(body),
+                        div()
+                            .child(heading(self.section.title(s)).mb(px(4.)))
+                            .child(
+                                div()
+                                    .mb(px(18.))
+                                    .text_color(p.mute)
+                                    .child(self.section.blurb(s)),
+                            )
+                            .child(body),
                         ("pane-in", self.section as usize),
                     )),
             )

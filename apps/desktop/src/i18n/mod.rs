@@ -182,6 +182,16 @@ pub struct Strings {
     pub theme_light: &'static str,
     pub theme_dark: &'static str,
     pub index: &'static str,
+    /// Under the folders heading.
+    pub blurb_folders: &'static str,
+    /// Under the searched heading.
+    pub blurb_searched: &'static str,
+    /// Under the general heading.
+    pub blurb_general: &'static str,
+    /// Under the appearance heading.
+    pub blurb_appearance: &'static str,
+    /// Under the index heading.
+    pub blurb_index: &'static str,
     pub stat_indexed: &'static str,
     pub stat_waiting: &'static str,
     pub stat_skipped: &'static str,
