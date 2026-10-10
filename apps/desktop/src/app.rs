@@ -12,8 +12,9 @@ use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::hotkey::{self, Hotkey};
 use crate::i18n::Lang;
+use crate::live::Live;
 use crate::onboarding::{self, OnboardingView};
-use crate::search::view::{self, Live, Opening, SearchView};
+use crate::search::view::{self, Opening, SearchView};
 use crate::settings::view::{self as settings, SettingsView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
@@ -499,8 +500,8 @@ struct StartFailure {
 
 impl Render for StartFailure {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use crate::ui::{card, note};
         use gpui_kit::component::button::{Button, ButtonVariants as _};
-        use settings::{card, note};
 
         let p = theme::Palette::new(self.dark);
         let s = self.lang.strings();

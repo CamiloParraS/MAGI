@@ -10,9 +10,9 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::i18n::Lang;
-use crate::onboarding::shortcut_text;
 use crate::settings::hotkey_keystroke;
 use crate::theme::Tone;
+use crate::ui::keycaps::shortcut_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {

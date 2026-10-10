@@ -1,0 +1,55 @@
+//! Small building blocks every window draws with.
+
+pub mod folders;
+pub mod keycaps;
+
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
+use crate::theme::Palette;
+
+/// The space between boxes (the variant A mockup's 6 px).
+const STACK_GAP: Pixels = px(6.);
+
+pub(crate) fn stack() -> Div {
+    div().flex().flex_col().gap(STACK_GAP)
+}
+
+/// A settings box, as in the variant A mockup. Fields inside it take
+/// `p.solid` so they stand out from the box. In light mode a white box on a
+/// near-white window needs a faint shadow to read as a layer.
+pub(crate) fn card(p: &Palette) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(14.))
+        .px_4()
+        .py_3()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(p.line)
+        .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
+}
+
+/// A setting's second line.
+pub(crate) fn note(p: &Palette) -> Div {
+    div().mt(px(2.)).text_xs().text_color(p.mute)
+}
+
+pub(crate) fn heading(text: &'static str) -> Div {
+    div()
+        .mb(px(18.))
+        .text_size(px(26.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(text)
+}
+
+/// A group's name inside a section, small caps as in the mockup.
+pub(crate) fn subheading(text: &'static str, p: &Palette) -> Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(p.mute)
+        .child(text)
+}

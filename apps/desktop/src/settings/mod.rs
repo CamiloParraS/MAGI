@@ -8,6 +8,7 @@ use magi_core::db::roots::Health;
 use magi_core::discovery::Kind;
 use magi_core::dto::{DownloadError, ErrorCode, FeatureStatus, FileErrorCode, Install, RootStatus};
 use magi_core::features::Feature;
+use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
 
 use crate::i18n::{Lang, Strings};
@@ -244,6 +245,21 @@ pub fn slider_from_intensity(intensity: f32) -> f32 {
         *TRANSPARENCY_INTENSITY.end(),
     );
     ((hi - intensity) / (hi - lo)).clamp(0., 1.)
+}
+
+/// Records the wish, then downloads if needed (ADR-0010). Blocking: run it
+/// on the background executor.
+pub fn turn_on(host: &Host, feature: Feature) -> magi_core::Result<()> {
+    let installed = host.features().status().is_ok_and(|all| {
+        all.iter()
+            .any(|s| s.feature == feature && matches!(s.install, Install::Installed { .. }))
+    });
+    host.set_feature_enabled(feature, true)?;
+    if installed {
+        Ok(())
+    } else {
+        host.features().download(feature)
+    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ use magi_core::config::Language;
 use magi_core::host::{Host, HostPaths};
 use magi_desktop::app::AppEvent;
 use magi_desktop::i18n::Lang;
-use magi_desktop::search::view::Live;
+use magi_desktop::live::Live;
 use magi_desktop::settings::view::{Field, SettingsView};
 
 #[gpui_kit::test]

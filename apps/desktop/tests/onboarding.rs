@@ -6,8 +6,8 @@ use magi_core::features::Feature;
 use magi_core::host::{Host, HostPaths};
 use magi_desktop::app::AppEvent;
 use magi_desktop::i18n::Lang;
+use magi_desktop::live::Live;
 use magi_desktop::onboarding::{OnboardingView, Step};
-use magi_desktop::search::view::Live;
 
 #[gpui_kit::test]
 fn onboarding_saves_the_chosen_features_and_the_login_choice(cx: &mut TestAppContext) {

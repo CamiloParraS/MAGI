@@ -1,0 +1,109 @@
+//! The search window's footer: settings, the index status, the keys.
+
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::{IconName, Sizable as _};
+use gpui_kit::*;
+
+use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
+use crate::theme::Palette;
+use crate::tray::{status_line, status_tone};
+
+impl SearchView {
+    /// Always there: the settings gear, the index status (as in the tray)
+    /// and the keys that apply now.
+    pub(super) fn footer(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let live = self.live.read(cx);
+        let (lang, s) = (live.lang, live.lang.strings());
+        let status = live.status.as_ref().map(|st| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .child(p.dot(status_tone(st)))
+                .child(div().truncate().child(status_line(st, lang)))
+        });
+        let pairs: &[(&str, &'static str)] = if self.state.results().is_empty() {
+            &[("escape", s.close)]
+        } else {
+            &[
+                ("enter", s.open),
+                ("secondary-enter", s.reveal),
+                (
+                    COPY_KEY,
+                    if self.copied.is_some() {
+                        s.copied
+                    } else {
+                        s.copy_path
+                    },
+                ),
+            ]
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .pl(px(8.))
+            .pr(px(16.))
+            .py(px(6.))
+            .text_xs()
+            .text_color(p.mute)
+            .border_t_1()
+            .border_color(p.line)
+            .child(
+                Button::new("settings")
+                    .cursor_pointer()
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Settings)
+                    .tooltip_with_action(s.settings, &OpenSettings, Some(CONTEXT))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(&OpenSettings, window, cx)
+                    })),
+            )
+            .child(div().flex_1().min_w_0().children(status))
+            .child(keys(
+                pairs,
+                self.copied.is_some().then_some((self.copies, p)),
+            ))
+    }
+}
+
+/// Key hints; `keys` are GPUI keystrokes (`secondary` is Ctrl, or Cmd on
+/// macOS), shown the platform's way.
+///
+/// `copied` is `Some((copies, palette))` while "Path copied" shows: that
+/// label starts in the accent color and settles to the others' with the
+/// row flash; a new copy replays it.
+fn keys(pairs: &[(&str, &'static str)], copied: Option<(u64, &Palette)>) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.))
+        .children(pairs.iter().flat_map(|&(key, label)| {
+            let kbd = Keystroke::parse(key)
+                .ok()
+                .map(|k| Kbd::new(k).into_any_element());
+            let label = (!label.is_empty()).then(|| {
+                let label = div().mr(px(6.)).child(label);
+                match copied {
+                    Some((n, p)) if key == COPY_KEY => {
+                        let (accent, mute) = (p.accent, p.mute);
+                        label
+                            .with_animation(
+                                ("copied-label", n),
+                                Animation::new(COPY_FLASH).with_easing(ease_out_quint()),
+                                move |label, t| {
+                                    label.text_color(mute.blend(accent.opacity(1. - t)))
+                                },
+                            )
+                            .into_any_element()
+                    }
+                    _ => label.into_any_element(),
+                }
+            });
+            kbd.into_iter().chain(label)
+        }))
+}

@@ -3,7 +3,8 @@ use std::time::Instant;
 use gpui_kit::{AppContext as _, TestAppContext};
 use magi_core::host::{Host, HostPaths};
 use magi_desktop::i18n::Lang;
-use magi_desktop::search::view::{Live, Opening, SearchView};
+use magi_desktop::live::Live;
+use magi_desktop::search::view::{Opening, SearchView};
 use magi_desktop::theme::Backdrop;
 
 struct Counter(u32);

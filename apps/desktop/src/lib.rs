@@ -5,12 +5,14 @@ pub mod app;
 pub mod hotkey;
 pub mod i18n;
 pub mod instance;
+pub mod live;
 mod logging;
 pub mod onboarding;
 pub mod search;
 pub mod settings;
 pub mod theme;
 pub mod tray;
+pub mod ui;
 
 use std::process::ExitCode;
 

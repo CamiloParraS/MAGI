@@ -295,9 +295,11 @@ magi/
 │           ├── main.rs             # startup, single-instance, --toggle forwarding
 │           ├── app.rs              # owns the Host; runs its blocking calls on the background executor
 │           ├── i18n/               # string table (one struct per language) + ICU4X formatting
-│           ├── search/             # search window view + pure logic (keyboard nav, highlights)
-│           ├── settings/           # settings window view + validation
-│           ├── onboarding.rs
+│           ├── live.rs             # app state every window shows (status, features, language, theme)
+│           ├── ui/                 # shared building blocks: cards and notes, folder picking, keycaps
+│           ├── search/             # search window view (view/: results, hints, footer) + pure logic
+│           ├── settings/           # settings window view (view/: one file per section) + validation
+│           ├── onboarding/         # first run: setup screen, its strip, finish screen
 │           ├── tray.rs             # tray-icon
 │           ├── hotkey.rs           # global-hotkey
 │           └── theme.rs            # light/dark, window background resolution
