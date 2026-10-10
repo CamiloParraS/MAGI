@@ -29,6 +29,9 @@ use crate::ui::folders::pick_folders;
 use crate::ui::note;
 
 pub const SIZE: Size<Pixels> = size(px(880.), px(600.));
+/// The smallest the window resizes to: below this width the two columns and
+/// the four suggestion chips start to wrap; the screen scrolls in height.
+pub const MIN_SIZE: Size<Pixels> = size(px(800.), px(520.));
 
 actions!(magi_onboarding, [Next, Back]);
 

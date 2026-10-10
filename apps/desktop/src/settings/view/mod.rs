@@ -58,6 +58,11 @@ use choices::{
 };
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
+/// The smallest the window resizes to. The Appearance slider row (label,
+/// both end labels and the slider) is the widest and already fits the default
+/// only just, so the width stays close to it; sections scroll below this
+/// height.
+pub const MIN_SIZE: Size<Pixels> = size(px(860.), px(480.));
 
 /// A section button's height, and the space between two: the accent bar
 /// moves by their sum per section.

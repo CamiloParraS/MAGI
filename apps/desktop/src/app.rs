@@ -303,6 +303,7 @@ impl Shell {
                 settings::SIZE,
                 cx,
             ))),
+            window_min_size: Some(settings::MIN_SIZE),
             focus: true,
             show: true,
             window_background: theme::window_background(backdrop),
@@ -334,6 +335,7 @@ impl Shell {
                 onboarding::SIZE,
                 cx,
             ))),
+            window_min_size: Some(onboarding::MIN_SIZE),
             focus: true,
             show: true,
             ..Default::default()
