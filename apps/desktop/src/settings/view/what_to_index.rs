@@ -23,6 +23,26 @@ use crate::settings::{
 use crate::theme::{self, Palette};
 use crate::ui::{grouped, note, row_icon, stack};
 
+/// `el` styled for `on` (`style` takes 0 for off, 1 for on). Right after a
+/// click it plays there from the other state, over [`theme::FADE`].
+fn toggled(
+    el: Div,
+    touched: bool,
+    on: bool,
+    id: impl Into<ElementId>,
+    style: impl Fn(Div, f32) -> Div + 'static,
+) -> AnyElement {
+    if !touched {
+        return style(el, f32::from(u8::from(on))).into_any_element();
+    }
+    el.with_animation(
+        id,
+        Animation::new(theme::FADE).with_easing(ease_out_quint()),
+        move |el, t| style(el, if on { t } else { 1. - t }),
+    )
+    .into_any_element()
+}
+
 impl SettingsView {
     pub(super) fn save_max_size(
         &mut self,
@@ -67,33 +87,54 @@ impl SettingsView {
         let images_needed = images_needed(types, &self.live.read(cx).features);
         let kinds = FILE_TYPES.into_iter().map(|kind| {
             let on = types.contains(&kind);
-            // The frame fades in when the type is switched on; switching off
-            // is instant, like the rest of the window.
-            let frame = on.then(|| {
-                theme::fade_in(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(p.accent)
-                        .bg(p.accent.opacity(0.08)),
-                    ("kind-frame", kind as usize),
+            let (accent, line) = (p.accent, p.line);
+            // Only a tile just clicked animates (the frame, the tick and the
+            // glyph, both ways); opening the section shows each as it is.
+            let touched = self.kinds_touched.contains(&kind);
+            let key = kind as usize * 2 + usize::from(on);
+            let frame = (on || touched).then(|| {
+                toggled(
+                    div().absolute().inset_0().rounded(px(8.)).border_1(),
+                    touched,
+                    on,
+                    ("kind-frame", key),
+                    move |el, a| {
+                        el.border_color(accent.opacity(a))
+                            .bg(accent.opacity(0.08 * a))
+                    },
                 )
             });
-            let tick = div()
-                .flex_none()
-                .size(px(18.))
-                .rounded_full()
-                .border_1()
-                .border_color(if on { p.accent } else { p.line })
-                .when(on, |d| {
-                    d.bg(p.accent)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(Icon::new(IconName::Check).size(px(12.)).text_color(white()))
-                });
+            let tick = toggled(
+                div()
+                    .flex_none()
+                    .size(px(18.))
+                    .rounded_full()
+                    .border_1()
+                    .flex()
+                    .items_center()
+                    .justify_center(),
+                touched,
+                on,
+                ("kind-tick", key),
+                move |el, a| {
+                    el.border_color(line.blend(accent.opacity(a)))
+                        .bg(accent.opacity(a))
+                        .when(a > 0., |d| {
+                            d.child(
+                                Icon::new(IconName::Check)
+                                    .size(px(8. + 4. * a))
+                                    .text_color(white().opacity(a)),
+                            )
+                        })
+                },
+            );
+            let glyph = toggled(
+                div().child(theme::kind_glyph(kind, px(26.))),
+                touched,
+                on,
+                ("kind-glyph", key),
+                |el, a| el.opacity(0.45 + 0.55 * a),
+            );
             let warning = (kind == Kind::Image && images_needed)
                 .then(|| note(p).text_color(p.warn).child(s.images_needed));
             // A button, so Tab and Enter reach every type; the cell makes
@@ -126,11 +167,7 @@ impl SettingsView {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .child(
-                                    div()
-                                        .opacity(if on { 1. } else { 0.45 })
-                                        .child(theme::kind_glyph(kind, px(26.))),
-                                )
+                                .child(glyph)
                                 .child(tick),
                         )
                         .child(
@@ -147,6 +184,9 @@ impl SettingsView {
                         ),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if !this.kinds_touched.contains(&kind) {
+                        this.kinds_touched.push(kind);
+                    }
                     let on = !this.indexing.file_types.contains(&kind);
                     let types = toggle_kind(&this.indexing.file_types, kind, on);
                     this.save(

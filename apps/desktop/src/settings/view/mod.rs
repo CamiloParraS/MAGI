@@ -171,6 +171,8 @@ pub struct SettingsView {
     /// Focused while the shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
+    /// File types clicked since the window opened: only these animate.
+    kinds_touched: Vec<magi_core::discovery::Kind>,
     /// The Index tiles' counts, each on its way to the latest status.
     rolls: Option<[Roll; 4]>,
     /// Whether Folders' Advanced box is open.
@@ -361,6 +363,7 @@ impl SettingsView {
             see_through_focus: cx.focus_handle().tab_stop(true),
             recorder: cx.focus_handle(),
             recording: false,
+            kinds_touched: Vec::new(),
             rolls: None,
             advanced_open: false,
             advanced_flips: 0,
