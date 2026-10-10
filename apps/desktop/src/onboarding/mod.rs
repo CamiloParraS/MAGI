@@ -495,7 +495,7 @@ impl Render for OnboardingView {
             .h(px(260.))
             .bg(linear_gradient(
                 180.,
-                linear_color_stop(p.accent.opacity(if self.dark { 0.20 } else { 0.16 }), 0.),
+                linear_color_stop(p.accent.opacity(if self.dark { 0.30 } else { 0.20 }), 0.),
                 linear_color_stop(p.accent.opacity(0.), 1.),
             ));
         div()
