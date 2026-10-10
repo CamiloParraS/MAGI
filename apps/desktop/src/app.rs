@@ -414,6 +414,7 @@ gpui_kit::assets::icon_assets!(
         Power,
         // Onboarding: the folder drop zone and the search features.
         FolderPlus,
+        Folders,
         TextSearch,
         ScanText,
         ScanEye,
@@ -429,6 +430,11 @@ struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if path == crate::onboarding::FOLDERS_3 {
+            return Ok(Some(
+                include_bytes!("../assets/folders-3.svg").as_slice().into(),
+            ));
+        }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets.load(path),

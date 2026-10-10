@@ -200,6 +200,10 @@ pub const STRINGS: Strings = Strings {
     ob_start: "Start",
     back: "Go back",
     ob_need_folder: "Add a folder to start.",
+    ob_folder_count: Plural {
+        one: "{n} folder",
+        other: "{n} folders",
+    },
     ob_recommended: "Recommended",
     ob_installed: "Installed",
     ob_folders: "Choose folders to search",

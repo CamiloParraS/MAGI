@@ -242,6 +242,8 @@ pub struct Strings {
     pub back: &'static str,
     /// Beside Start while no folder is chosen: why it is off.
     pub ob_need_folder: &'static str,
+    /// Under the setup strip's folder glyphs.
+    pub ob_folder_count: Plural,
     pub ob_recommended: &'static str,
     /// In place of a downloaded feature's size.
     pub ob_installed: &'static str,
