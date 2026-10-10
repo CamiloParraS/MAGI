@@ -21,7 +21,7 @@ use crate::settings::{
     max_size_from_text, toggle_kind,
 };
 use crate::theme::{self, Palette};
-use crate::ui::{grouped, note, stack};
+use crate::ui::{grouped, note, row_icon, stack};
 
 impl SettingsView {
     pub(super) fn save_max_size(
@@ -174,13 +174,20 @@ impl SettingsView {
             .items_start()
             .gap_3()
             .py(px(10.))
-            .child(self.labelled(
-                s.file_types,
-                Some(s.file_types_note),
-                Field::FileTypes,
-                s,
-                p,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(row_icon(IconName::Files, p))
+                    .child(self.labelled(
+                        s.file_types,
+                        Some(s.file_types_note),
+                        Field::FileTypes,
+                        s,
+                        p,
+                    )),
+            )
             .child(div().grid().grid_cols(2).w_full().gap_2().children(kinds))
             .children(none);
         let max_size = self.setting(
@@ -231,13 +238,19 @@ impl SettingsView {
     pub(super) fn excludes(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let excludes_edited =
             globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
-        let excludes = self
-            .row(Field::Excludes, p)
+        self.row(Field::Excludes, p)
             .flex_col()
             .items_stretch()
             .gap_3()
             .py(px(10.))
-            .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(row_icon(IconName::FolderX, p))
+                    .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p)),
+            )
             // `rows` does not size the box; a height does.
             .child(Textarea::new(&self.excludes).h(px(150.)).bg(p.solid))
             .child(
@@ -251,7 +264,6 @@ impl SettingsView {
                             cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
                         ),
                 ),
-            );
-        grouped(p, [excludes])
+            )
     }
 }

@@ -101,6 +101,7 @@ pub const STRINGS: Strings = Strings {
     max_size: "Largest file to read",
     max_size_note: "Bigger files are found by name only.",
     advanced: "Advanced",
+    advanced_note: "Skip folders and file patterns",
     excludes: "Skip these paths",
     excludes_note: "One pattern per line, like **/node_modules/**.",
     save: "Save",

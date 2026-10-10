@@ -125,6 +125,7 @@ pub struct Strings {
     pub max_size: &'static str,
     pub max_size_note: &'static str,
     pub advanced: &'static str,
+    pub advanced_note: &'static str,
     pub excludes: &'static str,
     pub excludes_note: &'static str,
     pub save: &'static str,

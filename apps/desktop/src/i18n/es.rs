@@ -101,6 +101,7 @@ pub const STRINGS: Strings = Strings {
     max_size: "Archivo más grande que se lee",
     max_size_note: "Los archivos más grandes se encuentran solo por su nombre.",
     advanced: "Avanzado",
+    advanced_note: "Omitir carpetas y patrones de archivos",
     excludes: "Omitir estas rutas",
     excludes_note: "Un patrón por línea, como **/node_modules/**.",
     save: "Guardar",

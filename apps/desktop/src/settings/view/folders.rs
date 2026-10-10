@@ -5,7 +5,6 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
 use std::path::Path;
@@ -17,7 +16,7 @@ use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{
     add_folder_row, drop_zone, folder_name, pick_folders, suggested_folders, suggestions,
 };
-use crate::ui::{grouped, note, subheading};
+use crate::ui::{grouped, note, row, row_icon, subheading};
 
 impl SettingsView {
     /// The native folder picker (FR-1), then `add_root` for each.
@@ -121,34 +120,53 @@ impl SettingsView {
             .child(self.advanced(s, p, cx))
     }
 
-    /// The exclude patterns behind a toggle: raw globs are for few users.
+    /// The exclude patterns behind a toggle: raw globs are for few users. One
+    /// card, its header always there and the patterns opening under it.
     fn advanced(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let shown = self.advanced_shown();
-        div()
-            .mt(px(16.))
+        let header = Button::new("advanced")
+            .cursor_pointer()
+            .ghost()
+            .w_full()
+            .h_auto()
+            .p_0()
+            .rounded_none()
+            .text_size(px(14.))
+            .accessibility_label(s.advanced)
+            // A failed change keeps it open, so a click can't hide its message.
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.advanced_open = !this.advanced_open;
+                cx.notify();
+            }))
             .child(
-                Button::new("advanced")
-                    .cursor_pointer()
-                    .ghost()
-                    .small()
-                    .icon(if shown {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label(s.advanced)
-                    // Open for a failed change, which a click can't hide.
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.advanced_open = !this.advanced_open;
-                        cx.notify();
-                    })),
-            )
-            .when(shown, |d| {
-                d.child(theme::fade_in(
-                    div().mt(px(8.)).child(self.excludes(s, p, cx)),
-                    "advanced-in",
-                ))
-            })
+                row()
+                    .w_full()
+                    .child(row_icon(IconName::SlidersHorizontal, p))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_left()
+                            .child(s.advanced)
+                            .child(note(p).child(s.advanced_note)),
+                    )
+                    .child(
+                        Icon::new(if shown {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(px(16.))
+                        .flex_none()
+                        .text_color(p.mute),
+                    ),
+            );
+        let rows = [header.into_any_element()]
+            .into_iter()
+            .chain(shown.then(|| {
+                theme::fade_in(self.excludes(s, p, cx), "advanced-in").into_any_element()
+            }));
+        div().mt(px(16.)).child(grouped(p, rows))
     }
 
     fn root_row(

@@ -1,6 +1,7 @@
 //! Settings › Index: counts, the files that could not be read, clearing.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
@@ -65,7 +66,7 @@ impl SettingsView {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
         let stats = live.status.as_ref().map(|st| {
-            let stat = |value: u64, label: &'static str, tone: Option<Tone>| {
+            let stat = |icon: IconName, value: u64, label: &'static str, tone: Option<Tone>| {
                 card(p)
                     .flex_1()
                     .flex_col()
@@ -73,20 +74,32 @@ impl SettingsView {
                     .gap(px(2.))
                     .child(
                         div()
-                            .text_size(px(22.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .when_some(tone, |d, t| d.text_color(p.tone(t)))
-                            .child(lang.number(value)),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                Icon::new(icon)
+                                    .size(px(16.))
+                                    .text_color(tone.map_or(p.accent, |t| p.tone(t))),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(22.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .when_some(tone, |d, t| d.text_color(p.tone(t)))
+                                    .child(lang.number(value)),
+                            ),
                     )
                     .child(div().text_xs().text_color(p.mute).child(label))
             };
             div()
                 .flex()
                 .gap(px(8.))
-                .child(stat(st.indexed, s.stat_indexed, None))
-                .child(stat(st.queued, s.stat_waiting, None))
-                .child(stat(st.skipped, s.stat_skipped, None))
+                .child(stat(IconName::FileCheck, st.indexed, s.stat_indexed, None))
+                .child(stat(IconName::Clock, st.queued, s.stat_waiting, None))
+                .child(stat(IconName::Tag, st.skipped, s.stat_skipped, None))
                 .child(stat(
+                    IconName::TriangleAlert,
                     st.errors,
                     s.stat_errors,
                     (st.errors > 0).then_some(Tone::Err),

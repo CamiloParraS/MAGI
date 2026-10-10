@@ -413,6 +413,18 @@ gpui_kit::assets::icon_assets!(
         Keyboard,
         Trash,
         Power,
+        // Settings rows that had no picture: the bundle lacked them.
+        SunMoon,
+        AppWindow,
+        Blend,
+        FileUp,
+        LogOut,
+        SlidersHorizontal,
+        FolderX,
+        Files,
+        FileCheck,
+        Clock,
+        Tag,
         // Onboarding: the folder drop zone and the search features.
         FolderPlus,
         Folders,
