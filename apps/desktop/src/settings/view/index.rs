@@ -8,7 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
-use crate::settings::file_error_label;
+use crate::settings::{file_error_label, still_reading};
 use crate::theme::{Palette, Tone};
 use crate::ui::{card, group, grouped, note, row, row_icon, subheading};
 
@@ -95,6 +95,13 @@ impl SettingsView {
         let unreadable = self.unreadable.as_deref().unwrap_or_default();
         let files = match self.unreadable.as_deref() {
             None => div(),
+            Some([]) if still_reading(live.status.as_ref()) => grouped(
+                p,
+                [row()
+                    .child(row_icon(IconName::RefreshCw, p))
+                    .text_color(p.mute)
+                    .child(s.still_reading)],
+            ),
             Some([]) => grouped(
                 p,
                 [row()

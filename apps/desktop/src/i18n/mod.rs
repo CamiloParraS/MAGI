@@ -188,6 +188,7 @@ pub struct Strings {
     pub stat_errors: &'static str,
     pub unreadable: &'static str,
     pub all_read: &'static str,
+    pub still_reading: &'static str,
     pub retry_all: &'static str,
     pub read_denied: &'static str,
     pub read_locked: &'static str,

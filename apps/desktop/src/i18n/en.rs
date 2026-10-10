@@ -158,6 +158,7 @@ pub const STRINGS: Strings = Strings {
     stat_errors: "Couldn't read",
     unreadable: "Files that could not be read",
     all_read: "Every file was read.",
+    still_reading: "Reading files…",
     retry_all: "Retry all",
     read_denied: "No permission to read it",
     read_locked: "Open in another program",

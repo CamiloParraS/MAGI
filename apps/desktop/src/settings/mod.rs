@@ -6,13 +6,22 @@ pub mod view;
 use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
 use magi_core::discovery::Kind;
-use magi_core::dto::{DownloadError, ErrorCode, FeatureStatus, FileErrorCode, Install, RootStatus};
+use magi_core::dto::{
+    DownloadError, ErrorCode, FeatureStatus, FileErrorCode, IndexStatus, Install, RootStatus,
+};
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
 
 use crate::i18n::{Lang, Strings};
 use crate::theme::{self, Backdrop, Tone};
+
+/// With no unreadable file listed, whether files are still to be read: queued
+/// (retried ones among them), or counted as errors by a status from before a
+/// retry. Until then the list cannot say every file was read.
+pub fn still_reading(status: Option<&IndexStatus>) -> bool {
+    status.is_some_and(|st| st.queued > 0 || st.errors > 0)
+}
 
 /// A root's badge, and a line explaining anything but plain watching
 /// (FR-11).
@@ -266,6 +275,7 @@ pub fn turn_on(host: &Host, feature: Feature) -> magi_core::Result<()> {
 mod tests {
     use super::*;
     use crate::i18n::Lang;
+    use magi_core::dto::IndexState;
 
     fn root(enabled: bool, status: Health) -> RootStatus {
         RootStatus {
@@ -275,6 +285,25 @@ mod tests {
             status,
             indexed: 0,
         }
+    }
+
+    #[test]
+    fn an_empty_unreadable_list_says_reading_until_the_queue_is_done() {
+        let status = |queued, errors| IndexStatus {
+            state: IndexState::Indexing,
+            queued,
+            indexed: 10,
+            skipped: 0,
+            errors,
+            current_file: None,
+            roots: Vec::new(),
+        };
+        // Retried files are queued again: not read yet.
+        assert!(still_reading(Some(&status(3, 0))));
+        // The status from before the retry still counts them as errors.
+        assert!(still_reading(Some(&status(0, 3))));
+        assert!(!still_reading(Some(&status(0, 0))));
+        assert!(!still_reading(None));
     }
 
     #[test]
