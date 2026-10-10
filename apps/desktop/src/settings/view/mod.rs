@@ -511,12 +511,17 @@ impl SettingsView {
         self.error.as_ref().is_some_and(|(f, _)| *f == field)
     }
 
-    /// The failed change's message, for the last line of `field`'s row.
-    fn problem(&self, field: Field, s: &Strings, p: &Palette) -> Option<Div> {
+    /// The failed change's message, for the last line of `field`'s row. It
+    /// fades in, again for a different message in the same row.
+    fn problem(&self, field: Field, s: &Strings, p: &Palette) -> Option<impl IntoElement> {
         self.error
             .as_ref()
             .filter(|(f, _)| *f == field)
-            .map(|(_, error)| note(p).text_color(p.warn).child(error_text(error, s)))
+            .map(|(_, error)| {
+                let text = error_text(error, s);
+                let id = SharedString::from(format!("problem-{field:?}-{text}"));
+                theme::fade_in(note(p).text_color(p.warn).child(text), id)
+            })
     }
 
     /// A grouped row; a failed change in it tints it.
