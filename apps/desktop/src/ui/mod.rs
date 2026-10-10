@@ -11,6 +11,17 @@ use magi_core::features::Feature;
 
 use crate::theme::Palette;
 
+/// How far a pressed control moves down. GPUI scales only SVGs, so a press is
+/// a push, with the button's own darker background.
+pub(crate) const PRESS: Pixels = px(1.);
+
+/// `el` pushed [`PRESS`] down while it is held. For controls that take their
+/// own size (chips, small buttons); a full-width row pushes its content with
+/// `group_active` instead, so its background stays put.
+pub(crate) fn pressable(el: impl IntoElement, id: impl Into<ElementId>) -> Stateful<Div> {
+    div().id(id).relative().active(|s| s.top(PRESS)).child(el)
+}
+
 /// The space between groups.
 const STACK_GAP: Pixels = px(10.);
 

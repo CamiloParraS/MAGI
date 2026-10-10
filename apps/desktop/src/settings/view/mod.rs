@@ -168,6 +168,9 @@ pub struct SettingsView {
     recording: bool,
     /// Whether Folders' Advanced box is open.
     advanced_open: bool,
+    /// How many times it was toggled: the chevron turns only after a click,
+    /// not when the section first shows.
+    advanced_flips: usize,
     /// Back to the top on every section change.
     pane_scroll: ScrollHandle,
     dark: bool,
@@ -349,6 +352,7 @@ impl SettingsView {
             recorder: cx.focus_handle(),
             recording: false,
             advanced_open: false,
+            advanced_flips: 0,
             pane_scroll: ScrollHandle::new(),
             dark: false,
             opening_roots,

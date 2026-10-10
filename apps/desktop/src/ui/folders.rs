@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
 
-use super::note;
+use super::{PRESS, note, pressable};
 use crate::i18n::Strings;
 use crate::theme::Palette;
 
@@ -72,14 +72,15 @@ pub(crate) fn drop_zone(
                 .text_color(p.accent),
         )
         .child(div().text_color(p.mute).child(s.ob_drop_folders))
-        .child(
+        .child(pressable(
             Button::new("add-folder")
                 .cursor_pointer()
                 .primary()
                 .xsmall()
                 .label(s.add_folder)
                 .on_click(on_add),
-        )
+            "press-add-folder",
+        ))
 }
 
 /// A folder list's last row: Add folder. The whole row is the button: click
@@ -95,8 +96,12 @@ pub(crate) fn add_folder_row(
     Button::new("add-folder")
         .cursor_pointer()
         .ghost()
+        .group("add-folder-row")
         .child(
             div()
+                .id("add-folder-content")
+                .relative()
+                .group_active("add-folder-row", |s| s.top(PRESS))
                 .flex_1()
                 .flex()
                 .items_center()
@@ -147,12 +152,17 @@ pub(crate) fn suggested_folders<V: 'static>(
                     .child(note(p).mt_0().child(s.suggested_folders))
                     // Several at once, as the picker allows.
                     .children((all.len() > 1).then(|| {
-                        Button::new("suggest-all")
-                            .cursor_pointer()
-                            .ghost()
-                            .xsmall()
-                            .label(s.add_all_folders)
-                            .on_click(cx.listener(move |this, _, _, cx| add(this, all.clone(), cx)))
+                        pressable(
+                            Button::new("suggest-all")
+                                .cursor_pointer()
+                                .ghost()
+                                .xsmall()
+                                .label(s.add_all_folders)
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| add(this, all.clone(), cx)),
+                                ),
+                            "press-suggest-all",
+                        )
                     })),
             )
             .child(
@@ -161,20 +171,23 @@ pub(crate) fn suggested_folders<V: 'static>(
                     .flex_wrap()
                     .gap_2()
                     .children(offered.into_iter().enumerate().map(|(ix, dir)| {
-                        Button::new(("suggest-folder", ix))
-                            .cursor_pointer()
-                            .outline()
-                            // The dark theme's outline (`input`) reads as white.
-                            .when(p.dark, |b| b.border_0())
-                            // xsmall keeps all four on one row under onboarding's
-                            // folder list.
-                            .xsmall()
-                            .icon(IconName::Plus)
-                            .label(folder_name(&dir))
-                            .tooltip(dir.display().to_string())
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| add(this, vec![dir.clone()], cx)),
-                            )
+                        pressable(
+                            Button::new(("suggest-folder", ix))
+                                .cursor_pointer()
+                                .outline()
+                                // The dark theme's outline (`input`) reads as white.
+                                .when(p.dark, |b| b.border_0())
+                                // xsmall keeps all four on one row under onboarding's
+                                // folder list.
+                                .xsmall()
+                                .icon(IconName::Plus)
+                                .label(folder_name(&dir))
+                                .tooltip(dir.display().to_string())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    add(this, vec![dir.clone()], cx)
+                                })),
+                            ("press-suggest-folder", ix),
+                        )
                     })),
             ),
     )

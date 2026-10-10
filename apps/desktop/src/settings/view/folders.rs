@@ -16,7 +16,7 @@ use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{
     add_folder_row, drop_zone, folder_name, pick_folders, suggested_folders, suggestions,
 };
-use crate::ui::{grouped, note, row, row_icon, subheading};
+use crate::ui::{PRESS, grouped, note, row, row_icon, subheading};
 
 impl SettingsView {
     /// The native folder picker (FR-1), then `add_root` for each.
@@ -125,9 +125,34 @@ impl SettingsView {
     /// card, its header always there and the patterns opening under it.
     fn advanced(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let shown = self.advanced_shown();
+        // Turned a quarter, as it opens; back as it closes. Static until the
+        // first click, and when a failed change holds it open.
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let chevron = Icon::new(IconName::ChevronRight)
+            .size(px(16.))
+            .flex_none()
+            .text_color(p.mute);
+        let chevron = if self.advanced_flips == 0 {
+            chevron
+                .rotate(radians(if shown { quarter } else { 0. }))
+                .into_any_element()
+        } else {
+            chevron
+                .rotate(radians(if shown { quarter } else { 0. }))
+                .with_animation(
+                    ("advanced-chevron", self.advanced_flips),
+                    Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                    move |icon, t| {
+                        let t = if shown { t } else { 1. - t };
+                        icon.rotate(radians(quarter * t))
+                    },
+                )
+                .into_any_element()
+        };
         let header = Button::new("advanced")
             .cursor_pointer()
             .ghost()
+            .group("advanced")
             .w_full()
             .h_auto()
             .p_0()
@@ -137,10 +162,14 @@ impl SettingsView {
             // A failed change keeps it open, so a click can't hide its message.
             .on_click(cx.listener(|this, _, _, cx| {
                 this.advanced_open = !this.advanced_open;
+                this.advanced_flips += 1;
                 cx.notify();
             }))
             .child(
                 row()
+                    .id("advanced-content")
+                    .relative()
+                    .group_active("advanced", |s| s.top(PRESS))
                     .w_full()
                     .child(row_icon(IconName::SlidersHorizontal, p))
                     .child(
@@ -151,22 +180,17 @@ impl SettingsView {
                             .child(s.advanced)
                             .child(note(p).child(s.advanced_note)),
                     )
-                    .child(
-                        Icon::new(if shown {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .size(px(16.))
-                        .flex_none()
-                        .text_color(p.mute),
-                    ),
+                    .child(chevron),
             );
+        // The patterns fade in and settle 6px down from the header.
+        let patterns = self.excludes(s, p, cx).relative().with_animation(
+            "advanced-in",
+            Animation::new(theme::FADE).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).top(px(-6. * (1. - t))),
+        );
         let rows = [header.into_any_element()]
             .into_iter()
-            .chain(shown.then(|| {
-                theme::fade_in(self.excludes(s, p, cx), "advanced-in").into_any_element()
-            }));
+            .chain(shown.then(|| patterns.into_any_element()));
         div().mt(px(16.)).child(grouped(p, rows))
     }
 
