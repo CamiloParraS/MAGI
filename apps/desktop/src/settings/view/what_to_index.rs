@@ -1,5 +1,6 @@
-//! Settings › Folders, under the list: file types, largest file, battery,
-//! exclusions.
+//! What indexing reads: file types and largest file (under What's
+//! searched), exclusions (under Folders), and pause on battery (under
+//! General).
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
@@ -97,9 +98,6 @@ impl SettingsView {
         let none = types
             .is_empty()
             .then(|| note(p).mt_0().text_color(p.warn).child(s.kind_none));
-        let battery = self.indexing.pause_on_battery;
-        let excludes_edited =
-            globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
         let file_types = self
             .row(Field::FileTypes, p)
             .flex_col()
@@ -136,7 +134,15 @@ impl SettingsView {
             s,
             p,
         );
-        let battery = self.setting(
+        stack()
+            .child(grouped(p, [file_types]))
+            .child(grouped(p, [max_size]))
+    }
+
+    /// Under General: when indexing runs, not what it reads.
+    pub(super) fn battery(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let battery = self.indexing.pause_on_battery;
+        self.setting(
             Field::Battery,
             IconName::BatteryCharging,
             s.pause_on_battery,
@@ -156,7 +162,13 @@ impl SettingsView {
                 })),
             s,
             p,
-        );
+        )
+    }
+
+    /// Under Folders: path patterns, read with the folders they cut into.
+    pub(super) fn excludes(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        let excludes_edited =
+            globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
         let excludes = self
             .row(Field::Excludes, p)
             .flex_col()
@@ -178,9 +190,6 @@ impl SettingsView {
                         ),
                 ),
             );
-        stack()
-            .child(grouped(p, [file_types]))
-            .child(grouped(p, [max_size, battery]))
-            .child(grouped(p, [excludes]))
+        grouped(p, [excludes])
     }
 }

@@ -78,7 +78,7 @@ with that combination, and recording a free one clears it.
 
 On the isolated instance with real models (no `MAGI_FAKE_EMBEDDER`), from
 both onboarding (`cargo run -p magi-desktop --release -- --onboarding`) and
-Settings › Search features:
+Settings › What's searched:
 
 - Turn on (size): the progress bar moves, then "Installed", then the
   backfill counts down.

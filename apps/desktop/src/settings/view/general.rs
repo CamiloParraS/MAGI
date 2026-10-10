@@ -1,4 +1,5 @@
-//! Settings › General: the shortcut, startup, language, results, quit.
+//! Settings › General: the search window (shortcut, results), the system
+//! (startup, battery, language), and quit.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -14,7 +15,7 @@ use super::{Field, SettingsView};
 use crate::app::AppEvent;
 use crate::settings::hotkey_keystroke;
 use crate::theme::Palette;
-use crate::ui::{card, grouped, note, row_icon, stack};
+use crate::ui::{card, grouped, note, row_icon, stack, subheading};
 
 impl SettingsView {
     /// The recorder's keys: Esc cancels; a usable shortcut is registered by
@@ -178,9 +179,28 @@ impl SettingsView {
             s,
             p,
         );
+        let titled = |title, body: Div| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(subheading(title, p))
+                .child(body)
+        };
         stack()
-            .child(grouped(p, [hotkey, launch, language, results]))
-            .children(conflict)
+            .gap(px(22.))
+            .child(titled(
+                s.search_window,
+                stack()
+                    .child(grouped(p, [hotkey, results]))
+                    .children(conflict),
+            ))
+            .child(titled(
+                s.system,
+                grouped(p, [launch, self.battery(s, p, cx), language]),
+            ))
+            // Not only for show: GNOME has no tray, so its menu's Quit may be
+            // out of reach.
             .child(grouped(p, [quit]))
     }
 }

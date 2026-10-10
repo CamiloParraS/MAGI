@@ -4,16 +4,21 @@
 //! Folders (FR-1, FR-11): roots come from the latest status in [`Live`], or from the database until
 //! the first one (the engine sends none during its startup walk); every
 //! change goes through the engine, and the next status shows it. Below them,
-//! what to index: file types, largest file, battery, exclusions. Each of
-//! those saves restarts the engine, which re-walks every root, so a value is
-//! saved only when it changed, and text fields save on Enter, blur or Save,
-//! never per keystroke.
+//! the exclusions.
 //!
-//! Search features (ADR-0010): each feature's switch, download and backfill,
-//! from [`Live::features`].
+//! What's searched: the search features (ADR-0010), each one's switch,
+//! download and backfill from [`Live::features`]; then what to index, file
+//! types and largest file. Side by side, as the image features need image
+//! files.
 //!
-//! General and Appearance: `ui` settings. A saved change goes to the shell
-//! as [`AppEvent::Ui`], which applies it live.
+//! Exclusions, file types, largest file and pause on battery are
+//! `indexing` settings: each save restarts the engine, which re-walks every
+//! root, so a value is saved only when it changed, and text fields save on
+//! Enter, blur or Save, never per keystroke.
+//!
+//! General and Appearance: `ui` settings, plus pause on battery under
+//! General. A saved `ui` change goes to the shell as [`AppEvent::Ui`], which
+//! applies it live.
 //!
 //! Index: counts from the status, the files that could not be read, and
 //! clearing the index.
@@ -57,7 +62,7 @@ pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Folders,
-    Features,
+    Searched,
     General,
     Appearance,
     Index,
@@ -65,7 +70,7 @@ enum Section {
 
 const SECTIONS: [Section; 5] = [
     Section::Folders,
-    Section::Features,
+    Section::Searched,
     Section::General,
     Section::Appearance,
     Section::Index,
@@ -75,25 +80,17 @@ impl Section {
     fn title(self, s: &Strings) -> &'static str {
         match self {
             Self::Folders => s.folders,
-            Self::Features => s.search_features,
+            Self::Searched => s.whats_searched,
             Self::General => s.general,
             Self::Appearance => s.appearance,
             Self::Index => s.index,
         }
     }
 
-    /// The sidebar's label: shorter where the title does not fit.
-    fn nav_title(self, s: &Strings) -> &'static str {
-        match self {
-            Self::Features => s.search_features_nav,
-            _ => self.title(s),
-        }
-    }
-
     fn icon(self) -> IconName {
         match self {
             Self::Folders => IconName::Folder,
-            Self::Features => IconName::Sparkles,
+            Self::Searched => IconName::Sparkles,
             Self::General => IconName::Settings,
             Self::Appearance => IconName::Palette,
             Self::Index => IconName::ChartColumn,
@@ -599,7 +596,7 @@ impl Render for SettingsView {
                                     .size(px(15.))
                                     .text_color(if selected { p.accent } else { p.mute }),
                             )
-                            .child(section.nav_title(s)),
+                            .child(section.title(s)),
                     )
                     .accessibility_label(section.title(s))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -624,7 +621,7 @@ impl Render for SettingsView {
             );
         let body = match self.section {
             Section::Folders => self.folders(&p, cx),
-            Section::Features => self.features(&p, cx),
+            Section::Searched => self.features(&p, cx),
             Section::General => self.general(&p, cx),
             Section::Appearance => self.appearance(&p, window, cx),
             Section::Index => self.index(&p, cx),

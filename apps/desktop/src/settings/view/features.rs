@@ -1,4 +1,4 @@
-//! Settings › Search features.
+//! Settings › What's searched: the search features, then what to index.
 
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -13,14 +13,15 @@ use crate::settings::{
     FeatureAction, download_error_label, feature_action, images_needed, turn_on,
 };
 use crate::theme::{Palette, Tone};
-use crate::ui::{feature_icon, grouped, note, row_icon};
+use crate::ui::{feature_icon, grouped, note, row_icon, subheading};
 
 impl SettingsView {
     pub(super) fn features(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let s = live.lang.strings();
         div()
-            .child(note(p).mt_0().mb(px(14.)).child(s.features_note))
+            .child(subheading(s.search_features, p))
+            .child(note(p).mb(px(8.)).child(s.features_note))
             .child(grouped(
                 p,
                 live.features
@@ -28,6 +29,13 @@ impl SettingsView {
                     .map(|f| self.feature_row(f, live.lang, p, cx)),
             ))
             .child(note(p).mt(px(10.)).child(s.features_footnote))
+            .child(
+                div()
+                    .mt(px(22.))
+                    .mb(px(8.))
+                    .child(subheading(s.what_to_index, p)),
+            )
+            .child(self.what_to_index(s, p, cx))
     }
 
     fn feature_row(&self, f: &FeatureStatus, lang: Lang, p: &Palette, cx: &Context<Self>) -> Div {
