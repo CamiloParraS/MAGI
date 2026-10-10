@@ -242,6 +242,9 @@ pub struct SettingsView {
     /// The last change that failed and where, until the next change or a
     /// section switch.
     error: Option<(Field, ErrorCode)>,
+    /// Roots being removed: dimmed, their controls off, until the list no
+    /// longer has them.
+    removing: Vec<i64>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -300,6 +303,11 @@ impl SettingsView {
                 let errors = live.read(cx).status.as_ref().map(|st| st.errors);
                 if this.section == Section::Index && errors != this.errors_listed {
                     this.load_unreadable(cx);
+                }
+                // Removals the list has caught up with.
+                if let Some(status) = &live.read(cx).status {
+                    this.removing
+                        .retain(|id| status.roots.iter().any(|root| root.id == *id));
                 }
                 cx.notify();
             }),
@@ -402,6 +410,7 @@ impl SettingsView {
             unreadable: None,
             errors_listed: None,
             error: None,
+            removing: Vec::new(),
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -504,6 +513,10 @@ impl SettingsView {
                 .spawn(async move { job(&host) })
                 .await;
             let _ = this.update(cx, |view, cx| {
+                // A failed removal leaves its row working again.
+                if let (Field::Root(id), Err(_)) = (field, &done) {
+                    view.removing.retain(|&r| r != id);
+                }
                 view.error = done.err().map(|error| {
                     tracing::warn!(%error, ?field, "a change failed");
                     (field, ErrorCode::from(&error))
@@ -744,6 +757,7 @@ impl SettingsView {
                 .show_cancel(true)
                 .on_ok(move |_, _, cx| {
                     let _ = view.update(cx, |view, cx| {
+                        view.removing.push(id);
                         view.run(
                             Field::Root(id),
                             move |host| host.engine()?.remove_root(id),
@@ -887,15 +901,23 @@ impl SettingsView {
             .child(self.what_to_index(s, p, cx))
     }
 
-    fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+    fn root_row(
+        &self,
+        root: &RootStatus,
+        s: &Strings,
+        p: &Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let (badge, tone, _) = root_state(root, s);
         let line = root_line(root, s, self.live.read(cx).lang);
         let id = root.id;
+        let removing = self.removing.contains(&id);
         let icon = match tone {
             Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
             _ => Icon::new(IconName::Folder).text_color(p.mute),
         };
-        self.card(Field::Root(id), p)
+        let row = self
+            .card(Field::Root(id), p)
             .child(icon.size(px(16.)))
             .child(
                 div()
@@ -922,6 +944,7 @@ impl SettingsView {
                 Switch::new(("root-enabled", id as u64))
                     .cursor_pointer()
                     .checked(root.enabled)
+                    .disabled(removing)
                     .color(p.accent)
                     .accessibility_label(root.path.clone())
                     .on_click(cx.listener(move |this, &on: &bool, _, cx| {
@@ -940,13 +963,20 @@ impl SettingsView {
                     .icon(IconName::Trash)
                     .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
+                    // A spinner in the trash can's place; it takes no clicks.
+                    .loading(removing)
                     .on_click({
                         let path = root.path.clone();
                         cx.listener(move |this, _, window, cx| {
                             this.confirm_remove(id, &path, window, cx)
                         })
                     }),
-            )
+            );
+        if removing {
+            theme::dim(row, ("removing-root", id as u64)).into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     fn what_to_index(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {

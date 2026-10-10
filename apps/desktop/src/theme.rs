@@ -31,6 +31,18 @@ pub fn fade_in<E: IntoElement + Styled + 'static>(
     )
 }
 
+/// Dims `el` to half over [`FADE`]: a row whose change is still running.
+pub fn dim<E: IntoElement + Styled + 'static>(
+    el: E,
+    id: impl Into<ElementId>,
+) -> AnimationElement<E> {
+    el.with_animation(
+        id,
+        Animation::new(FADE).with_easing(ease_out_quint()),
+        |el, t| el.opacity(1. - 0.5 * t),
+    )
+}
+
 /// A file type's colored square, the same in the results and in settings.
 pub fn kind_glyph(kind: Kind, size: Pixels) -> Div {
     let (label, color) = match kind {

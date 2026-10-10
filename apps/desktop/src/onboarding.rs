@@ -342,6 +342,9 @@ pub struct OnboardingView {
     focus: FocusHandle,
     /// The folder list's scroll, shared with its scrollbar.
     scroll: ScrollHandle,
+    /// Roots being removed: dimmed, their buttons off, until the list no
+    /// longer has them.
+    removing: Vec<i64>,
     /// Focused while the finish step's shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
@@ -372,6 +375,7 @@ impl OnboardingView {
             .ok();
         let subscriptions = vec![
             cx.observe_in(&live, window, |this, _, window, cx| {
+                this.prune_removing(cx);
                 this.sync_appearance(window, cx);
             }),
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -404,6 +408,7 @@ impl OnboardingView {
             hotkey_presses,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
+            removing: Vec::new(),
             recorder: cx.focus_handle(),
             recording: false,
             held: Modifiers::default(),
@@ -554,6 +559,14 @@ impl OnboardingView {
         .detach();
     }
 
+    /// Forgets the removals the folder list has caught up with.
+    fn prune_removing(&mut self, cx: &App) {
+        let ids: Vec<i64> = self.roots(cx).map_or(Vec::new(), |roots| {
+            roots.iter().map(|root| root.id).collect()
+        });
+        self.removing.retain(|id| ids.contains(id));
+    }
+
     /// A root change; the next status shows it, or the error says why not.
     fn run_root(
         &mut self,
@@ -571,10 +584,13 @@ impl OnboardingView {
                     Ok(roots) => {
                         view.error = None;
                         view.opening_roots = Some(roots);
+                        view.prune_removing(cx);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "a folder change failed");
                         view.error = Some(ErrorCode::from(&error));
+                        // The rows still there work again.
+                        view.removing.clear();
                     }
                 }
                 cx.notify();
@@ -722,9 +738,16 @@ impl OnboardingView {
             .children(chips)
     }
 
-    fn root_row(&self, root: &RootStatus, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+    fn root_row(
+        &self,
+        root: &RootStatus,
+        s: &Strings,
+        p: &Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let (badge, tone, explain) = root_state(root, s);
         let id = root.id;
+        let removing = self.removing.contains(&id);
         let icon = match tone {
             Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
             _ => Icon::new(IconName::Folder).text_color(p.accent),
@@ -733,7 +756,7 @@ impl OnboardingView {
         // managers show folders.
         let path = Path::new(&root.path);
         let parent = path.parent().map(|parent| parent.display().to_string());
-        div()
+        let row = div()
             .flex()
             .items_center()
             .gap(px(10.))
@@ -772,6 +795,7 @@ impl OnboardingView {
                         .ghost()
                         .small()
                         .label(s.try_again)
+                        .disabled(removing)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.run_root(|host| host.engine().map(|e| drop(e.rescan())), cx);
                         })),
@@ -786,10 +810,19 @@ impl OnboardingView {
                     .icon(IconName::Minus)
                     .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
+                    // A spinner in the minus's place; it takes no clicks.
+                    .loading(removing)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.removing.push(id);
+                        cx.notify();
                         this.run_root(move |host| host.engine()?.remove_root(id), cx);
                     })),
-            )
+            );
+        if removing {
+            theme::dim(row, ("removing-root", id as u64)).into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     /// The download consent (FR-10, ADR-0010): each feature's exact size;
