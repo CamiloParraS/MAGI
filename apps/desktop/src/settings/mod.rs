@@ -137,6 +137,7 @@ pub fn file_error_label(code: FileErrorCode, s: &Strings) -> &'static str {
         FileErrorCode::Locked => s.read_locked,
         FileErrorCode::ReadFailed => s.read_failed,
         FileErrorCode::ExtractFailed => s.read_damaged,
+        FileErrorCode::PasswordProtected => s.read_password,
         FileErrorCode::TimedOut => s.read_timed_out,
         FileErrorCode::Crashed => s.read_crashed,
         FileErrorCode::EmbedFailed => s.read_embed_failed,

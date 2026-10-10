@@ -58,7 +58,12 @@ impl Extractor for PdfExtractor {
         let pdfium = shared_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(bytes, None)
-            .map_err(|e| Error::Pdf(e.to_string()))?;
+            .map_err(|e| match e {
+                PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+                    Error::PdfPasswordProtected
+                }
+                e => Error::Pdf(e.to_string()),
+            })?;
 
         let mut pages = Vec::new();
         for page in document.pages().iter() {
@@ -141,7 +146,7 @@ mod tests {
     fn password_protected_pdf_without_password_is_a_clean_error() {
         let bytes = fixture("edge/password_protected.pdf");
         let result = PdfExtractor.extract(Path::new("password_protected.pdf"), &bytes);
-        assert!(result.is_err());
+        assert!(matches!(result, Err(Error::PdfPasswordProtected)));
     }
 
     #[test]

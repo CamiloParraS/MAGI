@@ -164,6 +164,8 @@ pub enum FileErrorCode {
     ReadFailed,
     /// Damaged or unsupported content (PDF, Office, image, HEIC, code).
     ExtractFailed,
+    /// An encrypted document that needs a password Magi doesn't have.
+    PasswordProtected,
     TimedOut,
     /// An extractor or the embedder panicked.
     Crashed,
@@ -174,11 +176,12 @@ pub enum FileErrorCode {
 }
 
 impl FileErrorCode {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::PermissionDenied,
         Self::Locked,
         Self::ReadFailed,
         Self::ExtractFailed,
+        Self::PasswordProtected,
         Self::TimedOut,
         Self::Crashed,
         Self::EmbedFailed,
@@ -192,6 +195,7 @@ impl FileErrorCode {
             Self::Locked => "locked",
             Self::ReadFailed => "read_failed",
             Self::ExtractFailed => "extract_failed",
+            Self::PasswordProtected => "password_protected",
             Self::TimedOut => "timed_out",
             Self::Crashed => "crashed",
             Self::EmbedFailed => "embed_failed",
@@ -216,6 +220,7 @@ impl FileErrorCode {
             E::Io { source, .. } => Self::classify_io(source),
             E::ExtractionTimeout { .. } | E::ExtractionBacklog { .. } => Self::TimedOut,
             E::ExtractionPanicked { .. } => Self::Crashed,
+            E::PdfPasswordProtected => Self::PasswordProtected,
             E::Pdf(_)
             | E::Image(_)
             | E::Heic(_)
@@ -430,6 +435,10 @@ mod tests {
         assert_eq!(
             FileErrorCode::classify(&crate::Error::Pdf("bad xref".into())),
             FileErrorCode::ExtractFailed
+        );
+        assert_eq!(
+            FileErrorCode::classify(&crate::Error::PdfPasswordProtected),
+            FileErrorCode::PasswordProtected
         );
         assert_eq!(
             FileErrorCode::classify(&crate::Error::Model("nan".into())),

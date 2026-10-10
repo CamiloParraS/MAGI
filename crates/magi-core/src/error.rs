@@ -53,6 +53,9 @@ pub enum Error {
     #[error("PDF error: {0}")]
     Pdf(String),
 
+    #[error("PDF is password protected")]
+    PdfPasswordProtected,
+
     #[error("image error: {0}")]
     Image(String),
 
