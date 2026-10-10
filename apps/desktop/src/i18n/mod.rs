@@ -124,6 +124,7 @@ pub struct Strings {
     pub kind_image: &'static str,
     pub max_size: &'static str,
     pub max_size_note: &'static str,
+    pub folders_note: &'static str,
     pub advanced: &'static str,
     pub advanced_note: &'static str,
     pub excludes: &'static str,

@@ -247,8 +247,8 @@ impl OnboardingView {
             .my_auto()
             .flex()
             .flex_col()
-            .gap(px(24.))
-            .child(heading(s.welcome).mb_0().text_center().text_size(px(28.)))
+            .gap(px(16.))
+            .child(heading(s.welcome).mb_0().text_center().text_size(px(26.)))
             .child(
                 div()
                     .flex()

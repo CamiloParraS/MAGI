@@ -536,7 +536,7 @@ impl Render for OnboardingView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(32.))
-                    .pt(px(32.))
+                    .pt(px(16.))
                     .pb(px(16.))
                     // The finish screen is short: centered in the space,
                     // not stacked at the top.
