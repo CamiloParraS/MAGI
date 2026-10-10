@@ -14,7 +14,7 @@ use super::{Field, SettingsView};
 use crate::app::AppEvent;
 use crate::settings::hotkey_keystroke;
 use crate::theme::Palette;
-use crate::ui::{card, note, stack};
+use crate::ui::{card, grouped, note, row_icon, stack};
 
 impl SettingsView {
     /// The recorder's keys: Esc cancels; a usable shortcut is registered by
@@ -77,120 +77,110 @@ impl SettingsView {
                 )
                 .children(kbd(taken))
         });
-        stack()
+        let hotkey = self
+            .row(Field::Hotkey, p)
+            .track_focus(&self.recorder)
+            .when(recording, |d| {
+                d.bg(p.accent.opacity(0.08))
+                    .on_key_down(cx.listener(Self::record_hotkey))
+            })
+            .child(row_icon(IconName::Keyboard, p))
+            .child(self.labelled(
+                s.shortcut,
+                Some(if recording {
+                    s.shortcut_recording
+                } else {
+                    s.shortcut_note
+                }),
+                Field::Hotkey,
+                s,
+                p,
+            ))
+            .children((!recording).then(|| kbd(&self.ui.hotkey)).flatten())
             .child(
-                self.card(Field::Hotkey, p)
-                    .track_focus(&self.recorder)
-                    .when(recording, |d| {
-                        d.border_color(p.accent)
-                            .on_key_down(cx.listener(Self::record_hotkey))
+                Button::new("change-hotkey")
+                    .cursor_pointer()
+                    .label(if recording {
+                        s.cancel
+                    } else {
+                        s.shortcut_change
                     })
-                    .child(
-                        Icon::new(IconName::Keyboard)
-                            .size(px(16.))
-                            .text_color(p.mute),
-                    )
-                    .child(self.labelled(
-                        s.shortcut,
-                        Some(if recording {
-                            s.shortcut_recording
-                        } else {
-                            s.shortcut_note
-                        }),
-                        Field::Hotkey,
-                        s,
-                        p,
-                    ))
-                    .children((!recording).then(|| kbd(&self.ui.hotkey)).flatten())
-                    .child(
-                        Button::new("change-hotkey")
-                            .cursor_pointer()
-                            .label(if recording {
-                                s.cancel
-                            } else {
-                                s.shortcut_change
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.recording = !this.recording;
-                                if this.recording {
-                                    this.error = None;
-                                    window.focus(&this.recorder, cx);
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.recording = !this.recording;
+                        if this.recording {
+                            this.error = None;
+                            window.focus(&this.recorder, cx);
+                        }
+                        cx.notify();
+                    })),
+            );
+        let launch = self.setting(
+            Field::LaunchAtLogin,
+            IconName::Power,
+            s.launch_at_login,
+            Some(s.launch_at_login_note),
+            Switch::new("launch-at-login")
+                .cursor_pointer()
+                .checked(self.ui.launch_at_login)
+                .color(p.accent)
+                .accessibility_label(s.launch_at_login)
+                .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                    this.save(
+                        Field::LaunchAtLogin,
+                        json!({ "ui": { "launch_at_login": on } }),
+                        window,
+                        cx,
+                    );
+                })),
+            s,
+            p,
+        );
+        let language = self.setting(
+            Field::Language,
+            IconName::Globe,
+            s.language,
+            None,
+            div().w(px(260.)).child(
+                Select::new(&self.language)
+                    .cursor_pointer()
+                    .bg(p.solid)
+                    .accessibility_label(s.language),
+            ),
+            s,
+            p,
+        );
+        let results = self.setting(
+            Field::Results,
+            IconName::Search,
+            s.results_shown,
+            Some(s.results_shown_note),
+            div().w(px(120.)).child(
+                Select::new(&self.results)
+                    .cursor_pointer()
+                    .bg(p.solid)
+                    .accessibility_label(s.results_shown),
+            ),
+            s,
+            p,
+        );
+        // Quitting stands apart from the settings.
+        let quit = self.setting(
+            Field::Quit,
+            IconName::LogOut,
+            s.quit_app,
+            Some(s.quit_app_note),
+            Button::new("quit")
+                .cursor_pointer()
+                .label(s.tray_quit)
+                .on_click(cx.listener(|this, _, _, _| {
+                    let _ = this.events.try_send(AppEvent::Quit);
+                })),
+            s,
+            p,
+        );
+        stack()
+            .child(grouped(p, [hotkey, launch, language, results]))
             .children(conflict)
-            .child(
-                self.setting(
-                    Field::LaunchAtLogin,
-                    Some(IconName::Power),
-                    s.launch_at_login,
-                    Some(s.launch_at_login_note),
-                    Switch::new("launch-at-login")
-                        .cursor_pointer()
-                        .checked(self.ui.launch_at_login)
-                        .color(p.accent)
-                        .accessibility_label(s.launch_at_login)
-                        .on_click(cx.listener(|this, &on: &bool, window, cx| {
-                            this.save(
-                                Field::LaunchAtLogin,
-                                json!({ "ui": { "launch_at_login": on } }),
-                                window,
-                                cx,
-                            );
-                        })),
-                    s,
-                    p,
-                ),
-            )
-            .child(
-                self.setting(
-                    Field::Language,
-                    Some(IconName::Globe),
-                    s.language,
-                    None,
-                    div().w(px(260.)).child(
-                        Select::new(&self.language)
-                            .cursor_pointer()
-                            .bg(p.solid)
-                            .accessibility_label(s.language),
-                    ),
-                    s,
-                    p,
-                ),
-            )
-            .child(
-                self.setting(
-                    Field::Results,
-                    Some(IconName::Search),
-                    s.results_shown,
-                    Some(s.results_shown_note),
-                    div().w(px(120.)).child(
-                        Select::new(&self.results)
-                            .cursor_pointer()
-                            .bg(p.solid)
-                            .accessibility_label(s.results_shown),
-                    ),
-                    s,
-                    p,
-                ),
-            )
-            .child(
-                self.setting(
-                    Field::Quit,
-                    None,
-                    s.quit_app,
-                    Some(s.quit_app_note),
-                    Button::new("quit")
-                        .cursor_pointer()
-                        .label(s.tray_quit)
-                        .on_click(cx.listener(|this, _, _, _| {
-                            let _ = this.events.try_send(AppEvent::Quit);
-                        })),
-                    s,
-                    p,
-                ),
-            )
+            .child(grouped(p, [quit]))
     }
 }

@@ -7,10 +7,10 @@ use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::setup::feature_icon;
 use super::{FOLDERS_3, OnboardingView};
 use crate::i18n::Strings;
 use crate::theme::Palette;
+use crate::ui::feature_icon;
 
 /// The setup strip's folder icon: how many folders it stacks (none to
 /// three), and whether a plus says there are more.

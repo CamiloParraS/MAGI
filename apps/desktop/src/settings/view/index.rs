@@ -1,16 +1,16 @@
 //! Settings › Index: counts, the files that could not be read, clearing.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
 use crate::settings::file_error_label;
 use crate::theme::{Palette, Tone};
-use crate::ui::{card, note, stack, subheading};
+use crate::ui::{card, group, grouped, note, row, row_icon, subheading};
 
 /// How many unreadable files the Index section lists.
 const ERRORS_SHOWN: u32 = 50;
@@ -94,36 +94,44 @@ impl SettingsView {
         });
         let unreadable = self.unreadable.as_deref().unwrap_or_default();
         let files = match self.unreadable.as_deref() {
-            None => stack(),
-            Some([]) => stack().child(card(p).text_color(p.mute).child(s.all_read)),
-            Some(unreadable) => stack().children(unreadable.iter().map(|e| {
-                let path = std::path::Path::new(&e.path);
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let folder = path
-                    .parent()
-                    .map(std::path::Path::display)
-                    .map(|d| d.to_string());
-                let folder = folder.unwrap_or_default();
-                card(p)
-                    .child(
-                        Icon::new(IconName::TriangleAlert)
-                            .size(px(16.))
-                            .text_color(p.err),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().truncate().child(name.to_string()))
-                            .child(
-                                note(p)
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis_middle()
-                                    .child(format!("{} · {folder}", file_error_label(e.code, s))),
-                            ),
-                    )
-            })),
+            None => div(),
+            Some([]) => grouped(
+                p,
+                [row()
+                    .child(row_icon(IconName::Check, p).text_color(p.ok))
+                    .text_color(p.mute)
+                    .child(s.all_read)],
+            ),
+            Some(unreadable) => grouped(
+                p,
+                unreadable.iter().map(|e| {
+                    let path = std::path::Path::new(&e.path);
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    let folder = path
+                        .parent()
+                        .map(std::path::Path::display)
+                        .map(|d| d.to_string());
+                    let folder = folder.unwrap_or_default();
+                    row()
+                        .child(row_icon(IconName::TriangleAlert, p).text_color(p.err))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().truncate().child(name.to_string()))
+                                .child(
+                                    note(p)
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis_middle()
+                                        .child(format!(
+                                            "{} · {folder}",
+                                            file_error_label(e.code, s)
+                                        )),
+                                ),
+                        )
+                }),
+            ),
         };
         div()
             .children(stats)
@@ -160,25 +168,27 @@ impl SettingsView {
                     .child(subheading(s.danger_zone, p)),
             )
             .child(
-                self.card(Field::Clear, p)
-                    .border_color(p.err)
-                    .child(self.labelled(
-                        s.clear_index,
-                        Some(s.clear_index_note),
-                        Field::Clear,
-                        s,
-                        p,
-                    ))
-                    .child(
-                        Button::new("clear-index")
-                            .cursor_pointer()
-                            .danger()
-                            .small()
-                            .label(s.clear_index_button)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.confirm_clear(window, cx)),
-                            ),
-                    ),
+                group(p).border_color(p.err).child(
+                    self.row(Field::Clear, p)
+                        .child(row_icon(IconName::Trash, p).text_color(p.err))
+                        .child(self.labelled(
+                            s.clear_index,
+                            Some(s.clear_index_note),
+                            Field::Clear,
+                            s,
+                            p,
+                        ))
+                        .child(
+                            Button::new("clear-index")
+                                .cursor_pointer()
+                                .danger()
+                                .small()
+                                .label(s.clear_index_button)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_clear(window, cx)
+                                })),
+                        ),
+                ),
             )
     }
 }

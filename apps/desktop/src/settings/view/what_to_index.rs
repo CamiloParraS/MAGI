@@ -1,6 +1,7 @@
 //! Settings › Folders, under the list: file types, largest file, battery,
 //! exclusions.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -19,7 +20,7 @@ use crate::settings::{
     max_size_from_text, toggle_kind,
 };
 use crate::theme::{self, Palette};
-use crate::ui::{note, stack};
+use crate::ui::{grouped, note, stack};
 
 impl SettingsView {
     pub(super) fn save_max_size(
@@ -99,88 +100,87 @@ impl SettingsView {
         let battery = self.indexing.pause_on_battery;
         let excludes_edited =
             globs_from_text(&self.excludes.read(cx).value()) != self.indexing.exclude_globs;
-        stack()
+        let file_types = self
+            .row(Field::FileTypes, p)
+            .flex_col()
+            .items_start()
+            .gap_3()
+            .py(px(10.))
+            .child(self.labelled(
+                s.file_types,
+                Some(s.file_types_note),
+                Field::FileTypes,
+                s,
+                p,
+            ))
             .child(
-                self.card(Field::FileTypes, p)
-                    .flex_col()
-                    .items_start()
-                    .gap_3()
-                    .child(self.labelled(
-                        s.file_types,
-                        Some(s.file_types_note),
-                        Field::FileTypes,
-                        s,
-                        p,
-                    ))
-                    .child(
-                        div()
-                            .grid()
-                            .grid_cols(2)
-                            .w_full()
-                            .gap_x_6()
-                            .gap_y_3()
-                            .children(kinds),
-                    )
-                    .children(none),
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .w_full()
+                    .gap_x_6()
+                    .gap_y_3()
+                    .children(kinds),
             )
+            .children(none);
+        let max_size = self.setting(
+            Field::MaxSize,
+            IconName::FileUp,
+            s.max_size,
+            Some(s.max_size_note),
+            div().w(px(140.)).child(
+                Input::new(&self.max_size)
+                    .bg(p.solid)
+                    .suffix(div().text_color(p.mute).child("MB")),
+            ),
+            s,
+            p,
+        );
+        let battery = self.setting(
+            Field::Battery,
+            IconName::BatteryCharging,
+            s.pause_on_battery,
+            Some(s.pause_on_battery_note),
+            Switch::new("battery")
+                .cursor_pointer()
+                .checked(battery)
+                .color(p.accent)
+                .accessibility_label(s.pause_on_battery)
+                .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                    this.save(
+                        Field::Battery,
+                        json!({ "indexing": { "pause_on_battery": on } }),
+                        window,
+                        cx,
+                    );
+                })),
+            s,
+            p,
+        );
+        let excludes = self
+            .row(Field::Excludes, p)
+            .flex_col()
+            .items_stretch()
+            .gap_3()
+            .py(px(10.))
+            .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p))
+            // `rows` does not size the box; a height does.
+            .child(Textarea::new(&self.excludes).h(px(150.)).bg(p.solid))
             .child(
-                self.setting(
-                    Field::MaxSize,
-                    None,
-                    s.max_size,
-                    Some(s.max_size_note),
-                    div().w(px(140.)).child(
-                        Input::new(&self.max_size)
-                            .bg(p.solid)
-                            .suffix(div().text_color(p.mute).child("MB")),
-                    ),
-                    s,
-                    p,
-                ),
-            )
-            .child(
-                self.setting(
-                    Field::Battery,
-                    None,
-                    s.pause_on_battery,
-                    Some(s.pause_on_battery_note),
-                    Switch::new("battery")
-                        .cursor_pointer()
-                        .checked(battery)
-                        .color(p.accent)
-                        .accessibility_label(s.pause_on_battery)
-                        .on_click(cx.listener(|this, &on: &bool, window, cx| {
-                            this.save(
-                                Field::Battery,
-                                json!({ "indexing": { "pause_on_battery": on } }),
-                                window,
-                                cx,
-                            );
-                        })),
-                    s,
-                    p,
-                ),
-            )
-            .child(
-                self.card(Field::Excludes, p)
-                    .flex_col()
-                    .items_stretch()
-                    .gap_3()
-                    .child(self.labelled(s.excludes, Some(s.excludes_note), Field::Excludes, s, p))
-                    // `rows` does not size the box; a height does.
-                    .child(Textarea::new(&self.excludes).h(px(150.)).bg(p.solid))
-                    .child(
-                        div().flex().justify_end().child(
-                            Button::new("save-excludes")
-                                .when(excludes_edited, |b| b.cursor_pointer())
-                                .primary()
-                                .label(s.save)
-                                .disabled(!excludes_edited)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.save_excludes(window, cx)
-                                })),
+                div().flex().justify_end().child(
+                    Button::new("save-excludes")
+                        .when(excludes_edited, |b| b.cursor_pointer())
+                        .primary()
+                        .label(s.save)
+                        .disabled(!excludes_edited)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
                         ),
-                    ),
-            )
+                ),
+            );
+        stack()
+            .child(grouped(p, [file_types]))
+            .child(grouped(p, [max_size, battery]))
+            .child(grouped(p, [excludes]))
     }
 }

@@ -7,13 +7,16 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
+use std::path::Path;
 
 use super::{Field, SettingsView};
 use crate::i18n::Strings;
 use crate::settings::{root_line, root_state};
 use crate::theme::{self, Palette, Tone};
-use crate::ui::folders::{pick_folders, suggested_folders, suggestions};
-use crate::ui::{card, note, stack, subheading};
+use crate::ui::folders::{
+    add_folder_row, drop_zone, folder_name, pick_folders, suggested_folders, suggestions,
+};
+use crate::ui::{grouped, note, subheading};
 
 impl SettingsView {
     /// The native folder picker (FR-1), then `add_root` for each.
@@ -81,57 +84,34 @@ impl SettingsView {
             .as_ref()
             .map(|status| &status.roots)
             .or(self.opening_roots.as_ref());
-        // Nothing when the roots are unknown: an empty list would read "no folders".
-        let list = roots.map(|roots| {
-            if roots.is_empty() {
-                return stack().child(card(p).text_color(p.mute).child(s.no_folders));
-            }
-            stack().children(roots.iter().map(|root| self.root_row(root, s, p, cx)))
-        });
-        // An add that failed has no row yet: its own box says why.
-        let add_problem = self.problem(Field::AddFolder, s, p).map(|problem| {
-            self.card(Field::AddFolder, p)
-                .child(div().flex_1().min_w_0().child(problem))
-        });
+        let add = || cx.listener(|this: &mut Self, _, _, cx| this.add_folder(cx));
+        // As in onboarding: a drop zone with none yet, else one grouped list
+        // with Add folder its last row. Unknown roots show only Add folder:
+        // an empty list would read "no folders".
+        let body = match roots {
+            Some(roots) if roots.is_empty() => drop_zone(s, p, add()),
+            _ => grouped(
+                p,
+                roots
+                    .into_iter()
+                    .flatten()
+                    .map(|root| self.root_row(root, s, p, cx))
+                    .chain([add_folder_row(s, p, add()).into_any_element()]),
+            ),
+        };
         div()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .mb(px(8.))
-                    .child(div().flex_1().child(subheading(s.searched_folders, p)))
-                    // Read with the button: "Drag folders onto the list, or
-                    // [Add folders]".
-                    .child(
-                        div()
-                            .mr(px(8.))
-                            .text_sm()
-                            .text_color(p.mute)
-                            .child(s.drag_folders_or),
-                    )
-                    .child(
-                        Button::new("add-folder")
-                            .cursor_pointer()
-                            .primary()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label(s.add_folder)
-                            .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-                    ),
-            )
+            .child(div().mb(px(8.)).child(subheading(s.searched_folders, p)))
             // Folders dropped from the file manager, as in onboarding.
             .child(
-                stack()
-                    .rounded(px(10.))
-                    .children(list)
-                    .children(add_problem)
-                    .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                        style.bg(accent.opacity(0.08))
-                    })
-                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                        this.add_folders(paths.paths().to_vec(), cx)
-                    })),
+                body.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style.border_color(accent).bg(accent.opacity(0.08))
+                })
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                    this.add_folders(paths.paths().to_vec(), cx)
+                })),
             )
+            // An add that failed has no row yet: say why under the list.
+            .children(self.problem(Field::AddFolder, s, p))
             .children(roots.and_then(|roots| {
                 let offered = suggestions(&self.user_folders, roots);
                 suggested_folders(offered, s, p, cx, Self::add_folders)
@@ -159,11 +139,14 @@ impl SettingsView {
         let removing = self.removing.contains(&id);
         let icon = match tone {
             Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
-            _ => Icon::new(IconName::Folder).text_color(p.mute),
+            _ => Icon::new(IconName::Folder).text_color(p.accent),
         };
+        // The folder's name, its parent under it, as in onboarding.
+        let path = Path::new(&root.path);
+        let parent = path.parent().map(|parent| parent.display().to_string());
         let row = self
-            .card(Field::Root(id), p)
-            .child(icon.size(px(16.)))
+            .row(Field::Root(id), p)
+            .child(icon.size(px(18.)).flex_none())
             .child(
                 div()
                     .flex_1()
@@ -172,9 +155,17 @@ impl SettingsView {
                         div()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_ellipsis_middle()
-                            .child(root.path.clone()),
+                            .text_ellipsis()
+                            .child(folder_name(path)),
                     )
+                    .children(parent.map(|parent| {
+                        note(p)
+                            .mt_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(parent)
+                    }))
                     .children(line.map(|line| note(p).child(line)))
                     .children(self.problem(Field::Root(id), s, p)),
             )
@@ -205,10 +196,12 @@ impl SettingsView {
                     .cursor_pointer()
                     .ghost()
                     .small()
-                    .icon(IconName::Trash)
+                    // Minus, as in onboarding: the files stay; only Magi
+                    // forgets the folder.
+                    .icon(IconName::Minus)
                     .tooltip(s.remove)
                     .accessibility_label(format!("{} {}", s.remove, root.path))
-                    // A spinner in the trash can's place; it takes no clicks.
+                    // A spinner in the minus's place; it takes no clicks.
                     .loading(removing)
                     .on_click({
                         let path = root.path.clone();

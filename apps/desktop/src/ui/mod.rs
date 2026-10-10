@@ -3,13 +3,16 @@
 pub mod folders;
 pub mod keycaps;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use magi_core::features::Feature;
 
 use crate::theme::Palette;
 
-/// The space between boxes (the variant A mockup's 6 px).
-const STACK_GAP: Pixels = px(6.);
+/// The space between groups.
+const STACK_GAP: Pixels = px(12.);
 
 pub(crate) fn stack() -> Div {
     div().flex().flex_col().gap(STACK_GAP)
@@ -25,7 +28,7 @@ pub(crate) fn card(p: &Palette) -> Div {
         .gap(px(14.))
         .px_4()
         .py_3()
-        .rounded(px(8.))
+        .rounded(px(10.))
         .border_1()
         .border_color(p.line)
         .bg(p.card)
@@ -52,4 +55,59 @@ pub(crate) fn subheading(text: &'static str, p: &Palette) -> Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(p.mute)
         .child(text)
+}
+
+/// Rows grouped in one rounded box, as in system settings.
+pub(crate) fn group(p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(p.line)
+        .bg(p.card)
+        .when(!p.dark, |d| d.shadow_xs())
+        .overflow_hidden()
+}
+
+/// `rows` in one [`group`], a [`divider`] between each.
+pub(crate) fn grouped(p: &Palette, rows: impl IntoIterator<Item = impl IntoElement>) -> Div {
+    group(p).children(
+        rows.into_iter()
+            .enumerate()
+            .map(|(ix, row)| div().children((ix > 0).then(|| divider(p))).child(row)),
+    )
+}
+
+/// A line between grouped rows, starting where the text does.
+pub(crate) fn divider(p: &Palette) -> Div {
+    div().h(px(1.)).ml(px(42.)).bg(p.line)
+}
+
+/// A grouped row: its icon, then its text, then its controls.
+pub(crate) fn row() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(6.))
+        .min_h(px(44.))
+}
+
+/// A grouped row's icon, in the accent.
+pub(crate) fn row_icon(icon: IconName, p: &Palette) -> Icon {
+    Icon::new(icon)
+        .size(px(18.))
+        .flex_none()
+        .text_color(p.accent)
+}
+
+/// What each feature does, as a picture.
+pub(crate) fn feature_icon(feature: Feature) -> IconName {
+    match feature {
+        Feature::Meaning => IconName::TextSearch,
+        Feature::ImageText => IconName::ScanText,
+        Feature::ImageVisual => IconName::ScanEye,
+    }
 }

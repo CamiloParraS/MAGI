@@ -1,5 +1,6 @@
 //! Settings › Appearance: theme and window background.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -9,7 +10,7 @@ use serde_json::json;
 use super::{Field, SettingsView};
 use crate::settings::{intensity_from_slider, see_through_adjustable};
 use crate::theme::Palette;
-use crate::ui::stack;
+use crate::ui::grouped;
 
 impl SettingsView {
     pub(super) fn save_intensity(
@@ -50,11 +51,12 @@ impl SettingsView {
     pub(super) fn appearance(&self, p: &Palette, window: &Window, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         let adjustable = see_through_adjustable(self.ui.transparency_mode, self.support);
-        stack()
-            .child(
+        grouped(
+            p,
+            [
                 self.setting(
                     Field::Theme,
-                    None,
+                    IconName::SunMoon,
                     s.theme,
                     None,
                     div().w(px(260.)).child(
@@ -66,11 +68,9 @@ impl SettingsView {
                     s,
                     p,
                 ),
-            )
-            .child(
                 self.setting(
                     Field::Background,
-                    None,
+                    IconName::AppWindow,
                     s.window_background,
                     None,
                     div().w(px(260.)).child(
@@ -82,11 +82,9 @@ impl SettingsView {
                     s,
                     p,
                 ),
-            )
-            .child(
                 self.setting(
                     Field::SeeThrough,
-                    None,
+                    IconName::Blend,
                     s.see_through_amount,
                     (!adjustable).then_some(s.see_through_off),
                     div()
@@ -121,6 +119,7 @@ impl SettingsView {
                     s,
                     p,
                 ),
-            )
+            ],
+        )
     }
 }

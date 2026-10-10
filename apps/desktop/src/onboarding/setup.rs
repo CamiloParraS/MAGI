@@ -14,14 +14,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::FeaturesConfig;
 use magi_core::dto::{Install, RootStatus};
-use magi_core::features::Feature;
 
 use super::{OnboardingView, STEP_IN};
 use crate::i18n::Strings;
 use crate::settings::root_state;
 use crate::theme::{self, Palette, Tone};
-use crate::ui::folders::{folder_name, suggested_folders, suggestions};
-use crate::ui::{heading, note};
+use crate::ui::folders::{add_folder_row, drop_zone, folder_name, suggested_folders, suggestions};
+use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon};
 
 impl OnboardingView {
     /// FR-10's permission check: each folder's status says whether Magi can
@@ -30,30 +29,7 @@ impl OnboardingView {
         let accent = p.accent;
         let roots = self.roots(cx).filter(|roots| !roots.is_empty());
         let body = match roots {
-            None => div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_2()
-                .py(px(22.))
-                .rounded(px(10.))
-                .border_1()
-                .border_dashed()
-                .border_color(p.mute.opacity(0.4))
-                .child(
-                    Icon::new(IconName::FolderPlus)
-                        .size(px(26.))
-                        .text_color(p.accent),
-                )
-                .child(div().text_color(p.mute).child(s.ob_drop_folders))
-                .child(
-                    Button::new("add-folder")
-                        .cursor_pointer()
-                        .primary()
-                        .xsmall()
-                        .label(s.add_folder)
-                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-                ),
+            None => drop_zone(s, p, cx.listener(|this, _, _, cx| this.add_folder(cx))),
             // The same grouped list as the features, Add folder its last row.
             // The folders scroll on their own past a few rows, so a long list
             // leaves Add folder, the suggestions and the footer in view.
@@ -83,38 +59,11 @@ impl OnboardingView {
                         .vertical_scrollbar(&self.scroll),
                 )
                 .child(divider(p))
-                // The whole row is the button: click and hover anywhere on it.
-                .child(
-                    // gpui-component centers a button's content; one child
-                    // that fills it keeps the icon and label at the left,
-                    // the icon in the column of the folder icons above.
-                    Button::new("add-folder")
-                        .cursor_pointer()
-                        .ghost()
-                        .child(
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.))
-                                .child(Icon::new(IconName::Plus).size(px(18.)).text_color(p.accent))
-                                .child(s.add_folder)
-                                // Dropping still works once the drop zone
-                                // is gone; say so where the eye goes to add.
-                                .child(
-                                    div()
-                                        .ml_auto()
-                                        .text_sm()
-                                        .text_color(p.mute)
-                                        .child(s.ob_or_drop_folders),
-                                ),
-                        )
-                        .w_full()
-                        .h(px(40.))
-                        .px(px(12.))
-                        .rounded_none()
-                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-                ),
+                .child(add_folder_row(
+                    s,
+                    p,
+                    cx.listener(|this, _, _, cx| this.add_folder(cx)),
+                )),
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
         let chips = suggested_folders(offered, s, p, cx, Self::add_folders);
@@ -151,13 +100,7 @@ impl OnboardingView {
         // managers show folders.
         let path = Path::new(&root.path);
         let parent = path.parent().map(|parent| parent.display().to_string());
-        let row = div()
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .px(px(12.))
-            .py(px(6.))
-            .min_h(px(44.))
+        let row = crate::ui::row()
             .child(icon.size(px(18.)).flex_none())
             .child(
                 div()
@@ -273,10 +216,7 @@ impl OnboardingView {
                 );
             stagger_in(row, ix)
         });
-        group(p).children(
-            rows.enumerate()
-                .map(|(ix, row)| div().children((ix > 0).then(|| divider(p))).child(row)),
-        )
+        grouped(p, rows)
     }
 
     /// "Start with your computer" (FR-10), on by default.
@@ -370,61 +310,21 @@ fn section(title: &'static str, intro: &'static str, body: Div, p: &Palette) -> 
         .child(body)
 }
 
-/// What each feature does, as a picture.
-pub(super) fn feature_icon(feature: Feature) -> IconName {
-    match feature {
-        Feature::Meaning => IconName::TextSearch,
-        Feature::ImageText => IconName::ScanText,
-        Feature::ImageVisual => IconName::ScanEye,
-    }
-}
-
-/// Rows grouped in one rounded box, as in system settings.
-fn group(p: &Palette) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(p.line)
-        .bg(p.card)
-        .when(!p.dark, |d| d.shadow_xs())
-        .overflow_hidden()
-}
-
-/// A line between grouped rows, starting where the text does.
-fn divider(p: &Palette) -> Div {
-    div().h(px(1.)).ml(px(42.)).bg(p.line)
-}
-
 /// A grouped row: an icon in the accent, the name with an optional small
 /// line under it, then what follows.
 fn row(icon: IconName, name: &'static str, sub: Option<&'static str>, p: &Palette) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .px(px(12.))
-        .py(px(6.))
-        .min_h(px(44.))
-        .child(
-            Icon::new(icon)
-                .size(px(18.))
-                .flex_none()
-                .text_color(p.accent),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                // Wraps rather than cutting off a feature's name.
-                .child(div().child(name))
-                .children(sub.map(|sub| {
-                    div()
-                        .text_size(px(11.))
-                        .line_height(px(14.))
-                        .text_color(p.mute)
-                        .child(sub)
-                })),
-        )
+    crate::ui::row().child(row_icon(icon, p)).child(
+        div()
+            .flex_1()
+            .min_w_0()
+            // Wraps rather than cutting off a feature's name.
+            .child(div().child(name))
+            .children(sub.map(|sub| {
+                div()
+                    .text_size(px(11.))
+                    .line_height(px(14.))
+                    .text_color(p.mute)
+                    .child(sub)
+            })),
+    )
 }

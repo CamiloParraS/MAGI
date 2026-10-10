@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
@@ -48,6 +48,76 @@ pub(crate) fn folder_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// With no folders yet: where to drop them, and a button to pick them.
+pub(crate) fn drop_zone(
+    s: &Strings,
+    p: &Palette,
+    on_add: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_2()
+        .py(px(22.))
+        .rounded(px(10.))
+        .border_1()
+        .border_dashed()
+        .border_color(p.mute.opacity(0.4))
+        .child(
+            Icon::new(IconName::FolderPlus)
+                .size(px(26.))
+                .text_color(p.accent),
+        )
+        .child(div().text_color(p.mute).child(s.ob_drop_folders))
+        .child(
+            Button::new("add-folder")
+                .cursor_pointer()
+                .primary()
+                .xsmall()
+                .label(s.add_folder)
+                .on_click(on_add),
+        )
+}
+
+/// A folder list's last row: Add folder. The whole row is the button: click
+/// and hover anywhere on it.
+pub(crate) fn add_folder_row(
+    s: &Strings,
+    p: &Palette,
+    on_add: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    // gpui-component centers a button's content; one child that fills it
+    // keeps the icon and label at the left, the icon in the column of the
+    // folder icons above.
+    Button::new("add-folder")
+        .cursor_pointer()
+        .ghost()
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(Icon::new(IconName::Plus).size(px(18.)).text_color(p.accent))
+                .child(s.add_folder)
+                // Dropping still works once the drop zone is gone; say so
+                // where the eye goes to add.
+                .child(
+                    div()
+                        .ml_auto()
+                        .text_sm()
+                        .text_color(p.mute)
+                        .child(s.ob_or_drop_folders),
+                ),
+        )
+        .w_full()
+        .h(px(40.))
+        .px(px(12.))
+        .rounded_none()
+        .on_click(on_add)
 }
 
 /// The one-click folder suggestions, with "Add all" when there are several;

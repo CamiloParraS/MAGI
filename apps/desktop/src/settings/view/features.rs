@@ -13,7 +13,7 @@ use crate::settings::{
     FeatureAction, download_error_label, feature_action, images_needed, turn_on,
 };
 use crate::theme::{Palette, Tone};
-use crate::ui::{note, stack};
+use crate::ui::{feature_icon, grouped, note, row_icon};
 
 impl SettingsView {
     pub(super) fn features(&self, p: &Palette, cx: &Context<Self>) -> Div {
@@ -21,13 +21,12 @@ impl SettingsView {
         let s = live.lang.strings();
         div()
             .child(note(p).mt_0().mb(px(14.)).child(s.features_note))
-            .child(
-                stack().children(
-                    live.features
-                        .iter()
-                        .map(|f| self.feature_row(f, live.lang, p, cx)),
-                ),
-            )
+            .child(grouped(
+                p,
+                live.features
+                    .iter()
+                    .map(|f| self.feature_row(f, live.lang, p, cx)),
+            ))
             .child(note(p).mt(px(10.)).child(s.features_footnote))
     }
 
@@ -130,7 +129,9 @@ impl SettingsView {
                     this.run(field, move |host| host.set_feature_enabled(feature, on), cx);
                 }))
         });
-        self.card(field, p)
+        self.row(field, p)
+            .py(px(10.))
+            .child(row_icon(feature_icon(feature), p))
             .child(
                 div()
                     .flex_1()

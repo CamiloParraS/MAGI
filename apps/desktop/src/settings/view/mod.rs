@@ -1,5 +1,5 @@
-//! The settings window: a sidebar and its sections (FR-9), laid out as the
-//! variant A mockup (`mockup/index.html`).
+//! The settings window: a sidebar and its sections (FR-9), each section
+//! grouped rows as on the onboarding setup screen.
 //!
 //! Folders (FR-1, FR-11): roots come from the latest status in [`Live`], or from the database until
 //! the first one (the engine sends none during its startup walk); every
@@ -47,7 +47,7 @@ use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
-use crate::ui::{card, heading, note};
+use crate::ui::{heading, note, row, row_icon};
 use choices::{
     Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
 };
@@ -101,7 +101,7 @@ impl Section {
     }
 }
 
-/// Where a failed change is shown: inside the box it came from.
+/// Where a failed change is shown: in the row it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Hotkey,
@@ -454,7 +454,7 @@ impl SettingsView {
     }
 
     /// Saves a settings patch; on success the shell applies the new `ui`, on
-    /// failure `field`'s box shows why. Public for the headless tests.
+    /// failure `field`'s row shows why. Public for the headless tests.
     pub fn save(
         &mut self,
         field: Field,
@@ -490,7 +490,7 @@ impl SettingsView {
         .detach();
     }
 
-    /// The box showing a failed change, if any.
+    /// The row showing a failed change, if any.
     pub fn failed(&self) -> Option<Field> {
         self.error.as_ref().map(|(field, _)| *field)
     }
@@ -499,7 +499,7 @@ impl SettingsView {
         self.error.as_ref().is_some_and(|(f, _)| *f == field)
     }
 
-    /// The failed change's message, for the last line of `field`'s box.
+    /// The failed change's message, for the last line of `field`'s row.
     fn problem(&self, field: Field, s: &Strings, p: &Palette) -> Option<Div> {
         self.error
             .as_ref()
@@ -507,9 +507,9 @@ impl SettingsView {
             .map(|(_, error)| note(p).text_color(p.warn).child(error_text(error, s)))
     }
 
-    /// A settings box; a failed change in it gives it a warning border.
-    fn card(&self, field: Field, p: &Palette) -> Div {
-        card(p).when(self.has_problem(field), |d| d.border_color(p.warn))
+    /// A grouped row; a failed change in it tints it.
+    fn row(&self, field: Field, p: &Palette) -> Div {
+        row().when(self.has_problem(field), |d| d.bg(p.warn.opacity(0.08)))
     }
 
     /// A setting's name and note, and its problem if it has one.
@@ -529,21 +529,20 @@ impl SettingsView {
             .children(self.problem(field, s, p))
     }
 
-    /// One setting in its box: an optional icon, its name and note, and
-    /// its control.
+    /// One setting's row: its icon, its name and note, and its control.
     #[allow(clippy::too_many_arguments)]
     fn setting(
         &self,
         field: Field,
-        icon: Option<IconName>,
+        icon: IconName,
         label: &'static str,
         note_text: Option<&'static str>,
         control: impl IntoElement,
         s: &Strings,
         p: &Palette,
     ) -> Div {
-        self.card(field, p)
-            .children(icon.map(|i| Icon::new(i).size(px(16.)).text_color(p.mute)))
+        self.row(field, p)
+            .child(row_icon(icon, p))
             .child(self.labelled(label, note_text, field, s, p))
             .child(div().flex_none().child(control))
     }
