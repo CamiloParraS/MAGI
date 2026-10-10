@@ -69,7 +69,9 @@ pub const MIN_SIZE: Size<Pixels> = size(px(860.), px(480.));
 const NAV_ITEM_H: f32 = 32.;
 const NAV_GAP: f32 = 2.;
 /// How long the accent bar takes to reach another section.
-const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(180);
+const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(240);
+/// How long another section takes to fade in.
+const SECTION_FADE: std::time::Duration = std::time::Duration::from_millis(220);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -741,7 +743,7 @@ impl Render for SettingsView {
                     .pt(px(22.))
                     .pb(px(28.))
                     // Another section fades in, its heading with it.
-                    .child(theme::fade_in(
+                    .child(theme::fade_in_over(
                         div()
                             .child(heading(self.section.title(s)).mb(px(4.)))
                             .child(
@@ -752,6 +754,7 @@ impl Render for SettingsView {
                             )
                             .child(body),
                         ("pane-in", self.section as usize),
+                        SECTION_FADE,
                     )),
             )
     }

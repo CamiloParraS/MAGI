@@ -24,9 +24,18 @@ pub fn fade_in<E: IntoElement + Styled + 'static>(
     el: E,
     id: impl Into<ElementId>,
 ) -> AnimationElement<E> {
+    fade_in_over(el, id, FADE)
+}
+
+/// [`fade_in`] over `duration`, for a change big enough to want longer.
+pub fn fade_in_over<E: IntoElement + Styled + 'static>(
+    el: E,
+    id: impl Into<ElementId>,
+    duration: Duration,
+) -> AnimationElement<E> {
     el.with_animation(
         id,
-        Animation::new(FADE).with_easing(ease_out_quint()),
+        Animation::new(duration).with_easing(ease_out_quint()),
         |el, t| el.opacity(t),
     )
 }
