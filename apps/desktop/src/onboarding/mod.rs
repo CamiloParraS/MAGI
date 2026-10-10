@@ -169,6 +169,9 @@ pub struct OnboardingView {
     /// `hotkey_presses` when the window opened: a press after it is the
     /// user trying the hotkey.
     hotkey_presses: u32,
+    /// Whether the finish screen has shown its progress: once it has, the
+    /// block fades out when ready instead of vanishing.
+    was_preparing: std::cell::Cell<bool>,
     focus: FocusHandle,
     /// The folder list's scroll, shared with its scrollbar.
     scroll: ScrollHandle,
@@ -236,6 +239,7 @@ impl OnboardingView {
             dark: false,
             forward: true,
             hotkey_presses,
+            was_preparing: Default::default(),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             removing: Vec::new(),

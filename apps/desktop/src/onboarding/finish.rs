@@ -197,13 +197,17 @@ impl OnboardingView {
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_recording(window, cx))),
             );
-        // Only while preparing: once ready, the intro already says so. A
-        // thin bar under it, with no numbers.
-        let preparing = match ready {
+        // Only while preparing, then it fades out in place (the button below
+        // stays put). A thin bar under the sentence, with no numbers.
+        let is_ready = ready == Readiness::Ready;
+        let feature = match ready {
+            Readiness::Preparing(feature) => {
+                self.was_preparing.set(true);
+                feature
+            }
             Readiness::Ready => None,
-            Readiness::Preparing(feature) => Some(feature),
-        }
-        .map(|feature| {
+        };
+        let preparing = (self.was_preparing.get()).then(|| {
             let sentence = match feature {
                 Some(feature) => s
                     .ob_preparing_feature
@@ -211,28 +215,39 @@ impl OnboardingView {
                 None => s.ob_preparing.to_string(),
             };
             let bar = Progress::new("preparing").color(p.accent);
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_sm()
-                        .child(p.dot(Tone::Busy))
-                        .child(sentence),
-                )
-                .child(
-                    div()
-                        .w(px(260.))
-                        .child(match live.status.as_ref().and_then(progress) {
+            let block =
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .child(p.dot(Tone::Busy))
+                            .child(sentence),
+                    )
+                    .child(div().w(px(260.)).child(
+                        match live.status.as_ref().and_then(progress) {
                             Some(value) => bar.value(value),
+                            None if is_ready => bar.value(100.),
                             None => bar.loading(true),
-                        }),
-                )
+                        },
+                    ));
+            if is_ready {
+                block
+                    .with_animation(
+                        "preparing-out",
+                        Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                        |el, t| el.opacity(1. - t),
+                    )
+                    .into_any_element()
+            } else {
+                block.into_any_element()
+            }
         });
         let failed = live
             .features
@@ -251,10 +266,22 @@ impl OnboardingView {
             .text_center()
             .pt(px(8.))
             .child(check)
-            .child(heading(s.ob_done).mt(px(14.)).mb(px(4.)))
-            .child(div().text_color(p.mute).max_w(px(460.)).child(intro))
-            .child(div().mt(px(22.)).w_full().child(shortcut))
-            .child(
+            .child(stagger(
+                heading(s.ob_done).mt(px(14.)).mb(px(4.)),
+                "done-heading",
+                1,
+            ))
+            .child(stagger(
+                div().text_color(p.mute).max_w(px(460.)).child(intro),
+                "done-intro",
+                2,
+            ))
+            .child(stagger(
+                div().mt(px(22.)).w_full().child(shortcut),
+                "done-card",
+                3,
+            ))
+            .child(stagger(
                 div()
                     .mt(px(18.))
                     .flex()
@@ -275,9 +302,33 @@ impl OnboardingView {
                                 this.leave(Some(AppEvent::Settings), window)
                             })),
                     ),
-            )
+                "done-footer",
+                4,
+            ))
     }
 }
+
+/// Each block after the check starts `STAGGER` later than the one before:
+/// it fades in and rises from 8px, then settles. GPUI has no delay, so the
+/// animation runs the whole span and the block waits at 0 until its turn.
+fn stagger<E: IntoElement + Styled + 'static>(
+    el: E,
+    id: &'static str,
+    ix: u32,
+) -> AnimationElement<E> {
+    let wait = STAGGER * ix;
+    let total = wait + STAGGER_IN;
+    el.relative()
+        .with_animation(id, Animation::new(total), move |el, t| {
+            let local = ((t * total.as_secs_f32() - wait.as_secs_f32()) / STAGGER_IN.as_secs_f32())
+                .clamp(0., 1.);
+            let eased = 1. - (1. - local).powi(5);
+            el.opacity(eased).top(px(8. * (1. - eased)))
+        })
+}
+
+const STAGGER: Duration = Duration::from_millis(50);
+const STAGGER_IN: Duration = Duration::from_millis(240);
 
 /// The finish screen's check growing in.
 const CHECK_IN: Duration = Duration::from_millis(320);
