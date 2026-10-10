@@ -90,5 +90,31 @@ fn a_saved_setting_reaches_the_shell_and_a_rejected_one_its_box(cx: &mut TestApp
     reply.try_send(true).unwrap();
     cx.run_until_parked();
     assert_eq!(host.settings().unwrap().ui.hotkey, "Ctrl+Alt+K");
+
+    // A running change marks its row busy until it ends, failed or not.
+    let busy = |field, cx: &mut TestAppContext| {
+        window.update(cx, |view, _, _| view.is_busy(field)).unwrap()
+    };
+    window
+        .update(cx, |view, _, cx| {
+            view.run(Field::Clear, |host| host.clear_index(), cx)
+        })
+        .unwrap();
+    assert!(busy(Field::Clear, cx), "busy while it runs");
+    cx.run_until_parked();
+    assert!(!busy(Field::Clear, cx), "done");
+    window
+        .update(cx, |view, _, cx| {
+            view.run(
+                Field::Unreadable,
+                |_| Err(magi_core::Error::RootNotFound("gone".into())),
+                cx,
+            )
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(!busy(Field::Unreadable, cx), "a failure ends it too");
+    let failed = window.update(cx, |view, _, _| view.failed()).unwrap();
+    assert_eq!(failed, Some(Field::Unreadable));
     host.shutdown();
 }

@@ -165,6 +165,9 @@ pub struct SettingsView {
     /// Roots being removed: dimmed, their controls off, until the list no
     /// longer has them.
     removing: Vec<i64>,
+    /// Changes still running, one entry per run: their buttons spin and
+    /// take no clicks until the change ends.
+    busy: Vec<Field>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -331,6 +334,7 @@ impl SettingsView {
             errors_listed: None,
             error: None,
             removing: Vec::new(),
+            busy: Vec::new(),
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -419,13 +423,16 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Runs a change on the background executor and keeps its error.
-    fn run(
+    /// Runs a change on the background executor, `field` busy meanwhile,
+    /// and keeps its error. Public for the headless tests.
+    pub fn run(
         &mut self,
         field: Field,
         job: impl FnOnce(&Host) -> magi_core::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.busy.push(field);
+        cx.notify();
         let host = self.host.clone();
         cx.spawn(async move |this, cx| {
             let done = cx
@@ -433,6 +440,9 @@ impl SettingsView {
                 .spawn(async move { job(&host) })
                 .await;
             let _ = this.update(cx, |view, cx| {
+                if let Some(ix) = view.busy.iter().position(|&f| f == field) {
+                    view.busy.remove(ix);
+                }
                 // A failed removal leaves its row working again.
                 if let (Field::Root(id), Err(_)) = (field, &done) {
                     view.removing.retain(|&r| r != id);
@@ -490,6 +500,11 @@ impl SettingsView {
     /// The row showing a failed change, if any.
     pub fn failed(&self) -> Option<Field> {
         self.error.as_ref().map(|(field, _)| *field)
+    }
+
+    /// Whether a change in `field`'s row is still running.
+    pub fn is_busy(&self, field: Field) -> bool {
+        self.busy.contains(&field)
     }
 
     fn has_problem(&self, field: Field) -> bool {

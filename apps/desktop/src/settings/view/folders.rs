@@ -174,7 +174,7 @@ impl SettingsView {
                 Switch::new(("root-enabled", id as u64))
                     .cursor_pointer()
                     .checked(root.enabled)
-                    .disabled(removing)
+                    .disabled(removing || self.is_busy(Field::Root(id)))
                     .color(p.accent)
                     .accessibility_label(root.path.clone())
                     .on_click(cx.listener(move |this, &on: &bool, _, cx| {

@@ -1,9 +1,9 @@
 //! Settings › What's searched: the search features, then what to index.
 
-use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::*;
 use magi_core::dto::{FeatureStatus, Install};
 
@@ -89,6 +89,7 @@ impl SettingsView {
                 lang.plural(&s.feature_updating, b.total - b.done),
             )
         });
+        let busy = self.is_busy(field);
         let action = feature_action(f);
         let button = match action {
             FeatureAction::TurnOn => Some(
@@ -114,7 +115,7 @@ impl SettingsView {
             FeatureAction::Nothing => None,
         }
         .map(|b| {
-            b.on_click(cx.listener(move |this, _, _, cx| {
+            b.loading(busy).on_click(cx.listener(move |this, _, _, cx| {
                 this.run(
                     field,
                     move |host| match action {
@@ -131,6 +132,7 @@ impl SettingsView {
             Switch::new(("feature", feature as usize))
                 .cursor_pointer()
                 .checked(f.enabled)
+                .disabled(busy)
                 .color(p.accent)
                 .accessibility_label(text.name)
                 .on_click(cx.listener(move |this, &on: &bool, _, cx| {

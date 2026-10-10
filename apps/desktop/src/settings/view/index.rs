@@ -151,6 +151,7 @@ impl SettingsView {
                             .small()
                             .icon(IconName::RefreshCw)
                             .label(s.retry_all)
+                            .loading(self.is_busy(Field::Unreadable))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.run(
                                     Field::Unreadable,
@@ -184,6 +185,7 @@ impl SettingsView {
                                 .danger()
                                 .small()
                                 .label(s.clear_index_button)
+                                .loading(self.is_busy(Field::Clear))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.confirm_clear(window, cx)
                                 })),
