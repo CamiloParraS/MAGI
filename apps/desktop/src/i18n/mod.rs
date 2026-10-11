@@ -102,6 +102,14 @@ pub struct Strings {
     pub root_files: Plural,
     pub root_missing: &'static str,
     pub root_denied: &'static str,
+    /// A macOS folder denied in Files and Folders (M7 guidance).
+    pub guide_mac_files: &'static str,
+    /// A macOS folder that needs Full Disk Access.
+    pub guide_mac_full_disk: &'static str,
+    /// Linux out of inotify watches; `{n}` is the current limit.
+    pub guide_watch_limit: &'static str,
+    /// The button that opens the OS's privacy settings page.
+    pub open_system_settings: &'static str,
     /// Before Settings' Add folders button, read as one sentence with it.
     /// `{path}` is the folder.
     pub root_not_found: &'static str,

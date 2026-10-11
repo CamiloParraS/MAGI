@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::{Field, SettingsView};
 use crate::i18n::Strings;
-use crate::settings::{root_line, root_state};
+use crate::settings::{guidance_of, root_line, root_state};
 use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{
     add_folder_row, drop_zone, folder_name, pick_folders, suggested_folders, suggestions,
@@ -203,7 +203,12 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let (badge, tone, _) = root_state(root, s);
-        let line = root_line(root, s, self.live.read(cx).lang);
+        let live = self.live.read(cx);
+        let line = root_line(root, &live.permissions, s, live.lang);
+        let settings_url = root
+            .enabled
+            .then(|| guidance_of(root, &live.permissions)?.settings_url())
+            .flatten();
         let id = root.id;
         let removing = self.removing.contains(&id);
         let icon = match tone {
@@ -236,6 +241,16 @@ impl SettingsView {
                             .child(parent)
                     }))
                     .children(line.map(|line| note(p).child(line)))
+                    .children(settings_url.map(|url| {
+                        // Granting there is enough: the 30 s re-probe picks
+                        // the folder up again.
+                        Button::new(("open-system-settings", id as u64))
+                            .cursor_pointer()
+                            .small()
+                            .mt(px(6.))
+                            .label(s.open_system_settings)
+                            .on_click(move |_, _, cx| cx.open_url(url))
+                    }))
                     .children(self.problem(Field::Root(id), s, p)),
             )
             // A changed status fades in, so the change is seen.

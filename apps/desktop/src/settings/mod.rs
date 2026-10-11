@@ -7,7 +7,8 @@ use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
 use magi_core::db::roots::Health;
 use magi_core::discovery::Kind;
 use magi_core::dto::{
-    DownloadError, ErrorCode, FeatureStatus, FileErrorCode, IndexStatus, Install, RootStatus,
+    DownloadError, ErrorCode, FeatureStatus, FileErrorCode, Guidance, IndexStatus, Install,
+    PermissionIssue, RootStatus,
 };
 use magi_core::features::Feature;
 use magi_core::host::Host;
@@ -94,11 +95,43 @@ pub fn root_state(
     }
 }
 
+/// The guidance the permission report gives `root`, if any.
+pub fn guidance_of(root: &RootStatus, issues: &[PermissionIssue]) -> Option<Guidance> {
+    issues
+        .iter()
+        .find(|issue| issue.root_id == root.id)
+        .map(|issue| issue.guidance)
+}
+
+/// What [`root_state`] explains, made specific by the permission report
+/// (M7): which permission, or which Linux setting.
+pub fn root_explain(
+    root: &RootStatus,
+    issues: &[PermissionIssue],
+    s: &Strings,
+    lang: Lang,
+) -> Option<String> {
+    let text = match root.enabled.then(|| guidance_of(root, issues)).flatten() {
+        Some(Guidance::MacFilesAndFolders) => s.guide_mac_files,
+        Some(Guidance::MacFullDiskAccess) => s.guide_mac_full_disk,
+        Some(Guidance::WatchLimit { limit: Some(n) }) => {
+            return Some(s.guide_watch_limit.replace("{n}", &lang.number(n)));
+        }
+        _ => return root_state(root, s).2.map(str::to_owned),
+    };
+    Some(text.to_owned())
+}
+
 /// A root's second line: how many of its files are indexed, then what
-/// [`root_state`] explains. No count before the first file is indexed.
-pub fn root_line(root: &RootStatus, s: &Strings, lang: Lang) -> Option<String> {
+/// [`root_explain`] says. No count before the first file is indexed.
+pub fn root_line(
+    root: &RootStatus,
+    issues: &[PermissionIssue],
+    s: &Strings,
+    lang: Lang,
+) -> Option<String> {
     let count = (root.indexed > 0).then(|| lang.plural(&s.root_files, root.indexed));
-    let explain = root_state(root, s).2.map(str::to_owned);
+    let explain = root_explain(root, issues, s, lang);
     match (count, explain) {
         (Some(count), Some(explain)) => Some(format!("{count} · {explain}")),
         (count, explain) => count.or(explain),
@@ -655,6 +688,7 @@ mod tests {
                     indexed,
                     ..root(enabled, status)
                 },
+                &[],
                 s,
                 lang,
             )
@@ -672,6 +706,61 @@ mod tests {
         assert_eq!(
             line(0, false, Health::Ok).as_deref(),
             Some("Paused, not searched")
+        );
+    }
+
+    #[test]
+    fn a_reported_root_says_what_to_do_about_it() {
+        let (lang, s) = (Lang::En, Lang::En.strings());
+        let issue = |guidance| PermissionIssue {
+            root_id: 1,
+            path: "D:\\Photos".into(),
+            status: Health::PermissionDenied,
+            guidance,
+        };
+        let explain = |guidance| {
+            root_explain(
+                &root(true, Health::PermissionDenied),
+                &[issue(guidance)],
+                s,
+                lang,
+            )
+        };
+        assert_eq!(
+            explain(Guidance::MacFilesAndFolders).as_deref(),
+            Some(
+                "macOS hasn't allowed Magi to read this folder. Allow Magi in \
+                 Privacy & Security › Files and Folders."
+            )
+        );
+        assert_eq!(
+            explain(Guidance::MacFullDiskAccess).as_deref(),
+            Some(
+                "macOS hasn't allowed Magi to read this folder. Allow Magi in \
+                 Privacy & Security › Full Disk Access, then restart Magi."
+            )
+        );
+        assert_eq!(
+            explain(Guidance::WatchLimit { limit: Some(8192) }).as_deref(),
+            Some(
+                "Linux can't watch more folders (limit 8,192), so this one is \
+                 checked now and then. Raise fs.inotify.max_user_watches to \
+                 watch it live."
+            )
+        );
+        // Before the first report arrives, the status alone still explains.
+        assert_eq!(
+            root_explain(&root(true, Health::PermissionDenied), &[], s, lang).as_deref(),
+            Some("Magi isn't allowed to read this folder.")
+        );
+        // Another root's issue is not this one's.
+        let other = PermissionIssue {
+            root_id: 2,
+            ..issue(Guidance::MacFullDiskAccess)
+        };
+        assert_eq!(
+            root_explain(&root(true, Health::Ok), &[other], s, lang),
+            None
         );
     }
 

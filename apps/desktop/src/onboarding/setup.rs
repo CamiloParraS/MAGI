@@ -17,7 +17,7 @@ use magi_core::dto::{Install, RootStatus};
 
 use super::{OnboardingView, STEP_IN};
 use crate::i18n::Strings;
-use crate::settings::root_state;
+use crate::settings::{guidance_of, root_explain, root_state};
 use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{add_folder_row, drop_zone, folder_name, suggested_folders, suggestions};
 use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon, scan_row};
@@ -92,7 +92,13 @@ impl OnboardingView {
         p: &Palette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let (badge, tone, explain) = root_state(root, s);
+        let (badge, tone, _) = root_state(root, s);
+        let live = self.live.read(cx);
+        let explain = root_explain(root, &live.permissions, s, live.lang);
+        let settings_url = root
+            .enabled
+            .then(|| guidance_of(root, &live.permissions)?.settings_url())
+            .flatten();
         let id = root.id;
         let removing = self.removing.contains(&id);
         let icon = match tone {
@@ -124,7 +130,15 @@ impl OnboardingView {
                             .text_ellipsis_middle()
                             .child(parent)
                     }))
-                    .children(explain.map(|e| note(p).child(e))),
+                    .children(explain.map(|e| note(p).child(e)))
+                    .children(settings_url.map(|url| {
+                        Button::new(("open-system-settings", id as u64))
+                            .cursor_pointer()
+                            .small()
+                            .mt(px(6.))
+                            .label(s.open_system_settings)
+                            .on_click(move |_, _, cx| cx.open_url(url))
+                    })),
             )
             .children(badge.map(|badge| p.status(badge, tone)))
             // A rescan probes each root again: a fixed permission or
