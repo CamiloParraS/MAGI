@@ -62,9 +62,65 @@ pub fn canonicalize(path: &Path) -> Result<PathBuf> {
     })
 }
 
+/// A native library (PDFium, ONNX Runtime) shipped inside an installed
+/// package, where cargo-packager puts resources (ADR-0012): next to the
+/// executable (NSIS), `Contents/Resources` (macOS `.app`),
+/// `$APPDIR/usr/lib/magi` (AppImage) or `/usr/lib/magi` (`.deb`). `None` in a
+/// dev build, which uses `vendor/`.
+pub fn bundled_library(file: &str, exe: &Path, appdir: Option<&Path>) -> Option<PathBuf> {
+    let exe_dir = exe.parent()?;
+    [
+        Some(exe_dir.to_path_buf()),
+        Some(exe_dir.join("../Resources")),
+        appdir.map(|dir| dir.join("usr/lib/magi")),
+        Some(PathBuf::from("/usr/lib/magi")),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|dir| dir.join(file))
+    .find(|path| path.is_file())
+}
+
+/// [`bundled_library`] for the running executable.
+pub fn installed_library(file: &str) -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let appdir = env::var_os("APPDIR").map(PathBuf::from);
+    bundled_library(file, &exe, appdir.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundled_library_is_found_where_each_package_puts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let put = |rel: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"").unwrap();
+        };
+        // NSIS: next to the executable.
+        put("win/lib.dll");
+        assert!(bundled_library("lib.dll", &dir.path().join("win/magi.exe"), None).is_some());
+        // macOS .app: Contents/Resources, beside Contents/MacOS.
+        put("Magi.app/Contents/Resources/lib.dylib");
+        let mac = dir.path().join("Magi.app/Contents/MacOS/magi");
+        assert!(bundled_library("lib.dylib", &mac, None).is_some());
+        // AppImage: $APPDIR/usr/lib/magi.
+        put("appdir/usr/lib/magi/lib.so");
+        let appdir = dir.path().join("appdir");
+        assert!(
+            bundled_library(
+                "lib.so",
+                &appdir.join("usr/bin/magi"),
+                Some(appdir.as_path())
+            )
+            .is_some()
+        );
+        // A dev build has none of these.
+        assert_eq!(bundled_library("lib.so", &mac, None), None);
+    }
 
     #[test]
     fn resolves_dotdot_segments() {

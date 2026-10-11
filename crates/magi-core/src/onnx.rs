@@ -10,13 +10,18 @@ use ort::session::builder::GraphOptimizationLevel;
 use crate::error::{Error, Result};
 use crate::platform::{Os, PowerStatus};
 
-/// Resolves the vendored ONNX Runtime shared library: `MAGI_ONNXRUNTIME_PATH`
-/// first (an explicit override), then the dev-time `vendor/onnxruntime/<target>/`
-/// layout that `xtask fetch-onnxruntime` populates — mirrors
-/// `extract::pdf::resolve_library_path`.
+/// Resolves the ONNX Runtime shared library: `MAGI_ONNXRUNTIME_PATH` first
+/// (an explicit override), then an installed package's copy (ADR-0012), then
+/// the dev-time `vendor/onnxruntime/<target>/` layout that `xtask
+/// fetch-onnxruntime` populates — mirrors `extract::pdf::resolve_library_path`.
 fn onnxruntime_library_path() -> PathBuf {
     if let Ok(path) = std::env::var("MAGI_ONNXRUNTIME_PATH") {
         return PathBuf::from(path);
+    }
+    if let Some(path) =
+        crate::paths::installed_library(crate::platform::onnxruntime_library_filename())
+    {
+        return path;
     }
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir

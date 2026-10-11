@@ -9,15 +9,17 @@ use pdfium_render::prelude::*;
 use super::{ExtractedDoc, Extractor};
 use crate::error::{Error, Result};
 
-/// Resolves the vendored PDFium shared library: `MAGI_PDFIUM_PATH` first
-/// (an explicit override), then the dev-time `vendor/pdfium/<target>/`
-/// layout that `xtask fetch-pdfium` populates.
-///
-/// ponytail: dev-time resolution only; bundling the library next to the
-/// installed app is an M6 packaging decision, not yet made.
+/// Resolves the PDFium shared library: `MAGI_PDFIUM_PATH` first (an
+/// explicit override), then an installed package's copy (ADR-0012), then
+/// the dev-time `vendor/pdfium/<target>/` layout that `xtask fetch-pdfium`
+/// populates.
 fn resolve_library_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("MAGI_PDFIUM_PATH") {
         return Some(PathBuf::from(path));
+    }
+    if let Some(path) = crate::paths::installed_library(crate::platform::pdfium_library_filename())
+    {
+        return Some(path);
     }
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.parent()?.parent()?;
