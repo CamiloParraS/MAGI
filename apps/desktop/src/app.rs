@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use gpui_kit::*;
 use magi_core::config::{Onboarding, UiConfig};
-use magi_core::dto::IndexState;
+use magi_core::dto::PauseReason;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
 use crate::hotkey::{self, Hotkey};
@@ -169,7 +169,7 @@ impl Shell {
                 }
             }
             AppEvent::Host(HostEvent::Status(status)) => {
-                self.paused = status.state == IndexState::Paused;
+                self.paused = status.paused_for == Some(PauseReason::User);
                 if let Some(tray) = &self.tray {
                     tray.show_status(&status);
                 }

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use sysinfo::System;
 
+use crate::dto::PauseReason;
 use crate::index::pipeline::IndexContext;
 use crate::platform::{Os, PowerStatus};
 
@@ -85,13 +86,28 @@ pub fn machine(worker_threads: u32) -> (u64, usize) {
 pub(crate) struct Pause {
     /// By the user; persisted in `meta.paused` (SPEC.md §6.4).
     pub user: AtomicBool,
-    /// By the monitor: low memory, or on battery.
-    pub resources: AtomicBool,
+    /// By the monitor: less than 1 GB of memory available.
+    pub low_memory: AtomicBool,
+    /// By the monitor: on battery, when the user chose to pause then.
+    pub on_battery: AtomicBool,
 }
 
 impl Pause {
     pub fn any(&self) -> bool {
-        self.user.load(Ordering::SeqCst) || self.resources.load(Ordering::SeqCst)
+        self.reason().is_some()
+    }
+
+    /// The user's pause wins: it is the one only the user can lift.
+    pub fn reason(&self) -> Option<PauseReason> {
+        if self.user.load(Ordering::SeqCst) {
+            Some(PauseReason::User)
+        } else if self.low_memory.load(Ordering::SeqCst) {
+            Some(PauseReason::LowMemory)
+        } else if self.on_battery.load(Ordering::SeqCst) {
+            Some(PauseReason::Battery)
+        } else {
+            None
+        }
     }
 }
 
@@ -123,7 +139,10 @@ pub(crate) fn run(m: Monitor, stop: &AtomicBool, wake: Receiver<()>) {
             battery.is_some_and(|(_, on)| on)
         };
         let pause = low || on_battery;
-        if m.pause.resources.swap(pause, Ordering::SeqCst) != pause {
+        let changed = m.pause.low_memory.swap(low, Ordering::SeqCst) != low;
+        let changed =
+            m.pause.on_battery.swap(on_battery, Ordering::SeqCst) != on_battery || changed;
+        if changed {
             tracing::info!(
                 pause,
                 low_memory = low,

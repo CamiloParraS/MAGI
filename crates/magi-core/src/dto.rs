@@ -79,9 +79,22 @@ pub enum IndexState {
     Paused,
 }
 
+/// Why indexing is paused. Rust gives the reason; the UI words it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    User,
+    LowMemory,
+    Battery,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexStatus {
     pub state: IndexState,
+    /// Set exactly when `state` is `Paused`.
+    pub paused_for: Option<PauseReason>,
+    /// Files the scan under way has found so far; 0 unless `state` is `Scanning`.
+    pub scanned: u64,
     /// Files `pending` or `indexing`.
     pub queued: u64,
     pub indexed: u64,

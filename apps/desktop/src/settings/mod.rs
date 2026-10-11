@@ -367,6 +367,8 @@ mod tests {
     fn an_empty_unreadable_list_says_reading_until_the_queue_is_done() {
         let status = |queued, errors| IndexStatus {
             state: IndexState::Indexing,
+            paused_for: None,
+            scanned: 0,
             queued,
             indexed: 10,
             skipped: 0,

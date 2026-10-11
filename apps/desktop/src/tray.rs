@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gpui_kit::Keystroke;
-use magi_core::dto::{IndexState, IndexStatus};
+use magi_core::dto::{IndexState, IndexStatus, PauseReason};
 use magi_core::platform::{SYMBOL_MODIFIERS, TRAY_CLICK_OPENS_APP};
 use tray_icon::menu::accelerator::Accelerator;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -25,7 +25,15 @@ pub enum TrayAction {
 pub fn status_line(status: &IndexStatus, lang: Lang) -> String {
     let s = lang.strings();
     match status.state {
-        IndexState::Paused => s.status_paused.into(),
+        IndexState::Paused => match status.paused_for {
+            Some(PauseReason::LowMemory) => s.status_paused_low_memory,
+            Some(PauseReason::Battery) => s.status_paused_battery,
+            _ => s.status_paused,
+        }
+        .into(),
+        IndexState::Scanning if status.scanned > 0 => {
+            lang.plural(&s.status_scanning_found, status.scanned)
+        }
         IndexState::Scanning => s.status_scanning.into(),
         IndexState::Indexing => lang.plural(&s.status_indexing, status.queued),
         IndexState::Idle if status.errors > 0 => lang.plural(&s.status_idle_errors, status.errors),
@@ -193,6 +201,8 @@ mod tests {
     fn status(state: IndexState, queued: u64, errors: u64) -> IndexStatus {
         IndexStatus {
             state,
+            paused_for: (state == IndexState::Paused).then_some(PauseReason::User),
+            scanned: 0,
             queued,
             indexed: 0,
             skipped: 0,
@@ -222,11 +232,31 @@ mod tests {
             "Up to date, 3 files could not be read"
         );
         assert_eq!(line(IndexState::Scanning, 0, 0), "Scanning folders…");
+        let found = IndexStatus {
+            scanned: 12_430,
+            ..status(IndexState::Scanning, 0, 0)
+        };
+        assert_eq!(
+            status_line(&found, Lang::En),
+            "Scanning folders… 12,430 files found"
+        );
         assert_eq!(
             line(IndexState::Indexing, 1284, 0),
             "Indexing, 1,284 files to go"
         );
         assert_eq!(line(IndexState::Paused, 9, 0), "Indexing paused");
+        let paused_for = |reason| IndexStatus {
+            paused_for: Some(reason),
+            ..status(IndexState::Paused, 9, 0)
+        };
+        assert_eq!(
+            status_line(&paused_for(PauseReason::LowMemory), Lang::En),
+            "Paused: low memory"
+        );
+        assert_eq!(
+            status_line(&paused_for(PauseReason::Battery), Lang::Es),
+            "En pausa: con batería"
+        );
         assert_eq!(
             status_line(&status(IndexState::Indexing, 1, 0), Lang::Es),
             "Indexando, falta 1 archivo"

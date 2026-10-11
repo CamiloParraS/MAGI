@@ -60,7 +60,13 @@ pub const STRINGS: Strings = Strings {
     tray_resume: "Resume indexing",
     tray_quit: "Quit",
     status_paused: "Indexing paused",
+    status_paused_low_memory: "Paused: low memory",
+    status_paused_battery: "Paused: on battery",
     status_scanning: "Scanning folders…",
+    status_scanning_found: Plural {
+        one: "Scanning folders… {n} file found",
+        other: "Scanning folders… {n} files found",
+    },
     status_indexing: Plural {
         one: "Indexing, {n} file to go",
         other: "Indexing, {n} files to go",

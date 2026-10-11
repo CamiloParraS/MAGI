@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rusqlite::Connection;
 
@@ -30,12 +30,14 @@ pub fn next_scan_id(conn: &Connection) -> Result<i64> {
 /// root was switched off or removed. A stopped root keeps its rows as they
 /// were; nothing it did not get to see is deleted.
 #[derive(Default)]
-pub struct Cancel {
+pub struct ScanControl {
     stop: AtomicBool,
     off: Mutex<Vec<i64>>,
+    /// Files found by the scan under way, for the status to show.
+    seen: AtomicU64,
 }
 
-impl Cancel {
+impl ScanControl {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
@@ -52,6 +54,11 @@ impl Cancel {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .retain(|id| *id != root_id);
+    }
+
+    /// Files found so far by the scan that last started.
+    pub fn seen(&self) -> u64 {
+        self.seen.load(Ordering::Relaxed)
     }
 
     fn stopped(&self) -> bool {
@@ -286,9 +293,17 @@ pub fn reconcile_root(
     options: &IndexRootOptions,
     scan_id: i64,
 ) -> Result<(ScanSummary, Vec<Unseen>)> {
-    let stopped = || options.cancel.root_stopped(root_id);
-    let Some(entries) =
-        discovery::walk_until(root_path, root_path, &options.walk_options(), &stopped)?
+    let stopped = || options.scan.root_stopped(root_id);
+    let found = || {
+        options.scan.seen.fetch_add(1, Ordering::Relaxed);
+    };
+    let Some(entries) = discovery::walk_until(
+        root_path,
+        root_path,
+        &options.walk_options(),
+        &stopped,
+        &found,
+    )?
     else {
         return Ok(Default::default());
     };
@@ -370,13 +385,15 @@ pub fn reconcile_roots(
     ids: &[i64],
 ) -> Result<ScanSummary> {
     let scan_id = next_scan_id(conn)?;
+    options.scan.seen.store(0, Ordering::Relaxed);
+    let started = std::time::Instant::now();
     let mut summary = ScanSummary::default();
     let mut unseen = Vec::new();
     let scanned = roots::list(conn)?
         .into_iter()
         .filter(|r| r.enabled && ids.contains(&r.id));
     for root in scanned {
-        if options.cancel.stopped() {
+        if options.scan.stopped() {
             break;
         }
         let access = FsProbe.probe(&root.path);
@@ -389,10 +406,18 @@ pub fn reconcile_roots(
         unseen.extend(gone);
     }
     // A scan that was cut short has not seen everything: delete nothing.
-    if options.cancel.stopped() {
+    if options.scan.stopped() {
         return Ok(summary);
     }
     summary.removed = remove_unseen(conn, unseen)?;
+    tracing::info!(
+        found = options.scan.seen(),
+        inserted = summary.inserted,
+        changed = summary.changed,
+        removed = summary.removed,
+        elapsed = ?started.elapsed(),
+        "scan finished"
+    );
     Ok(summary)
 }
 
@@ -500,6 +525,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_scan_counts_the_files_it_finds() {
+        let mut s = Setup::new();
+        s.write("a.txt", "a");
+        s.write("b.txt", "b");
+        reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
+        assert_eq!(s.options.scan.seen(), 2);
+    }
+
     /// Quitting mid-scan must not read as "everything I did not reach is gone".
     #[test]
     fn a_stopped_scan_changes_and_deletes_nothing() {
@@ -509,7 +543,7 @@ mod tests {
         fs::remove_file(s.root_dir.path().join("old.txt")).unwrap();
         s.write("new.txt", "new");
 
-        s.options.cancel.stop();
+        s.options.scan.stop();
         let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
 
         assert_eq!(summary, ScanSummary::default());
@@ -532,7 +566,7 @@ mod tests {
         s.write("mine.txt", "mine");
         fs::write(other_dir.path().join("theirs.txt"), "theirs").unwrap();
 
-        s.options.cancel.switch_off(s.root.id);
+        s.options.scan.switch_off(s.root.id);
         let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id, other.id]).unwrap();
         assert_eq!(summary.inserted, 1);
         assert_eq!(
@@ -540,7 +574,7 @@ mod tests {
             0
         );
 
-        s.options.cancel.switch_on(s.root.id);
+        s.options.scan.switch_on(s.root.id);
         let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
         assert_eq!(summary.inserted, 1);
     }

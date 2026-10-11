@@ -60,7 +60,13 @@ pub const STRINGS: Strings = Strings {
     tray_resume: "Reanudar indexación",
     tray_quit: "Salir",
     status_paused: "Indexación en pausa",
+    status_paused_low_memory: "En pausa: poca memoria",
+    status_paused_battery: "En pausa: con batería",
     status_scanning: "Revisando carpetas…",
+    status_scanning_found: Plural {
+        one: "Revisando carpetas… {n} archivo encontrado",
+        other: "Revisando carpetas… {n} archivos encontrados",
+    },
     status_indexing: Plural {
         one: "Indexando, falta {n} archivo",
         other: "Indexando, faltan {n} archivos",

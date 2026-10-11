@@ -722,6 +722,8 @@ mod tests {
     fn status(state: IndexState, indexed: u64, queued: u64) -> IndexStatus {
         IndexStatus {
             state,
+            paused_for: None,
+            scanned: 0,
             queued,
             indexed,
             skipped: 0,

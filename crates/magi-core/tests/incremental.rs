@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use magi_core::config::Config;
 use magi_core::db::{self, files, roots};
-use magi_core::dto::IndexState;
+use magi_core::dto::{IndexState, PauseReason};
 use magi_core::embed::{CountingEmbedder, FakeEmbedder, FakeImageEmbedder, ImageEmbedder};
 use magi_core::features::Components;
 use magi_core::search::fts::search_fts;
@@ -861,6 +861,9 @@ fn memory_pressure_pauses_indexing_and_unloads_the_image_model() {
     wait_until(Duration::from_secs(30), "pause and unload", || {
         engine.is_paused() && !image.0.load(Ordering::SeqCst)
     });
+    let status = engine.status().unwrap();
+    assert_eq!(status.state, IndexState::Paused);
+    assert_eq!(status.paused_for, Some(PauseReason::LowMemory));
     env.write("later.txt", "postponed content");
     backdate(&env.root().join("later.txt"));
     wait_until(Duration::from_secs(30), "later.txt to be queued", || {
@@ -874,6 +877,7 @@ fn memory_pressure_pauses_indexing_and_unloads_the_image_model() {
     engine.simulate_low_memory(false);
     env.wait_drained(2);
     assert!(!engine.is_paused());
+    assert_eq!(engine.status().unwrap().paused_for, None);
     assert_eq!(env.hits("postponed"), 1);
 }
 

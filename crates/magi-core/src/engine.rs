@@ -43,7 +43,7 @@ use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
 use crate::index::{ModelIds, requeue_missing, requeue_on_model_change};
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
-use crate::watch::reconcile::{Cancel, ScanSummary};
+use crate::watch::reconcile::{ScanControl, ScanSummary};
 use crate::watch::watcher::Watchers;
 use crate::watch::{poller, watcher};
 
@@ -76,7 +76,7 @@ impl Engine {
     /// `Scanning` meanwhile and the scheduler starts when the walk is done.
     pub fn start(config: &Config, db_path: &Path, components: Components) -> Result<EngineHandle> {
         let initial = IndexRootOptions::from_config(&config.indexing)?;
-        let cancel = initial.cancel.clone();
+        let scan = initial.scan.clone();
         let options: SharedOptions = Arc::new(RwLock::new(Arc::new(initial)));
         let mut write_conn = db::open(db_path)?;
         files::reset_indexing_to_pending(&write_conn)?;
@@ -145,6 +145,7 @@ impl Engine {
         // Never sent on: dropping it at shutdown stops the ticker and status threads.
         let (closer, closed) = crossbeam_channel::bounded::<()>(0);
         let status = StatusSource {
+            scan: scan.clone(),
             reader: Arc::new(Mutex::new(db::open(db_path)?)),
             stats: stats.clone(),
             pause: pause.clone(),
@@ -153,7 +154,7 @@ impl Engine {
 
         let inner = Arc::new(Inner {
             stop: stop.clone(),
-            cancel,
+            scan,
             options: options.clone(),
             watchers: Mutex::new(Some(watchers)),
             unwatched: unwatched.clone(),
@@ -255,7 +256,7 @@ pub struct EngineHandle {
 struct Inner {
     stop: Arc<AtomicBool>,
     /// Ends a running scan early (quit, or a folder switched off).
-    cancel: Arc<Cancel>,
+    scan: Arc<ScanControl>,
     options: SharedOptions,
     watchers: Mutex<Option<Watchers>>,
     /// Set while some root is polled instead of watched.
@@ -347,7 +348,7 @@ impl EngineHandle {
 
     /// Stops watching a root and purges everything indexed under it (item 12).
     pub fn remove_root(&self, id: i64) -> Result<()> {
-        self.inner.cancel.switch_off(id);
+        self.inner.scan.switch_off(id);
         self.unwatch(id);
         self.write(move |conn| roots::remove(conn, id))
     }
@@ -357,14 +358,14 @@ impl EngineHandle {
     pub fn set_root_enabled(&self, id: i64, enabled: bool) -> Result<()> {
         // Before the write, which waits behind any scan the writer is running.
         if !enabled {
-            self.inner.cancel.switch_off(id);
+            self.inner.scan.switch_off(id);
         }
         let root = self.write(move |conn| {
             roots::set_enabled(conn, id, enabled)?;
             roots::get(conn, id)
         })?;
         if enabled {
-            self.inner.cancel.switch_on(id);
+            self.inner.scan.switch_on(id);
             let id = self.watch(root)?.id;
             let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(id));
         } else {
@@ -449,7 +450,7 @@ impl EngineHandle {
         config: &IndexingConfig,
     ) -> Result<Receiver<Result<ScanSummary>>> {
         let mut options = IndexRootOptions::from_config(config)?;
-        options.cancel = self.inner.cancel.clone();
+        options.scan = self.inner.scan.clone();
         let options = Arc::new(options);
         *self
             .inner
@@ -490,7 +491,7 @@ impl EngineHandle {
 impl Inner {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        self.cancel.stop();
+        self.scan.stop();
         // No new events, and the ticker and status threads stop waiting.
         drop(lock(&self.watchers).take());
         drop(lock(&self.closer).take());
@@ -524,6 +525,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// writer.
 #[derive(Clone)]
 struct StatusSource {
+    scan: Arc<ScanControl>,
     reader: Arc<Mutex<Connection>>,
     stats: Arc<Stats>,
     pause: Arc<Pause>,
@@ -535,7 +537,8 @@ impl StatusSource {
         let counts = files::count_states(&conn)?;
         let count = |state: FileState| counts.get(&state).copied().unwrap_or(0);
         let queued = count(FileState::Pending) + count(FileState::Indexing);
-        let state = if self.pause.any() {
+        let paused_for = self.pause.reason();
+        let state = if paused_for.is_some() {
             IndexState::Paused
         } else if self.stats.is_scanning() {
             IndexState::Scanning
@@ -551,6 +554,12 @@ impl StatusSource {
         };
         Ok(IndexStatus {
             state,
+            paused_for,
+            scanned: if state == IndexState::Scanning {
+                self.scan.seen()
+            } else {
+                0
+            },
             queued,
             indexed: count(FileState::Indexed),
             skipped: count(FileState::Skipped),
@@ -579,8 +588,9 @@ fn status_thread(source: &StatusSource, subscribers: &Subscribers, closed: &Rece
     while let Err(RecvTimeoutError::Timeout) = closed.recv_timeout(STATUS_INTERVAL) {
         let now = (
             source.stats.generation(),
-            source.pause.any(),
+            source.pause.reason(),
             source.stats.is_scanning(),
+            source.scan.seen(),
         );
         if seen == Some(now) {
             continue;

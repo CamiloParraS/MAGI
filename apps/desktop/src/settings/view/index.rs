@@ -11,10 +11,11 @@ use gpui_kit::*;
 use super::{Field, SettingsView};
 use std::time::Instant;
 
-use magi_core::dto::IndexStatus;
+use magi_core::dto::{IndexState, IndexStatus};
 
 use crate::settings::{ROLL, Roll, file_error_label, still_reading};
 use crate::theme::{Palette, Tone};
+use crate::tray::status_line;
 use crate::ui::{card, group, grouped, note, row, row_icon, subheading};
 
 /// How many unreadable files the Index section lists.
@@ -185,7 +186,29 @@ impl SettingsView {
                 }),
             ),
         };
+        // Why nothing is moving, or that something is: a scan walks the folders
+        // before any file counts, and a pause can be the user's, memory's or the
+        // battery's.
+        let busy = live
+            .status
+            .as_ref()
+            .filter(|st| matches!(st.state, IndexState::Scanning | IndexState::Paused))
+            .map(|st| {
+                let icon = if st.state == IndexState::Scanning {
+                    IconName::RefreshCw
+                } else {
+                    IconName::Clock
+                };
+                div().mb(px(8.)).child(grouped(
+                    p,
+                    [row()
+                        .child(row_icon(icon, p))
+                        .text_color(p.mute)
+                        .child(status_line(st, lang))],
+                ))
+            });
         div()
+            .children(busy)
             .children(stats)
             .child(
                 div()
