@@ -71,7 +71,7 @@ pub fn bundled_library(file: &str, exe: &Path, appdir: Option<&Path>) -> Option<
     let exe_dir = exe.parent()?;
     [
         Some(exe_dir.to_path_buf()),
-        Some(exe_dir.join("../Resources")),
+        exe_dir.parent().map(|dir| dir.join("Resources")),
         appdir.map(|dir| dir.join("usr/lib/magi")),
         Some(PathBuf::from("/usr/lib/magi")),
     ]

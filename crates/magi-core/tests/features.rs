@@ -105,8 +105,11 @@ impl Env {
 
     fn wait_drained(&self, files: i64) {
         wait_until(Duration::from_secs(120), "the queue to drain", || {
-            self.count("SELECT COUNT(*) FROM files WHERE state IN ('pending', 'indexing')") == 0
-                && self.count("SELECT COUNT(*) FROM files") == files
+            // One query: two could see the file get inserted, still pending, between them.
+            self.count(
+                "SELECT COUNT(*) FROM files WHERE NOT EXISTS
+                   (SELECT 1 FROM files WHERE state IN ('pending', 'indexing'))",
+            ) == files
         });
     }
 }
