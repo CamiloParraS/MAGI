@@ -20,7 +20,7 @@ use crate::i18n::Strings;
 use crate::settings::root_state;
 use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{add_folder_row, drop_zone, folder_name, suggested_folders, suggestions};
-use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon};
+use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon, scan_row};
 
 impl OnboardingView {
     /// FR-10's permission check: each folder's status says whether Magi can
@@ -67,10 +67,14 @@ impl OnboardingView {
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
         let chips = suggested_folders(offered, s, p, cx, Self::add_folders);
+        let live = self.live.read(cx);
         div()
             .flex()
             .flex_col()
             .gap(px(10.))
+            // A just-added folder says it is being walked and read: silence
+            // here reads as an app that did nothing.
+            .children(scan_row(live.status.as_ref(), live.lang, p))
             .child(
                 body.drag_over::<ExternalPaths>(move |style, _, _, _| {
                     style.border_color(accent).bg(accent.opacity(0.08))
