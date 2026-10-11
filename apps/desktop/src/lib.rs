@@ -44,13 +44,12 @@ pub fn run(args: Vec<String>) -> ExitCode {
         // Already running: a launch at login has nothing to show.
         Ok(instance::Claim::Secondary) if background => return ExitCode::SUCCESS,
         Ok(instance::Claim::Secondary) => {
-            return match instance::forward(&name, message) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    tracing::error!(%error, "could not reach the running magi");
-                    ExitCode::FAILURE
-                }
-            };
+            // A running Magi that does not answer must not leave the user with
+            // no window: fall through and run without single-instance.
+            match instance::forward(&name, message) {
+                Ok(()) => return ExitCode::SUCCESS,
+                Err(error) => tracing::warn!(%error, "could not reach the running magi"),
+            }
         }
         Ok(instance::Claim::Primary(listener)) => {
             let tx = tx.clone();

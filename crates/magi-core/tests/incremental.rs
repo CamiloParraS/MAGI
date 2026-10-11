@@ -126,6 +126,12 @@ impl Env {
     }
 
     fn state_of(&self, name: &str) -> String {
+        // `Engine::start` returns before the first scan has listed the file.
+        wait_until(Duration::from_secs(30), "the file to be listed", || {
+            self.count(&format!(
+                "SELECT COUNT(*) FROM files WHERE file_name = '{name}'"
+            )) > 0
+        });
         self.conn()
             .query_row(
                 "SELECT state FROM files WHERE file_name = ?1",

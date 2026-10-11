@@ -72,9 +72,8 @@ impl Engine {
     /// [`EngineHandle::shutdown`]. `components` are the running search
     /// features (ADR-0010); a missing one is skipped by indexing.
     ///
-    /// Blocks while the first reconciliation walk runs.
-    /// ponytail: startup scan is synchronous; move it onto the writer without
-    /// waiting if `start` blocks the UI on a very large root.
+    /// Returns before the first reconciliation walk ends; the status reads
+    /// `Scanning` meanwhile and the scheduler starts when the walk is done.
     pub fn start(config: &Config, db_path: &Path, components: Components) -> Result<EngineHandle> {
         let options: SharedOptions = Arc::new(RwLock::new(Arc::new(
             IndexRootOptions::from_config(&config.indexing)?,
@@ -173,11 +172,10 @@ impl Engine {
             move || writer::run(write_conn, options, write_rx, done_tx, wake, stats)
         })?;
 
-        // Step 4: the reconciliation scan. Done before the workers exist, so
-        // nothing is extracted while a moved file is still waiting to be matched.
+        // Step 4: the reconciliation scan. `start` does not wait for it (status
+        // and keyword search work meanwhile); the scheduler does, so nothing is
+        // extracted while a moved file is still waiting to be matched.
         let scan = handle.rescan();
-        scan.recv()
-            .map_err(|_| Error::Engine("the writer stopped during startup".into()))??;
 
         handle.spawn("magi-embed", {
             let (ctx, stop, write_tx, pending) = (
@@ -202,6 +200,18 @@ impl Engine {
         handle.spawn("magi-scheduler", {
             let (write_tx, stop, pause) = (write_tx.clone(), stop.clone(), pause.clone());
             move || {
+                // A failed scan is logged; indexing carries on with whatever
+                // is pending.
+                loop {
+                    match scan.recv_timeout(POLL_INTERVAL) {
+                        Err(RecvTimeoutError::Timeout) if !stop.load(Ordering::SeqCst) => {}
+                        Ok(Err(error)) => {
+                            tracing::error!(%error, "the startup scan failed");
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
                 scheduler_thread(
                     &scheduler_conn,
                     Scheduler::new(max_in_flight),
