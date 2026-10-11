@@ -2437,7 +2437,7 @@ Onboarding redesign and light palette (2026-10-07, after a showcase found onboar
   - [ ] Open search from the menu: search opens with the "Next time, open this from anywhere with ⇧⌘Space" hint; ⇧⌘Space itself opens it without the hint.
   - [ ] The shortcut works from another app (`global-hotkey` on macOS has never been pressed for real), and on the onboarding finish screen holding ⇧ and ⌘ lights those keycaps; Space never lights (the hotkey takes it).
   - [ ] Opening Magi again from Finder or Spotlight while it runs brings up search with the hint.
-  - [ ] Vibrancy for M6 Plan 4 (ADR-0011): run with `MAGI_BACKDROP=blurred` over a busy wallpaper (e.g. `fixtures/corpus/images/doroWallpaper.jpg`), open search and settings in light and dark. On the runner VM it was see-through but sharp, not blurred; if a real Mac blurs it, macOS can turn it on, else macOS stays solid. Record the decision in ADR-0011.
+  - [ ] ⚠️ **Half done, VM only (flagged 2026-10-10):** the screenshots above came from the `macos-latest` VM, where the blur could not show whatever the code does, so they prove nothing either way. It still needs a real Mac. Vibrancy for M6 Plan 4 (ADR-0011): run with `MAGI_BACKDROP=blurred` over a busy wallpaper (e.g. `fixtures/corpus/images/doroWallpaper.jpg`), open search and settings in light and dark. On the runner VM it was see-through but sharp, not blurred; if a real Mac blurs it, macOS can turn it on, else macOS stays solid. Record the decision in ADR-0011.
   - [ ] Title bar: with Settings › Appearance › Theme set opposite to the system (dark on a light Mac, then light on a dark one), onboarding and settings have matching title bars (`theme::chrome`; seen working on the runner, not on a real Mac).
 - Icons outside gpui-kit's default set must be listed in `app.rs`'s `ExtraIcons`, or they draw blank; `FolderPlus`, `TextSearch`, `ScanText`, `ScanEye` added.
 - Tests: `tests/onboarding.rs` rewritten: an old saved step opens setup; one confirm with both defaults off enables none, saves `launch_at_login = true` and `done`; the finish step's recorder as before.
@@ -2478,20 +2478,23 @@ and 23 startup failure except Show log (2026-10-05).
 | 6   | HiDPI at 150 % and 200 % | ☐ | | |
 | 7   | IME (e.g. Japanese) composes in place | ☐ | | |
 | 12  | Software rendering (VirtualBox, 3D acceleration off) | ☐ | | |
-| 13  | Transparency effects switched while settings is open | ☐ | | |
-| 14  | Hotkey recorder in the running app (settings and onboarding) | ☐ | | |
-| 15  | Hotkey conflict: `Win+E`, a second Magi, another app, and at startup | ☐ | | |
-| 16  | Real feature download: turn on, network cut, remove download | ☐ | | |
-| 17  | Launch at login: registry value, sign out/in, switch off | ☐ | | |
-| 18  | Remove folder asks first | ☐ | | |
-| 19  | Unreadable list updates live | ☐ | | |
-| 20  | Light-mode see-through: every slider step shows | ☐ | | |
-| 21  | Dark-mode switch contrast | ☐ | | |
+| 13  | Transparency effects switched while settings is open | ✅ off→solid and back to blurred while settings stays open | 2026-10-11 | Back to see-through took ~3 s after refocusing (first shot right after still solid). Registry `EnableTransparency` toggled and restored. |
+| 14  | Hotkey recorder in the running app (settings and onboarding) | ⚠️ settings only | 2026-10-11 | Ctrl+Alt+J recorded: saved to config, opens search at once, no restart; Esc cancels. Onboarding finish-screen recorder not run. |
+| 15  | Hotkey conflict: `Win+E`, a second Magi, another app, and at startup | ⚠️ | 2026-10-11 | A holder process on `Ctrl+Alt+M` (log: `HotKey already registered`): Magi started with it in `ui.hotkey` shows the warning box with the combination; recording a free combo (Ctrl+Alt+J) clears it. With `Win+E`/`Win+R` etc. (2026-10-10, hotkey layer). A real AutoHotkey script not run; a held combo cannot be typed into the recorder, the holder gets the key first. |
+| 16  | Real feature download: turn on, network cut, remove download | ⚠️ OCR (13 MB) only | 2026-10-11 | Real download (no `MAGI_FAKE_EMBEDDER`): Turn on → `Installed · 13 MB` in <3 s (too fast to see the bar); switch off → Remove download → `models/` empty. Not run: the 135 MB model, network cut halfway. |
+| 17  | Launch at login: registry value, sign out/in, switch off | ⚠️ on/off | 2026-10-11 | Switch on writes `HKCU\…\Run` `Magi` = `…\release\magi.exe --background`, `StartupApproved` enabled; switch off removes it. Not run: sign out/in. The stale entry from 2026-10-10 (debug path) is gone, the key is empty. |
+| 18  | Remove folder asks first | ✅ | 2026-10-11 | Trash asks "Stop searching this folder?"; Cancel keeps it, Remove removes it. Absorbed sub-folders case not run. |
+| 19  | Unreadable list updates live | ✅ | 2026-10-11 | With Index open, a new `bad2.pdf` appeared in the list without reopening once indexing ran; Retry all moved both to Waiting. Indexing was paused on low memory (this machine had ~600 MB free), so the list lagged until memory freed. |
+| 20  | Light-mode see-through: every slider step shows | ✅ | 2026-10-11 | Light, blurred: window brightness (mean of the content area) falls monotonically from 245.7 (More solid, opaque `#f5f5f7`) to ~215 (More transparent) over 11 slider steps, config `transparency_intensity` ends at 0.43. |
+| 21  | Dark-mode switch contrast | ✅ | 2026-10-11 | Dark: an off switch is clearly visible (track #4f4f4f on box #2b2b2b, ratio ≈1.7:1, light thumb). Under WCAG's 3:1 for the track alone. |
 | 22  | English, and the live language switch (tray included) | ☐ | | |
-| 23  | Startup failure: Show log reveals `magi.log` | ☐ | | |
+| 24  | Onboarding setup (QA row 24) | ⚠️ | 2026-10-11 | Dark/Spanish and light/English: icons draw, ⓘ opens, the button reads "Download 148 MB and start" / "Empezar" with every feature off, no name cut off, no scrolling. Not run: dropping a folder from Explorer (an OLE drag cannot be driven from here). With a root already added, the features column stays empty until the engine's startup walk ends (~40 s on a large root): the known `Engine::start` block, visible here. |
+| 23  | Startup failure: Show log reveals `magi.log` | ✅ | 2026-10-11 | `Show log` opens Explorer on `magi.log` (all-backslash `MAGI_DATA_DIR`). With a mixed-separator path (`…\Temp/magi-qa/…`, as Git Bash builds it) it logs `Revealing path … 0x80070057` and does nothing. |
 
 macOS and Linux: every row of `docs/qa-checklist.md`, plus row 8 (no tray,
 Linux GNOME without AppIndicator). ☐
+
+⚠️ macOS blur (`MAGI_BACKDROP=blurred`): half done. The CI screenshots were taken on a VM, where a blurred backdrop cannot work, so the result is inconclusive, not evidence for a solid macOS window. Re-run on a real Mac before deciding in ADR-0011.
 
 ### Deliverables
 

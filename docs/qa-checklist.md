@@ -39,18 +39,18 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 10 | Results < 400 ms after typing, warm | `search results after typing stopped elapsed=` | ✅ 2026-09-30, 154–214 ms | | |
 | 11 | Idle RSS ≤ 150 MB | Window closed, models unloaded; Task Manager › Details › Memory (private working set). | ✅ ~24 MB | | |
 | 12 | Software rendering | See "No GPU" below. | not run | | |
-| 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change not run | | |
-| 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's finish screen. | | | |
-| 15 | Hotkey conflict | See "Hotkey conflicts" below. | | | |
-| 16 | Real feature download | Isolated instance without `MAGI_FAKE_EMBEDDER`; see "Downloads" below. | | | |
-| 17 | Launch at login | See "Launch at login" below. | | | |
-| 18 | Remove folder | Trash on a folder asks first; Cancel keeps it, Remove removes it (and the folders it absorbed). | | | |
-| 19 | Unreadable list live | Settings › Index open; drop a broken PDF (e.g. `echo x > bad.pdf`) into a root: it appears without reopening; Retry all updates it. | | | |
-| 20 | Light-mode see-through | Light theme, blurred background: every step of the slider changes the window, from "More solid" (opaque) to "More transparent". | | | |
-| 21 | Dark-mode switch contrast | Dark theme: an off switch is clearly visible on its box. | | | |
+| 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change both ways 2026-10-11 (back to see-through ~3 s after refocus) | | |
+| 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's finish screen. | ⚠️ 2026-10-11 settings: recorded, works at once, Esc cancels; onboarding not run | | |
+| 15 | Hotkey conflict | See "Hotkey conflicts" below. | ⚠️ 2026-10-10 hotkey layer only (`hotkey::Hotkey::set`, real `RegisterHotKey`): `Win+E` and `Win+R` refused, a second holder of `Ctrl+Alt+K` refused, a refused change keeps the old one, freed once the holder is dropped, `Alt+Space` reserved. Not seen: the settings warning box, AutoHotkey, the startup case | | |
+| 16 | Real feature download | Isolated instance without `MAGI_FAKE_EMBEDDER`; see "Downloads" below. | ⚠️ 2026-10-11 OCR (13 MB): Installed, Remove download empties models/. Not run: 135 MB model, network cut | | |
+| 17 | Launch at login | See "Launch at login" below. | ⚠️ 2026-10-11 on and off (key written, then removed); 2026-10-10 on: `HKCU\…\Run` has `Magi` = `…\magi.exe --background` (written by the app). Not run: switching off, Task Manager Startup apps, sign out/in | | |
+| 18 | Remove folder | Trash on a folder asks first; Cancel keeps it, Remove removes it (and the folders it absorbed). | ✅ 2026-10-11 (absorbed folders not run) | | |
+| 19 | Unreadable list live | Settings › Index open; drop a broken PDF (e.g. `echo x > bad.pdf`) into a root: it appears without reopening; Retry all updates it. | ✅ 2026-10-11 | | |
+| 20 | Light-mode see-through | Light theme, blurred background: every step of the slider changes the window, from "More solid" (opaque) to "More transparent". | ✅ 2026-10-11 (brightness falls monotonically, 245.7 to ~215) | | |
+| 21 | Dark-mode switch contrast | Dark theme: an off switch is clearly visible on its box. | ✅ 2026-10-11 (track ratio ~1.7:1) | | |
 | 22 | Spanish and English | `ui.language = es`, then `en`, from settings: every window relabels live; tray too. | ✅ es 2026-09-30 | | |
-| 23 | Startup failure | Isolated instance with a folder where the database should be (`mkdir $MAGI_DATA_DIR/magi.db`): "Magi couldn't start" with the error; Show log reveals `magi.log`; Quit and closing both exit. | ✅ 2026-10-05 except Show log | | |
-| 24 | Onboarding setup | `--onboarding`: drag a folder from Explorer/Finder onto the drop zone, it is added (a dropped file is not); every icon draws; ⓘ opens what a feature does; the button reads "Download {size} and start", or "Start" with every feature off; light and dark, English and Spanish: no name cut off, no scrolling in the features column. | | | |
+| 23 | Startup failure | Isolated instance with a folder where the database should be (`mkdir $MAGI_DATA_DIR/magi.db`): "Magi couldn't start" with the error; Show log reveals `magi.log`; Quit and closing both exit. | ✅ 2026-10-05; Show log 2026-10-11 | | |
+| 24 | Onboarding setup | `--onboarding`: drag a folder from Explorer/Finder onto the drop zone, it is added (a dropped file is not); every icon draws; ⓘ opens what a feature does; the button reads "Download {size} and start", or "Start" with every feature off; light and dark, English and Spanish: no name cut off, no scrolling in the features column. | ⚠️ 2026-10-11 all but dropping a folder | | |
 
 ## Hotkey conflicts
 
