@@ -85,6 +85,8 @@ pub fn run(
         .with_assets(AppAssets)
         .run(move |cx| {
         gpui_kit::init(cx);
+        // Menu-bar only on macOS (SPEC.md §6.1); after GPUI's own launch setup.
+        magi_core::platform::hide_dock_icon();
         cx.set_window_appearance(theme::chrome(&ui.theme));
         SearchView::bind_keys(cx);
         onboarding::bind_keys(cx);
@@ -316,6 +318,7 @@ impl Shell {
             Ok((handle, _)) => {
                 // Always: the background can turn see-through while it is open.
                 clear_root_background(handle, cx);
+                cx.activate(true);
                 let _ = handle.update(cx, |_, window, _| window.activate_window());
                 self.settings = Some(handle);
             }
@@ -345,6 +348,7 @@ impl Shell {
             cx.new(|cx| OnboardingView::new(host, live, events, window, cx))
         }) {
             Ok((handle, _)) => {
+                cx.activate(true);
                 let _ = handle.update(cx, |_, window, _| window.activate_window());
                 self.onboarding = Some(handle);
             }
@@ -595,6 +599,10 @@ fn set_search_open(live: &Entity<Live>, open: bool, cx: &mut App) {
 /// closed by the user).
 fn activate(window: Option<AnyWindowHandle>, cx: &mut App) -> bool {
     window.is_some_and(|w| {
+        // An app with no Dock icon (macOS Accessory) is not brought forward by
+        // its window: without this, settings opens behind the other apps.
+        // A no-op on Windows and Linux.
+        cx.activate(true);
         w.update(cx, |_, window, _| window.activate_window())
             .is_ok()
     })

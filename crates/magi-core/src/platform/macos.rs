@@ -36,6 +36,43 @@ pub fn on_battery() -> Option<bool> {
     super::pmset_on_battery(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// The filesystem `path` is on, by `statfs`'s type name (`smbfs`, `apfs`, ...).
+/// A path that cannot be stat'ed is not a network drive: the probe reports it.
+pub fn is_network_drive(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is NUL-terminated and outlives the call; `stat` is a
+    // plain C struct that `statfs` fills on success, and its type name is
+    // NUL-terminated.
+    unsafe {
+        let mut stat: libc::statfs = std::mem::zeroed();
+        if libc::statfs(path.as_ptr(), &mut stat) != 0 {
+            return false;
+        }
+        let name = std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr());
+        super::is_network_fs_type(&name.to_string_lossy())
+    }
+}
+
+/// `Accessory`: no Dock icon and no app menu bar, windows still open and take
+/// focus (`cx.activate`). Must run on the main thread, after GPUI's own
+/// `Regular` (it sets that in `applicationDidFinishLaunching`, which is where
+/// the callback given to `Application::run` is called from).
+pub fn hide_dock_icon() {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    let Some(main) = objc2::MainThreadMarker::new() else {
+        tracing::warn!("not on the main thread; the Dock icon stays");
+        return;
+    };
+    let accepted = NSApplication::sharedApplication(main)
+        .setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    if !accepted {
+        tracing::warn!("macOS refused the Accessory activation policy; the Dock icon stays");
+    }
+}
+
 pub fn lower_current_thread() {
     // SAFETY: only changes the calling thread's QoS class.
     let rc =

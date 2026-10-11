@@ -180,17 +180,38 @@ pub fn is_locked(error: &std::io::Error) -> bool {
 }
 
 /// A root on a network share or mapped network drive, which is polled instead
-/// of watched (SPEC.md §6.2). Only Windows tells them apart here.
+/// of watched (SPEC.md §6.2). Windows and macOS tell them apart here; FSEvents
+/// reports nothing for SMB/NFS/AFP mounts, so a "watched" one would silently
+/// never update.
 pub fn is_network_drive(path: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
         windows::is_network_drive(path)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::is_network_drive(path)
+    }
+    #[cfg(target_os = "linux")]
     {
         let _ = path;
         false
     }
+}
+
+/// macOS `statfs` filesystem type names of network mounts. Pure, so it is
+/// tested on every OS.
+pub fn is_network_fs_type(name: &str) -> bool {
+    matches!(name, "smbfs" | "nfs" | "afpfs" | "webdav")
+}
+
+/// Hides the Dock icon: macOS `Accessory` activation policy, so the app lives
+/// in the menu bar like the tray-only app SPEC.md §6.1 asks for. GPUI starts
+/// every app as `Regular`; call this once its launch has finished, on the
+/// main thread. Nothing elsewhere.
+pub fn hide_dock_icon() {
+    #[cfg(target_os = "macos")]
+    macos::hide_dock_icon();
 }
 
 /// The kernel's inotify watch limit, for `magi-cli doctor`. `None` on
@@ -453,6 +474,17 @@ mod tests {
         assert!(macos_flags_dataless(0x4000_0000 | 0x20));
         // UF_HIDDEN (0x8000) and SF_ARCHIVED (0x10000) are not.
         assert!(!macos_flags_dataless(0x8000 | 0x1_0000));
+    }
+
+    #[test]
+    fn macos_network_mounts_are_polled_and_local_disks_watched() {
+        for network in ["smbfs", "nfs", "afpfs", "webdav"] {
+            assert!(is_network_fs_type(network), "{network}");
+        }
+        // APFS, HFS+, exFAT/FAT (USB sticks) and the disk-image filesystem.
+        for local in ["apfs", "hfs", "exfat", "msdos", "ntfs", ""] {
+            assert!(!is_network_fs_type(local), "{local}");
+        }
     }
 
     #[test]

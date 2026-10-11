@@ -5002,6 +5002,8 @@ dependencies = [
  "ndarray",
  "notify 8.2.0",
  "notify-debouncer-full",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "ort",
  "pdfium-render",
  "quick-xml 0.42.0",

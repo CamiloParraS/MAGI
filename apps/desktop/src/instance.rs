@@ -21,18 +21,25 @@ pub fn socket_name() -> String {
     format!("magi-{user}.sock")
 }
 
-/// Becomes the listener, or finds one already running. When neither works
-/// (e.g. a stale socket file after a crash on macOS) the bind error is
-/// returned and the caller runs without single-instance rather than not at all.
-pub fn claim(name: &str) -> io::Result<Claim> {
-    match ListenerOptions::new()
+fn listen(name: &str, overwrite: bool) -> io::Result<Listener> {
+    ListenerOptions::new()
         .name(name.to_ns_name::<GenericNamespaced>()?)
+        .try_overwrite(overwrite)
         .create_sync()
-    {
+}
+
+/// Becomes the listener, or finds one already running. A name that is taken
+/// but answers nobody is a stale socket file, left by a crash or a kill on
+/// macOS (Unix sockets there are files in `/tmp`): it is replaced, or no later
+/// launch could ever be single-instance or take `--toggle`. When even that
+/// fails the bind error is returned and the caller runs without
+/// single-instance rather than not at all.
+pub fn claim(name: &str) -> io::Result<Claim> {
+    match listen(name, false) {
         Ok(listener) => Ok(Claim::Primary(listener)),
         Err(bind) => match Stream::connect(name.to_ns_name::<GenericNamespaced>()?) {
             Ok(_) => Ok(Claim::Secondary),
-            Err(_) => Err(bind),
+            Err(_) => listen(name, true).map(Claim::Primary).map_err(|_| bind),
         },
     }
 }
@@ -81,5 +88,20 @@ mod tests {
         assert!(matches!(claim(&name).unwrap(), Claim::Secondary));
         forward(&name, "toggle").unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "toggle");
+    }
+
+    /// macOS has no abstract socket namespace: the name is a file in `/tmp`,
+    /// and a process that dies without cleanup leaves it behind. (Not run on
+    /// Linux, whose namespaced sockets vanish with their process.)
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_socket_file_left_by_a_crash_does_not_end_single_instance() {
+        let name = format!("magi-stale-{}.sock", std::process::id());
+        let path = std::path::PathBuf::from("/tmp").join(&name);
+        // std's listener does not unlink on drop: this is the crash.
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        assert!(path.exists());
+        assert!(matches!(claim(&name).unwrap(), Claim::Primary(_)));
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keys Magi adds to the macOS app bundle's Info.plist (SPEC.md §6.1, M7). The
+  packaging tool chosen in M8 (SPEC.md §9 Q9) owns the rest (CFBundleIdentifier,
+  CFBundleExecutable, version, icon) and merges this file into its own.
+
+  The usage strings only show in the system's consent prompt when Magi runs as a
+  bundle; an unbundled `cargo run` binary is attributed to the terminal that
+  started it (docs/permissions.md).
+-->
+<plist version="1.0">
+<dict>
+  <!-- No Dock icon: Magi lives in the menu bar. The same policy is set at
+       runtime (platform::hide_dock_icon) for builds that are not bundled. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Magi reads the files in your Desktop folder so you can search them. It never changes or uploads them.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Magi reads the files in your Documents folder so you can search them. It never changes or uploads them.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Magi reads the files in your Downloads folder so you can search them. It never changes or uploads them.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Magi reads the files on a USB drive or other removable disk you chose, so you can search them. It never changes or uploads them.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>Magi reads the files on a network folder you chose, so you can search them. It never changes or uploads them.</string>
+</dict>
+</plist>
