@@ -11,8 +11,11 @@ use magi_core::features::Feature;
 
 use magi_core::dto::{IndexState, IndexStatus};
 
+use std::f32::consts::TAU;
+use std::time::Duration;
+
 use crate::i18n::Lang;
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
 use crate::tray::status_line;
 
 /// How far a pressed control moves down. GPUI scales only SVGs, so a press is
@@ -112,25 +115,44 @@ pub(crate) fn row() -> Div {
 
 /// What the engine is doing when it is not simply idle or indexing: walking
 /// the folders ("N files found") or paused (and why). One grouped row.
-pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> Div {
+pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> impl IntoElement {
+    // While there is work the icon turns, so a count that holds still for a
+    // while still reads as busy: constant motion, linear, a turn a second.
     let icon = if matches!(status.state, IndexState::Scanning | IndexState::Indexing) {
-        IconName::RefreshCw
+        row_icon(IconName::RefreshCw, p)
+            .with_animation(
+                "status-spin",
+                Animation::new(Duration::from_secs(1)).repeat(),
+                |icon, t| icon.rotate(radians(TAU * t)),
+            )
+            .into_any_element()
     } else {
-        IconName::Clock
+        row_icon(IconName::Clock, p).into_any_element()
     };
     grouped(
         p,
         [row()
-            .child(row_icon(icon, p))
+            .child(icon)
             .text_color(p.mute)
             .child(status_line(status, lang))],
+    )
+    // Settles in as the advanced patterns do, instead of popping in.
+    .relative()
+    .with_animation(
+        "status-in",
+        Animation::new(theme::FADE).with_easing(ease_out_quint()),
+        |el, t| el.opacity(t).top(px(-6. * (1. - t))),
     )
 }
 
 /// [`status_row`] while the folders are being walked or their files read, for
 /// the list where a folder was just added: a big one takes a while before any
 /// file shows up, and silence there reads as an app that does nothing.
-pub(crate) fn scan_row(status: Option<&IndexStatus>, lang: Lang, p: &Palette) -> Option<Div> {
+pub(crate) fn scan_row(
+    status: Option<&IndexStatus>,
+    lang: Lang,
+    p: &Palette,
+) -> Option<impl IntoElement> {
     status
         .filter(|st| matches!(st.state, IndexState::Scanning | IndexState::Indexing))
         .map(|st| status_row(st, lang, p))
