@@ -9,7 +9,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::features::Feature;
 
+use magi_core::dto::{IndexState, IndexStatus};
+
+use crate::i18n::Lang;
 use crate::theme::Palette;
+use crate::tray::status_line;
 
 /// How far a pressed control moves down. GPUI scales only SVGs, so a press is
 /// a push, with the button's own darker background.
@@ -104,6 +108,32 @@ pub(crate) fn row() -> Div {
         .px(px(12.))
         .py(px(6.))
         .min_h(px(44.))
+}
+
+/// What the engine is doing when it is not simply idle or indexing: walking
+/// the folders ("N files found") or paused (and why). One grouped row.
+pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> Div {
+    let icon = if status.state == IndexState::Scanning {
+        IconName::RefreshCw
+    } else {
+        IconName::Clock
+    };
+    grouped(
+        p,
+        [row()
+            .child(row_icon(icon, p))
+            .text_color(p.mute)
+            .child(status_line(status, lang))],
+    )
+}
+
+/// [`status_row`] while the folders are being walked, for the lists where a
+/// folder was just added: a big one takes seconds before any file counts, and
+/// silence there reads as an app that does nothing.
+pub(crate) fn scan_row(status: Option<&IndexStatus>, lang: Lang, p: &Palette) -> Option<Div> {
+    status
+        .filter(|st| st.state == IndexState::Scanning)
+        .map(|st| status_row(st, lang, p))
 }
 
 /// A grouped row's icon, in the accent.
