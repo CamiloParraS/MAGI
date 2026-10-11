@@ -20,7 +20,7 @@ use crate::i18n::Strings;
 use crate::settings::root_state;
 use crate::theme::{self, Palette, Tone};
 use crate::ui::folders::{add_folder_row, drop_zone, folder_name, suggested_folders, suggestions};
-use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon, scan_row};
+use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon};
 
 impl OnboardingView {
     /// FR-10's permission check: each folder's status says whether Magi can
@@ -28,7 +28,6 @@ impl OnboardingView {
     pub(super) fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let accent = p.accent;
         let roots = self.roots(cx).filter(|roots| !roots.is_empty());
-        let live = self.live.read(cx);
         let body = match roots {
             None => drop_zone(s, p, cx.listener(|this, _, _, cx| this.add_folder(cx))),
             // The same grouped list as the features, Add folder its last row.
@@ -72,7 +71,6 @@ impl OnboardingView {
             .flex()
             .flex_col()
             .gap(px(10.))
-            .children(scan_row(live.status.as_ref(), live.lang, p))
             .child(
                 body.drag_over::<ExternalPaths>(move |style, _, _, _| {
                     style.border_color(accent).bg(accent.opacity(0.08))

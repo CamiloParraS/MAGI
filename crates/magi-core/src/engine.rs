@@ -330,6 +330,22 @@ impl EngineHandle {
     /// indexed files are kept), then probes, watches and scans it. The status
     /// returned is the probe's result.
     pub fn add_root(&self, path: &Path) -> Result<RootStatus> {
+        self.begin_scan();
+        let added = self.add_root_inner(path);
+        if added.is_err() {
+            self.inner.status.stats.end_scan();
+        }
+        added
+    }
+
+    /// The status reads `Scanning` from the moment a folder is added: watching
+    /// a big one takes about as long as walking it, with nothing else to show.
+    fn begin_scan(&self) {
+        self.inner.scan.reset_seen();
+        self.inner.status.stats.begin_scan();
+    }
+
+    fn add_root_inner(&self, path: &Path) -> Result<RootStatus> {
         let path = path.to_path_buf();
         // Collapsed roots' indexed files are now this root's.
         let (root, collapsed, counts) = self.write(move |conn| {
@@ -341,9 +357,25 @@ impl EngineHandle {
         for id in collapsed {
             self.unwatch(id);
         }
-        let root = self.watch(root)?;
-        let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
+        self.scan_then_watch(&root);
         Ok(RootStatus::new(root, &counts))
+    }
+
+    /// Scans a root at once and watches it meanwhile: watching a big folder
+    /// takes as long as walking it, and the first files should not wait for
+    /// it. The second scan, once the watcher runs, catches what changed in
+    /// between.
+    /// ponytail: a root removed or switched off during the watch keeps a
+    /// watcher whose events the writer ignores; drop it then if that shows up.
+    fn scan_then_watch(&self, root: &Root) {
+        let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
+        let (engine, root) = (self.clone(), root.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = engine.watch(root.clone()) {
+                tracing::warn!(root = %root.path.display(), error = %e, "could not watch root");
+            }
+            let _ = engine.inner.write_tx.send(WriteJob::ReconcileRoot(root.id));
+        });
     }
 
     /// Stops watching a root and purges everything indexed under it (item 12).
@@ -366,8 +398,8 @@ impl EngineHandle {
         })?;
         if enabled {
             self.inner.scan.switch_on(id);
-            let id = self.watch(root)?.id;
-            let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(id));
+            self.begin_scan();
+            self.scan_then_watch(&root);
         } else {
             self.unwatch(id);
         }

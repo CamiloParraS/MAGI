@@ -56,6 +56,11 @@ impl ScanControl {
             .retain(|id| *id != root_id);
     }
 
+    /// Forgets the last scan's count, for a scan about to start.
+    pub fn reset_seen(&self) {
+        self.seen.store(0, Ordering::Relaxed);
+    }
+
     /// Files found so far by the scan that last started.
     pub fn seen(&self) -> u64 {
         self.seen.load(Ordering::Relaxed)

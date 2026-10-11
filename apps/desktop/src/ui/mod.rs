@@ -113,7 +113,7 @@ pub(crate) fn row() -> Div {
 /// What the engine is doing when it is not simply idle or indexing: walking
 /// the folders ("N files found") or paused (and why). One grouped row.
 pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> Div {
-    let icon = if status.state == IndexState::Scanning {
+    let icon = if matches!(status.state, IndexState::Scanning | IndexState::Indexing) {
         IconName::RefreshCw
     } else {
         IconName::Clock
@@ -127,12 +127,12 @@ pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> Div {
     )
 }
 
-/// [`status_row`] while the folders are being walked, for the lists where a
-/// folder was just added: a big one takes seconds before any file counts, and
-/// silence there reads as an app that does nothing.
+/// [`status_row`] while the folders are being walked or their files read, for
+/// the list where a folder was just added: a big one takes a while before any
+/// file shows up, and silence there reads as an app that does nothing.
 pub(crate) fn scan_row(status: Option<&IndexStatus>, lang: Lang, p: &Palette) -> Option<Div> {
     status
-        .filter(|st| st.state == IndexState::Scanning)
+        .filter(|st| matches!(st.state, IndexState::Scanning | IndexState::Indexing))
         .map(|st| status_row(st, lang, p))
 }
 

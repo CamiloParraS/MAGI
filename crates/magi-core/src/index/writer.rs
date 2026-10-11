@@ -103,6 +103,16 @@ impl Stats {
             .unwrap_or_else(PoisonError::into_inner) = Some(path.to_path_buf());
     }
 
+    /// Reads as scanning from now, before the writer starts the walk: a root
+    /// is watched first, which on a big folder takes as long as the walk.
+    pub(crate) fn begin_scan(&self) {
+        self.scanning.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn end_scan(&self) {
+        self.scanning.store(false, Ordering::SeqCst);
+    }
+
     fn scanning<T>(&self, scan: impl FnOnce() -> T) -> T {
         self.scanning.store(true, Ordering::SeqCst);
         let result = scan();
