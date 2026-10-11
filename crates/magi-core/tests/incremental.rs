@@ -926,6 +926,41 @@ fn roots_are_added_disabled_and_removed_while_running() {
     assert_eq!(engine.status().unwrap().roots.len(), 1);
 }
 
+/// Switching a big folder off while it indexes, then on again, must finish it.
+#[test]
+fn a_folder_switched_off_mid_index_finishes_when_switched_on() {
+    let env = Env::new();
+    for i in 0..1500 {
+        env.write(
+            &format!("note_{i:04}.txt"),
+            &format!("toggle file number {i}"),
+        );
+    }
+    let engine = env.start();
+    let root = engine.status().unwrap().roots[0].id;
+
+    wait_until(Duration::from_secs(60), "indexing to be under way", || {
+        env.count("SELECT COUNT(*) FROM files WHERE state = 'indexed'") >= 100
+    });
+    engine.set_root_enabled(root, false).unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    let settled = env.count("SELECT COUNT(*) FROM files WHERE state = 'indexed'");
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE state = 'indexed'"),
+        settled,
+        "nothing is indexed while the folder is off"
+    );
+    assert_eq!(engine.status().unwrap().queued, 0, "and nothing is queued");
+
+    engine.set_root_enabled(root, true).unwrap();
+    env.wait_drained(1500);
+    assert_eq!(
+        env.count("SELECT COUNT(*) FROM files WHERE state = 'indexed'"),
+        1500
+    );
+}
+
 /// SPEC.md §6.4: a user pause holds new work back, survives a restart, and
 /// resuming indexes what waited.
 #[test]
