@@ -43,7 +43,7 @@ use crate::index::scheduler::{Action, Now, Scheduler};
 use crate::index::writer::{self, SharedOptions, Stats, StatsSnapshot, WriteJob};
 use crate::index::{ModelIds, requeue_missing, requeue_on_model_change};
 use crate::platform::{FsProbe, Os, PermissionProbe, RootAccess, ThreadPriority};
-use crate::watch::reconcile::ScanSummary;
+use crate::watch::reconcile::{Cancel, ScanSummary};
 use crate::watch::watcher::Watchers;
 use crate::watch::{poller, watcher};
 
@@ -75,9 +75,9 @@ impl Engine {
     /// Returns before the first reconciliation walk ends; the status reads
     /// `Scanning` meanwhile and the scheduler starts when the walk is done.
     pub fn start(config: &Config, db_path: &Path, components: Components) -> Result<EngineHandle> {
-        let options: SharedOptions = Arc::new(RwLock::new(Arc::new(
-            IndexRootOptions::from_config(&config.indexing)?,
-        )));
+        let initial = IndexRootOptions::from_config(&config.indexing)?;
+        let cancel = initial.cancel.clone();
+        let options: SharedOptions = Arc::new(RwLock::new(Arc::new(initial)));
         let mut write_conn = db::open(db_path)?;
         files::reset_indexing_to_pending(&write_conn)?;
         requeue_on_model_change(
@@ -153,6 +153,7 @@ impl Engine {
 
         let inner = Arc::new(Inner {
             stop: stop.clone(),
+            cancel,
             options: options.clone(),
             watchers: Mutex::new(Some(watchers)),
             unwatched: unwatched.clone(),
@@ -253,6 +254,8 @@ pub struct EngineHandle {
 
 struct Inner {
     stop: Arc<AtomicBool>,
+    /// Ends a running scan early (quit, or a folder switched off).
+    cancel: Arc<Cancel>,
     options: SharedOptions,
     watchers: Mutex<Option<Watchers>>,
     /// Set while some root is polled instead of watched.
@@ -344,6 +347,7 @@ impl EngineHandle {
 
     /// Stops watching a root and purges everything indexed under it (item 12).
     pub fn remove_root(&self, id: i64) -> Result<()> {
+        self.inner.cancel.switch_off(id);
         self.unwatch(id);
         self.write(move |conn| roots::remove(conn, id))
     }
@@ -351,11 +355,16 @@ impl EngineHandle {
     /// A disabled root keeps its rows but is not watched, indexed or searched;
     /// enabling it watches and scans it again.
     pub fn set_root_enabled(&self, id: i64, enabled: bool) -> Result<()> {
+        // Before the write, which waits behind any scan the writer is running.
+        if !enabled {
+            self.inner.cancel.switch_off(id);
+        }
         let root = self.write(move |conn| {
             roots::set_enabled(conn, id, enabled)?;
             roots::get(conn, id)
         })?;
         if enabled {
+            self.inner.cancel.switch_on(id);
             let id = self.watch(root)?.id;
             let _ = self.inner.write_tx.send(WriteJob::ReconcileRoot(id));
         } else {
@@ -439,7 +448,9 @@ impl EngineHandle {
         &self,
         config: &IndexingConfig,
     ) -> Result<Receiver<Result<ScanSummary>>> {
-        let options = Arc::new(IndexRootOptions::from_config(config)?);
+        let mut options = IndexRootOptions::from_config(config)?;
+        options.cancel = self.inner.cancel.clone();
+        let options = Arc::new(options);
         *self
             .inner
             .options
@@ -479,6 +490,7 @@ impl EngineHandle {
 impl Inner {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.cancel.stop();
         // No new events, and the ticker and status threads stop waiting.
         drop(lock(&self.watchers).take());
         drop(lock(&self.closer).take());

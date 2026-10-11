@@ -810,7 +810,14 @@ pub fn list_errors(conn: &Connection, limit: u32) -> Result<Vec<FileError>> {
 
 /// How many files are in each state.
 pub fn count_states(conn: &Connection) -> Result<std::collections::HashMap<FileState, u64>> {
-    let mut stmt = conn.prepare_cached("SELECT state, COUNT(*) FROM files GROUP BY state")?;
+    // `pending` rows of a root that is off or unreadable wait for nothing the
+    // scheduler will start (see `next_pending`), so they are not queue.
+    let mut stmt = conn.prepare_cached(concat!(
+        "SELECT state, COUNT(*) FROM files
+         WHERE state <> 'pending' OR root_id IN (SELECT id FROM roots WHERE ",
+        indexable_sql!(),
+        ") GROUP BY state"
+    ))?;
     let counts = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
         .collect::<std::result::Result<_, _>>()?;
@@ -1420,6 +1427,19 @@ mod tests {
             assert_eq!(state_of(&conn, id).unwrap(), Some(state));
             assert_eq!(count_states(&conn).unwrap().get(&state), Some(&1));
         }
+    }
+
+    #[test]
+    fn files_waiting_in_a_switched_off_root_are_not_counted_as_queued() {
+        let (_dir, mut conn) = open_test_db();
+        let id = add_file(&mut conn, 1, "a.txt", 1, "x");
+        mark_pending(&conn, id).unwrap();
+        assert_eq!(
+            count_states(&conn).unwrap().get(&FileState::Pending),
+            Some(&1)
+        );
+        crate::db::roots::set_enabled(&conn, 1, false).unwrap();
+        assert_eq!(count_states(&conn).unwrap().get(&FileState::Pending), None);
     }
 
     #[test]

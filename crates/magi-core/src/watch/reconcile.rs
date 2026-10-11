@@ -3,6 +3,8 @@
 //! connection; the runtime and the watcher call them.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
 
@@ -22,6 +24,48 @@ pub fn next_scan_id(conn: &Connection) -> Result<i64> {
         + 1;
     meta::set(conn, "last_scan_id", &id.to_string())?;
     Ok(id)
+}
+
+/// Why a running scan should stop early: the engine is shutting down, or a
+/// root was switched off or removed. A stopped root keeps its rows as they
+/// were; nothing it did not get to see is deleted.
+#[derive(Default)]
+pub struct Cancel {
+    stop: AtomicBool,
+    off: Mutex<Vec<i64>>,
+}
+
+impl Cancel {
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    pub fn switch_off(&self, root_id: i64) {
+        let mut off = self.off.lock().unwrap_or_else(|p| p.into_inner());
+        if !off.contains(&root_id) {
+            off.push(root_id);
+        }
+    }
+
+    pub fn switch_on(&self, root_id: i64) {
+        self.off
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|id| *id != root_id);
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    fn root_stopped(&self, root_id: i64) -> bool {
+        self.stopped()
+            || self
+                .off
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains(&root_id)
+    }
 }
 
 enum EntryOutcome {
@@ -242,10 +286,19 @@ pub fn reconcile_root(
     options: &IndexRootOptions,
     scan_id: i64,
 ) -> Result<(ScanSummary, Vec<Unseen>)> {
-    let entries = discovery::walk(root_path, &options.walk_options())?;
+    let stopped = || options.cancel.root_stopped(root_id);
+    let Some(entries) =
+        discovery::walk_until(root_path, root_path, &options.walk_options(), &stopped)?
+    else {
+        return Ok(Default::default());
+    };
     let tx = conn.transaction()?;
     let mut summary = ScanSummary::default();
-    for entry in &entries {
+    for (n, entry) in entries.iter().enumerate() {
+        // Dropping `tx` rolls the half-done scan back.
+        if n % 256 == 0 && stopped() {
+            return Ok(Default::default());
+        }
         summary.count(reconcile_entry(&tx, root_id, root_path, entry, scan_id)?);
     }
     tx.execute(
@@ -323,6 +376,9 @@ pub fn reconcile_roots(
         .into_iter()
         .filter(|r| r.enabled && ids.contains(&r.id));
     for root in scanned {
+        if options.cancel.stopped() {
+            break;
+        }
         let access = FsProbe.probe(&root.path);
         roots::set_access(conn, root.id, &access)?;
         if access != RootAccess::Ok {
@@ -331,6 +387,10 @@ pub fn reconcile_roots(
         let (found, gone) = reconcile_root(conn, root.id, &root.path, options, scan_id)?;
         summary += found;
         unseen.extend(gone);
+    }
+    // A scan that was cut short has not seen everything: delete nothing.
+    if options.cancel.stopped() {
+        return Ok(summary);
     }
     summary.removed = remove_unseen(conn, unseen)?;
     Ok(summary)
@@ -438,6 +498,51 @@ mod tests {
         fn hits(&self, query: &str) -> usize {
             search_fts(&self.conn, query, 10).unwrap().len()
         }
+    }
+
+    /// Quitting mid-scan must not read as "everything I did not reach is gone".
+    #[test]
+    fn a_stopped_scan_changes_and_deletes_nothing() {
+        let mut s = Setup::new();
+        s.write("old.txt", "old");
+        s.run();
+        fs::remove_file(s.root_dir.path().join("old.txt")).unwrap();
+        s.write("new.txt", "new");
+
+        s.options.cancel.stop();
+        let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
+
+        assert_eq!(summary, ScanSummary::default());
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE file_name = 'old.txt'"),
+            1
+        );
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE file_name = 'new.txt'"),
+            0
+        );
+    }
+
+    /// Switching a folder off cancels its scan, not the scan of the others.
+    #[test]
+    fn a_switched_off_root_is_skipped_and_the_others_are_scanned() {
+        let mut s = Setup::new();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = roots::add(&s.conn, other_dir.path()).unwrap();
+        s.write("mine.txt", "mine");
+        fs::write(other_dir.path().join("theirs.txt"), "theirs").unwrap();
+
+        s.options.cancel.switch_off(s.root.id);
+        let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id, other.id]).unwrap();
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(
+            s.count("SELECT COUNT(*) FROM files WHERE file_name = 'mine.txt'"),
+            0
+        );
+
+        s.options.cancel.switch_on(s.root.id);
+        let summary = reconcile_roots(&mut s.conn, &s.options, &[s.root.id]).unwrap();
+        assert_eq!(summary.inserted, 1);
     }
 
     /// Adding or re-enabling a root walks that root only; a change in another

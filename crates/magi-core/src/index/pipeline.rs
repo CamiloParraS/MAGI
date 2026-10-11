@@ -78,6 +78,9 @@ pub struct IndexRootOptions {
     pub max_image_megapixels: u32,
     /// Kinds that get content extraction; others are indexed by filename only.
     pub file_types: Vec<Kind>,
+    /// Lets a running scan stop early; shared by every options value the
+    /// engine swaps in.
+    pub cancel: std::sync::Arc<crate::watch::reconcile::Cancel>,
 }
 
 impl IndexRootOptions {
@@ -101,6 +104,7 @@ impl IndexRootOptions {
             max_file_size_mb: config.max_file_size_mb,
             max_image_megapixels: config.max_image_megapixels,
             file_types: config.file_types.clone(),
+            cancel: Default::default(),
         })
     }
 }
@@ -817,6 +821,7 @@ mod tests {
             follow_symlinks: false,
             max_file_size_mb: 1,
             max_image_megapixels: 64,
+            cancel: Default::default(),
             file_types: vec![Kind::Text, Kind::Code, Kind::Pdf, Kind::Office, Kind::Image],
         }
     }

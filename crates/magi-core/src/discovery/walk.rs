@@ -103,6 +103,16 @@ pub fn is_wanted(root: &Path, path: &Path, options: &WalkOptions) -> bool {
 /// [`walk`] restricted to the folder `start` inside `root`. Exclusion globs are
 /// still matched relative to `root`.
 pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Vec<WalkEntry>> {
+    Ok(walk_until(root, start, options, &|| false)?.unwrap_or_default())
+}
+
+/// [`walk_under`] that gives up with `None` as soon as `cancelled` says so.
+pub fn walk_until(
+    root: &Path,
+    start: &Path,
+    options: &WalkOptions,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<Vec<WalkEntry>>> {
     // Paths under an already-yielded opaque bundle are suppressed as the
     // walk continues past them (ignore::WalkBuilder has no "yield but
     // don't descend" primitive, so we yield the bundle root once and then
@@ -144,6 +154,9 @@ pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Ve
 
     let mut entries = Vec::new();
     for result in walker {
+        if cancelled() {
+            return Ok(None);
+        }
         let entry = match result {
             Ok(e) => e,
             Err(_) => continue,
@@ -168,7 +181,7 @@ pub fn walk_under(root: &Path, start: &Path, options: &WalkOptions) -> Result<Ve
             cloud_only: Os.is_cloud_only(&meta),
         });
     }
-    Ok(entries)
+    Ok(Some(entries))
 }
 
 #[cfg(test)]
