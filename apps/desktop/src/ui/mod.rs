@@ -15,6 +15,7 @@ use std::f32::consts::TAU;
 use std::time::Duration;
 
 use crate::i18n::Lang;
+use crate::live::Live;
 use crate::theme::{self, Palette};
 use crate::tray::status_line;
 
@@ -116,16 +117,43 @@ pub(crate) fn row() -> Div {
 /// What the engine is doing when it is not simply idle or indexing: walking
 /// the folders ("N files found") or paused (and why). One grouped row.
 pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> impl IntoElement {
-    // While there is work the icon turns, so a count that holds still for a
-    // while still reads as busy: constant motion, linear, a turn a second.
-    let icon = if matches!(status.state, IndexState::Scanning | IndexState::Indexing) {
-        row_icon(IconName::RefreshCw, p)
-            .with_animation(
-                "status-spin",
-                Animation::new(Duration::from_secs(1)).repeat(),
-                |icon, t| icon.rotate(radians(TAU * t)),
+    status_content(status, lang, p, true)
+        // Settles in as the advanced patterns do, instead of popping in.
+        .relative()
+        .with_animation(
+            "status-in",
+            Animation::new(theme::FADE).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).top(px(-6. * (1. - t))),
+        )
+}
+
+/// How long the busy icon turns, and how many turns, when the row appears or
+/// the work changes (walking to reading): a flick that winds down says "on
+/// it" without a spinner to stare at through an hour of indexing.
+const SPIN: Duration = Duration::from_millis(2400);
+const SPIN_TURNS: f32 = 2.;
+
+/// How long a scan row takes to leave once the work is done.
+pub(crate) const SCAN_EXIT: Duration = Duration::from_millis(200);
+
+/// Walking the folders or reading their files.
+pub(crate) fn busy(status: &IndexStatus) -> bool {
+    matches!(status.state, IndexState::Scanning | IndexState::Indexing)
+}
+
+fn status_content(status: &IndexStatus, lang: Lang, p: &Palette, spin: bool) -> Div {
+    let icon = if busy(status) {
+        let icon = row_icon(IconName::RefreshCw, p);
+        if spin {
+            icon.with_animation(
+                ("status-spin", status.state as u64),
+                Animation::new(SPIN).with_easing(ease_out_quint()),
+                |icon, t| icon.rotate(radians(TAU * SPIN_TURNS * t)),
             )
             .into_any_element()
+        } else {
+            icon.into_any_element()
+        }
     } else {
         row_icon(IconName::Clock, p).into_any_element()
     };
@@ -136,26 +164,29 @@ pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> impl 
             .text_color(p.mute)
             .child(status_line(status, lang))],
     )
-    // Settles in as the advanced patterns do, instead of popping in.
-    .relative()
-    .with_animation(
-        "status-in",
-        Animation::new(theme::FADE).with_easing(ease_out_quint()),
-        |el, t| el.opacity(t).top(px(-6. * (1. - t))),
-    )
 }
 
 /// [`status_row`] while the folders are being walked or their files read, for
 /// the list where a folder was just added: a big one takes a while before any
-/// file shows up, and silence there reads as an app that does nothing.
-pub(crate) fn scan_row(
-    status: Option<&IndexStatus>,
-    lang: Lang,
-    p: &Palette,
-) -> Option<impl IntoElement> {
-    status
-        .filter(|st| matches!(st.state, IndexState::Scanning | IndexState::Indexing))
-        .map(|st| status_row(st, lang, p))
+/// file shows up, and silence there reads as an app that does nothing. Once
+/// the work is done it fades and folds away over [`SCAN_EXIT`], faster than it
+/// came.
+pub(crate) fn scan_row(live: &Live, p: &Palette) -> Option<AnyElement> {
+    if let Some(status) = live.status.as_ref().filter(|st| busy(st)) {
+        return Some(status_row(status, live.lang, p).into_any_element());
+    }
+    live.scan_left.as_ref().map(|status| {
+        status_content(status, live.lang, p, false)
+            .overflow_hidden()
+            .with_animation(
+                "status-out",
+                Animation::new(SCAN_EXIT).with_easing(ease_out_quint()),
+                // ponytail: folds from a fixed height a little over one row;
+                // measure the row if its text ever wraps.
+                |el, t| el.opacity(1. - t).max_h(px(48. * (1. - t))),
+            )
+            .into_any_element()
+    })
 }
 
 /// A grouped row's icon, in the accent.

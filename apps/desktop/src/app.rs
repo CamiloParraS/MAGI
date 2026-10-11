@@ -18,6 +18,7 @@ use crate::search::view::{self, Opening, SearchView};
 use crate::settings::view::{self as settings, SettingsView};
 use crate::theme;
 use crate::tray::{Tray, TrayAction};
+use crate::ui::SCAN_EXIT;
 
 pub enum AppEvent {
     /// A plain launch: onboarding until it is done (FR-10), else search,
@@ -173,10 +174,22 @@ impl Shell {
                 if let Some(tray) = &self.tray {
                     tray.show_status(&status);
                 }
-                self.live.update(cx, |live, cx| {
-                    live.status = Some(status);
+                let ended = self.live.update(cx, |live, cx| {
                     cx.notify();
+                    live.set_status(status)
                 });
+                // The scan row has left; stop drawing it.
+                if ended {
+                    let live = self.live.clone();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(SCAN_EXIT).await;
+                        live.update(cx, |live, cx| {
+                            live.scan_left = None;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
             }
             AppEvent::Host(HostEvent::Features(features)) => {
                 self.live.update(cx, |live, cx| {

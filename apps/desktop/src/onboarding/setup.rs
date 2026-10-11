@@ -67,14 +67,13 @@ impl OnboardingView {
         };
         let offered = suggestions(&self.user_folders, roots.map_or(&[][..], |r| &r[..]));
         let chips = suggested_folders(offered, s, p, cx, Self::add_folders);
-        let live = self.live.read(cx);
         div()
             .flex()
             .flex_col()
             .gap(px(10.))
             // A just-added folder says it is being walked and read: silence
             // here reads as an app that did nothing.
-            .children(scan_row(live.status.as_ref(), live.lang, p))
+            .children(scan_row(self.live.read(cx), p))
             .child(
                 body.drag_over::<ExternalPaths>(move |style, _, _, _| {
                     style.border_color(accent).bg(accent.opacity(0.08))

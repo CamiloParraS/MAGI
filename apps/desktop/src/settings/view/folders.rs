@@ -102,9 +102,7 @@ impl SettingsView {
         div()
             .child(subheading(s.searched_folders, p))
             .child(note(p).mt(px(2.)).mb(px(8.)).child(s.folders_note))
-            .children(
-                scan_row(live.status.as_ref(), live.lang, p).map(|row| div().mb(px(8.)).child(row)),
-            )
+            .children(scan_row(live, p).map(|row| div().mb(px(8.)).child(row)))
             // Folders dropped from the file manager, as in onboarding.
             .child(
                 body.drag_over::<ExternalPaths>(move |style, _, _, _| {
