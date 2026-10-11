@@ -102,7 +102,7 @@ pub fn backdrop(mode: TransparencyMode, intensity: f32, support: BackdropSupport
         TransparencyMode::Always => true,
         TransparencyMode::MatchSystem => !support.reduce_transparency,
     };
-    if wanted && support.mica {
+    if wanted && support.blur {
         Backdrop::Blurred {
             tint_alpha: intensity,
         }
@@ -363,7 +363,7 @@ mod tests {
     }
 
     const MICA: BackdropSupport = BackdropSupport {
-        mica: true,
+        blur: true,
         reduce_transparency: false,
     };
 

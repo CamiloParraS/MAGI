@@ -145,7 +145,7 @@ pub fn backdrop_support() -> super::BackdropSupport {
         "EnableTransparency",
     );
     super::BackdropSupport {
-        mica: super::mica_supported_on_build(build),
+        blur: super::mica_supported_on_build(build),
         reduce_transparency: transparency == Some(0),
     }
 }

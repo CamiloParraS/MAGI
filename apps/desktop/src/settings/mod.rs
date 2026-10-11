@@ -644,7 +644,7 @@ mod tests {
     fn the_amount_is_adjustable_only_when_see_through() {
         use TransparencyMode::*;
         let blur = BackdropSupport {
-            mica: true,
+            blur: true,
             reduce_transparency: false,
         };
         assert!(see_through_adjustable(Always, blur));

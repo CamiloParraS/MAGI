@@ -397,8 +397,10 @@ pub fn onnxruntime_library_filename() -> &'static str {
 /// What the OS offers the search window's background (ADR-0011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BackdropSupport {
-    /// Windows 11 22H2+: GPUI sets `DWMWA_SYSTEMBACKDROP_TYPE`, which older builds ignore.
-    pub mica: bool,
+    /// GPUI's `Blurred` background really blurs: Mica on Windows 11 22H2+
+    /// (`DWMWA_SYSTEMBACKDROP_TYPE`, which older builds ignore), an
+    /// `NSVisualEffectView` on macOS.
+    pub blur: bool,
     /// The user turned transparency effects off in the OS.
     pub reduce_transparency: bool,
 }
@@ -408,13 +410,21 @@ pub fn mica_supported_on_build(build: u32) -> bool {
     build >= 22621
 }
 
-/// This machine's [`BackdropSupport`]. Only Windows offers Mica for now; macOS
-/// vibrancy is decided in M6 Plan 4 (ADR-0011). `MAGI_BACKDROP=blurred`
-/// forces the blur (SPEC.md §4.5), for trying it where it is off.
+/// This machine's [`BackdropSupport`]: Windows 11 22H2+ and macOS blur, Linux
+/// doesn't. `MAGI_BACKDROP=blurred` forces the blur (SPEC.md §4.5), for
+/// trying it where it is off.
 pub fn backdrop_support() -> BackdropSupport {
     #[cfg(target_os = "windows")]
     let detected = windows::backdrop_support();
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    let detected = BackdropSupport {
+        blur: true,
+        reduce_transparency: read_setting(
+            "defaults",
+            &["read", "com.apple.universalaccess", "reduceTransparency"],
+        ) == Some(true),
+    };
+    #[cfg(target_os = "linux")]
     let detected = BackdropSupport::default();
     backdrop_override(std::env::var("MAGI_BACKDROP").ok().as_deref(), detected)
 }
@@ -425,7 +435,7 @@ pub fn backdrop_support() -> BackdropSupport {
 fn backdrop_override(var: Option<&str>, detected: BackdropSupport) -> BackdropSupport {
     match var {
         Some("blurred") => BackdropSupport {
-            mica: true,
+            blur: true,
             reduce_transparency: false,
         },
         _ => detected,
@@ -575,11 +585,11 @@ mod tests {
     #[test]
     fn magi_backdrop_blurred_forces_the_blur_anywhere() {
         let solid = BackdropSupport {
-            mica: false,
+            blur: false,
             reduce_transparency: true,
         };
         let forced = BackdropSupport {
-            mica: true,
+            blur: true,
             reduce_transparency: false,
         };
         assert_eq!(backdrop_override(Some("blurred"), solid), forced);

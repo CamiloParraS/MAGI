@@ -78,7 +78,7 @@ All windows (search, settings, onboarding) are GPUI; there is no webview.
     samples only the wallpaper, and on a dark theme reads as solid grey —
     while Blurred shows the windows behind; see `docs/progress.md`)
   - Windows 10: **solid**
-  - macOS: Blurred, if it proves to be real vibrancy, otherwise solid
+  - macOS: Blurred (decided 2026-10-11: gpui-pre 0.3.7 puts an `NSVisualEffectView` behind the window, which is real vibrancy, though not macOS 26 Liquid Glass; reduce transparency is read from `com.apple.universalaccess`). How it looks is still to be checked on a real Mac.
   - Linux: solid
 
   `transparency_intensity` stays only if it visibly changes something on a GPUI backdrop; otherwise it is removed from config and settings.
