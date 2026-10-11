@@ -2542,3 +2542,24 @@ Linux GNOME without AppIndicator). ☐
 - [ ] `just eval` run and recorded
 
 Signed off by: ______ Date: ______
+
+## M7 prep: macOS fixes made without a Mac (2026-10-11)
+
+Plan: `docs/m7-plan.md`. Nothing here was run on macOS; the new macOS functions
+type-check against `aarch64-apple-darwin` in an isolated crate with the same
+dependencies, everything else was built and tested on Windows.
+
+- `apps/desktop/Info.plist`: the five usage strings (SPEC §6.1), `LSUIElement`, minimum macOS 13. Merged by the M8 packager.
+- `platform::hide_dock_icon` (Accessory activation policy, after GPUI's own `Regular`), called at startup; settings and onboarding call `cx.activate(true)`. New macOS-only deps `objc2` and `objc2-app-kit`, both already in the tree through GPUI.
+- `instance::claim` replaces a socket file nobody answers on (the macOS CI log shows `Address already in use` on a first launch). Test is macOS-only.
+- `platform::is_network_drive` on macOS (`statfs` type name: smbfs, nfs, afpfs, webdav), so those roots are polled like on Windows. `is_network_fs_type` tested.
+- Open for a Mac: everything in `docs/m7-plan.md` "Known risks".
+
+## M6 carry-overs worked without another device (2026-10-11)
+
+- **`Engine::start` no longer blocks for the startup walk.** It returns once the writer runs; status reads `Scanning` meanwhile and the scheduler waits for the scan, so nothing is extracted before moves are matched. `tests/incremental.rs::state_of` now waits for the file to be listed. Workspace tests pass (`MAGI_FAKE_EMBEDDER=1`). The "slow quit during the scan" part is not re-measured: the writer still finishes its scan before it joins.
+- **A second launch that cannot reach the running Magi** now logs a warning and runs without single-instance, instead of exiting with no window (`apps/desktop/src/lib.rs`). No automated test; needs a hung first instance to exercise.
+- **`just eval`, real models, Windows (baseline):** hybrid recall@5 0.982, recall@10 0.982, MRR 0.881 (164 queries). Misses: two `cross` text queries and "a Hot Wheels package".
+- **Minimum text similarity: tried and rejected.** A cosine floor on `vec_text` hits (multilingual-e5-small), vector-only recall@10: none 0.915, 0.75 0.915, 0.80 0.896, 0.82 0.817, 0.84 0.652, 0.86 0.506; text hits returned 16,400 → 16,067 → 6,617 → 2,642 → 561 → 165. But hybrid got worse at every floor tried (0.80: recall@5 0.957, MRR 0.852; 0.78: recall@5 0.963, MRR 0.863, against 0.982 / 0.881), because image queries lean on loosely matching filename chunks. Reverted. The eval measures recall, not the filler it was meant to remove, so a floor needs a precision measure (judged irrelevant results per query) before it can be tuned. Still open.
+- **Switching a folder off (or removing it, or quitting) now stops a running scan** (`Cancel` in `watch/reconcile.rs`, checked per walked entry and every 256 rows). A stopped root rolls back and deletes nothing; other roots still scan. Before, the toggle queued behind the scan on the writer, and the status kept counting the switched-off folder's `pending` files as queue, so indexing looked unstopped. Owner report 2026-10-11: toggling a large folder off did not stop its indexing; the quit took 4 s. Re-check both in `just dev`.
+- **Pause reason and scan progress in the status** (2026-10-11). `IndexStatus` gains `paused_for` (`user`, `low_memory`, `battery`) and `scanned` (files found by the scan under way). Tray and Settings › Index show "Paused: low memory" / "Paused: on battery" / "Scanning folders… N files found". The scheduler also lets go of waiting files of a root that was switched off (they used to keep starting). Every scan logs `scan finished` with found / inserted / changed / removed / elapsed, to find out how long a big folder's walk blocks the writer. Not reproduced: after switching a big folder off and on, the waiting count returned but nothing indexed; the 1,500-file test passes, so look at the `scan finished` elapsed time in `magi.log` first.
