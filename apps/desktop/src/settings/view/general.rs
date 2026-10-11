@@ -61,6 +61,11 @@ impl SettingsView {
         let s = live.lang.strings();
         let kbd = |spec: &str| Keystroke::parse(&hotkey_keystroke(spec)).ok().map(Kbd::new);
         let recording = self.recording;
+        let (problem, problem_note) = if magi_core::platform::is_wayland() {
+            (s.shortcut_wayland, s.shortcut_wayland_note)
+        } else {
+            (s.shortcut_taken, s.shortcut_taken_note)
+        };
         let conflict = live.hotkey_conflict.as_deref().map(|taken| {
             card(p)
                 .border_color(p.warn)
@@ -73,8 +78,8 @@ impl SettingsView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(div().text_color(p.warn).child(s.shortcut_taken))
-                        .child(note(p).child(s.shortcut_taken_note)),
+                        .child(div().text_color(p.warn).child(problem))
+                        .child(note(p).child(problem_note)),
                 )
                 .children(kbd(taken))
         });

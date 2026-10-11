@@ -282,6 +282,19 @@ fn macos_consent_folder(path: &Path, home: Option<&Path>) -> bool {
     in_home || path.starts_with("/Volumes")
 }
 
+/// A Wayland session, where apps may not get a global shortcut; the user
+/// binds `magi --toggle` in the desktop instead (SPEC.md §6.3).
+pub fn is_wayland() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// The kernel's inotify watch limit, for `magi-cli doctor`. `None` on
 /// platforms without inotify.
 pub fn inotify_watch_limit() -> Option<u64> {

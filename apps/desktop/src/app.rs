@@ -102,6 +102,11 @@ pub fn run(
         .inspect_err(|error| tracing::warn!(%error, "no hotkey; `magi --toggle` still works"))
         .ok();
         let mut live = Live::new(Lang::current(ui.language), ui.theme.clone());
+        // Wayland may refuse the hotkey manager outright; settings then says
+        // to bind `magi --toggle` in the desktop (SPEC.md §6.3).
+        if hotkey.is_none() && magi_core::platform::is_wayland() {
+            live.hotkey_conflict = Some(ui.hotkey.clone());
+        }
         if let Some(Err(error)) = hotkey.as_mut().map(|h| h.set(&ui.hotkey)) {
             tracing::warn!(%error, hotkey = %ui.hotkey, "hotkey not registered; `magi --toggle` still works");
             // Settings asks for another shortcut (SPEC.md §6.2).

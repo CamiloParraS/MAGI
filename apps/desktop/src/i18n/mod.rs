@@ -110,6 +110,9 @@ pub struct Strings {
     pub guide_watch_limit: &'static str,
     /// The button that opens the OS's privacy settings page.
     pub open_system_settings: &'static str,
+    /// Under Wayland, in place of `shortcut_taken` and its note.
+    pub shortcut_wayland: &'static str,
+    pub shortcut_wayland_note: &'static str,
     /// Before Settings' Add folders button, read as one sentence with it.
     /// `{path}` is the folder.
     pub root_not_found: &'static str,

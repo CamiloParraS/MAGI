@@ -92,6 +92,8 @@ pub const STRINGS: Strings = Strings {
     guide_mac_full_disk: "macOS hasn't allowed Magi to read this folder. Allow Magi in Privacy & Security › Full Disk Access, then restart Magi.",
     guide_watch_limit: "Linux can't watch more folders (limit {n}), so this one is checked now and then. Raise fs.inotify.max_user_watches to watch it live.",
     open_system_settings: "Open System Settings",
+    shortcut_wayland: "This desktop doesn't let apps set a global shortcut",
+    shortcut_wayland_note: "Add one in your desktop's keyboard settings that runs: magi --toggle",
     root_not_found: "{path} doesn't exist.",
     root_exists: "{path} is already in the list.",
     root_nested: "{path} is already searched as part of {other}.",

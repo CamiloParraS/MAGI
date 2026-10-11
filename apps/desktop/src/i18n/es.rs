@@ -92,6 +92,8 @@ pub const STRINGS: Strings = Strings {
     guide_mac_full_disk: "macOS no le ha dado permiso a Magi para leer esta carpeta. Permite a Magi en Privacidad y seguridad › Acceso total al disco y luego reinicia Magi.",
     guide_watch_limit: "Linux no puede seguir más carpetas (límite {n}), así que esta se revisa cada cierto tiempo. Aumenta fs.inotify.max_user_watches para seguirla al momento.",
     open_system_settings: "Abrir Ajustes del Sistema",
+    shortcut_wayland: "Este escritorio no deja que las apps usen un atajo global",
+    shortcut_wayland_note: "Agrega uno en la configuración de teclado de tu escritorio que ejecute: magi --toggle",
     root_not_found: "{path} no existe.",
     root_exists: "{path} ya está en la lista.",
     root_nested: "{path} ya se busca como parte de {other}.",
