@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="1024" height="1024">
+  <title>magi mark, small-size cut (16-24 px): split rim only</title>
+  <g fill="none" stroke="#000" stroke-width="6" stroke-linecap="round">
+    <path d="M29.68 5.17A22 22 0 0 1 47.25 35.59"/>
+    <path d="M44.57 40.24A22 22 0 0 1 9.43 40.24" stroke-opacity=".6"/>
+    <path d="M6.75 35.59A22 22 0 0 1 24.32 5.17" stroke-opacity=".3"/>
+  </g>
+  <path d="M43.5 43.5 57 57" stroke="#000" stroke-width="8" stroke-linecap="round"/>
+</svg>

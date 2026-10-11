@@ -83,6 +83,8 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "n
 ndarray = "0.17"
 # Desktop UI (ADR-0011): gpui-component 0.7 plus its pinned GPUI (gpui-pre =0.3.7) in one crate.
 gpui-kit = "0.7"
+# Embeds the app icon in the Windows exe (build script only). Already in the tree as a GPUI build dependency.
+embed-resource = "3.0.11"
 # Tray icon and menu; GPUI has none (ADR-0011). Runs on GPUI's main thread.
 tray-icon = "0.25.1"
 # System-wide hotkey; GPUI has none (ADR-0011).

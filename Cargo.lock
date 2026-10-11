@@ -5042,6 +5042,7 @@ dependencies = [
  "async-channel",
  "auto-launch",
  "chrono",
+ "embed-resource",
  "global-hotkey",
  "gpui-kit",
  "icu_calendar",

@@ -108,7 +108,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(!TRAY_CLICK_OPENS_APP)
-            .with_icon(placeholder_icon()?)
+            .with_icon(brand_icon()?)
             .build()
             .map_err(|e| e.to_string())?;
         let mut tray = Self {
@@ -169,18 +169,21 @@ impl Tray {
     pub fn show_status(&self, status: &IndexStatus) {
         let s = self.lang.strings();
         self.status.set_text(status_line(status, self.lang));
-        self.pause.set_text(if status.state == IndexState::Paused {
-            s.tray_resume
-        } else {
-            s.tray_pause
-        });
+        self.pause
+            .set_text(if status.paused_for == Some(PauseReason::User) {
+                s.tray_resume
+            } else {
+                s.tray_pause
+            });
     }
 }
 
-/// ponytail: a flat 32×32 square until M8 ships the real icon set.
-fn placeholder_icon() -> Result<Icon, String> {
-    let rgba = [0x3a, 0x6e, 0xd8, 0xff].repeat(32 * 32);
-    Icon::from_rgba(rgba, 32, 32).map_err(|e| e.to_string())
+/// The magi mark (J), 32×32 RGBA in brand blue: readable on light and dark trays.
+/// ponytail: one size, the OS scales it; add the small-size cut if 16 px looks soft.
+const TRAY_RGBA: &[u8] = include_bytes!("../assets/brand/tray-32.rgba");
+
+fn brand_icon() -> Result<Icon, String> {
+    Icon::from_rgba(TRAY_RGBA.to_vec(), 32, 32).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -197,6 +200,17 @@ mod tests {
             current_file: None,
             roots: vec![],
         }
+    }
+
+    #[test]
+    fn the_tray_icon_is_the_magi_mark_not_a_flat_square() {
+        let alpha = TRAY_RGBA.iter().skip(3).step_by(4);
+        assert!(
+            alpha.clone().any(|&a| a == 0),
+            "mark has transparent corners"
+        );
+        assert!(alpha.clone().any(|&a| a == 255), "mark has solid pixels");
+        assert!(brand_icon().is_ok());
     }
 
     #[test]

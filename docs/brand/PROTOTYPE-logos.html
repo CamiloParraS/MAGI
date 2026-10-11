@@ -24,6 +24,12 @@
          transform: scaleX(.82); transform-origin: left; border-block: 1px solid var(--mute); padding: 2px 0; font-size: 34px; line-height: 1; }
   .eva small { display: block; font: 600 8px ui-monospace, Consolas, monospace; letter-spacing: .3em; color: var(--accent); }
   svg { display: block; overflow: visible; }
+  /* three-hue palette for the symbol redraws (P-T): sky / blue / purple, same family as the icon gradient */
+  :root { --c1: #4CC2FF; --c2: #5B8CFF; --c3: #B07CFF; }
+  .light, .side-l { --c1: #0A9BE0; --c2: #0A64D8; --c3: #7A35C8; }
+  .on-accent-d { --c1: #0E1013; --c2: #1D3F9E; --c3: #4B1F85; }
+  .on-accent-l { --c1: #fff; --c2: #CFE0FF; --c3: #E2CFFF; }
+  .mono { --c1: var(--ink); --c2: var(--ink); --c3: var(--ink); }
 </style>
 <h1>magi — logo prototypes</h1>
 <div class="sub">Each concept: app icon (dark tile / accent tile), bare mark on both panels, mono (tray), 32 &amp; 16 px, and a lockup. Colors are the app tokens.</div>
@@ -139,6 +145,125 @@
     <text x="32" y="34.2" text-anchor="middle" textLength="18" lengthAdjust="spacingAndGlyphs" font-family="'Arial Black','Segoe UI Black',Arial,sans-serif" font-weight="900" font-size="6.6" fill="var(--ink)">MAGI</text>
   </symbol>
 
+  <!-- J: magnifier whose lens is split in 3 wedges (Melchior/Balthasar/Casper = keyword + text + image) -->
+  <symbol id="J" viewBox="0 0 64 64">
+    <path d="M27 27V8.5A18.5 18.5 0 0 1 43.02 36.25Z" fill="var(--accent)"/>
+    <path d="M27 27 43.02 36.25A18.5 18.5 0 0 1 10.98 36.25Z" fill="var(--accent)" fill-opacity=".6"/>
+    <path d="M27 27 10.98 36.25A18.5 18.5 0 0 1 27 8.5Z" fill="var(--accent)" fill-opacity=".3"/>
+    <path d="M27 27V8M27 27 43.4 36.5M27 27 10.6 36.5" stroke="var(--bg)" stroke-width="2.4" fill="none"/>
+    <circle cx="27" cy="27" r="22" fill="none" stroke="var(--ink)" stroke-width="3.6"/>
+    <path d="M43.5 43.5 57 57" stroke="var(--ink)" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- K: J with a hexagonal lens and hard-edged wedges (EVA warning-hex) -->
+  <symbol id="K" viewBox="0 0 64 64">
+    <path d="M27 27V9L42.59 18V36Z" fill="var(--accent)"/>
+    <path d="M27 27 42.59 36 27 45 11.41 36Z" fill="var(--accent)" fill-opacity=".6"/>
+    <path d="M27 27 11.41 36V18L27 9Z" fill="var(--accent)" fill-opacity=".3"/>
+    <path d="M27 27V8M27 27 43.4 36.5M27 27 10.6 36.5" stroke="var(--bg)" stroke-width="2.4" fill="none"/>
+    <path d="M27 5 46.05 16V38L27 49 7.95 38V16Z" fill="none" stroke="var(--ink)" stroke-width="3.6" stroke-linejoin="miter"/>
+    <path d="M42 43 57 57" stroke="var(--ink)" stroke-width="6" stroke-linecap="square"/>
+  </symbol>
+
+  <!-- L: only the rim is split in 3 arcs; the lens is left open -->
+  <symbol id="L" viewBox="0 0 64 64">
+    <g fill="none" stroke-width="4.4" stroke-linecap="round">
+      <path d="M29.68 5.17A22 22 0 0 1 47.25 35.59" stroke="var(--accent)"/>
+      <path d="M44.57 40.24A22 22 0 0 1 9.43 40.24" stroke="var(--accent)" stroke-opacity=".6"/>
+      <path d="M6.75 35.59A22 22 0 0 1 24.32 5.17" stroke="var(--accent)" stroke-opacity=".3"/>
+    </g>
+    <path d="M43.5 43.5 57 57" stroke="var(--ink)" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- M: magnifier holding three dots in a triangle, 2 filled + 1 hollow = 2-of-3 vote -->
+  <symbol id="M" viewBox="0 0 64 64">
+    <circle cx="27" cy="27" r="22" fill="none" stroke="var(--ink)" stroke-width="3.6"/>
+    <circle cx="27" cy="18.5" r="4.6" fill="var(--accent)"/>
+    <circle cx="19.2" cy="32" r="4.6" fill="var(--accent)"/>
+    <circle cx="34.8" cy="32" r="3.7" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+    <path d="M43.5 43.5 57 57" stroke="var(--ink)" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- N: the "i" of magi as a lens (dot) over an I-beam text-cursor stem (handle) -->
+  <symbol id="N" viewBox="0 0 64 64">
+    <circle cx="32" cy="15" r="10" fill="none" stroke="var(--accent)" stroke-width="3.8"/>
+    <circle cx="32" cy="15" r="3.2" fill="var(--accent)"/>
+    <path d="M22 32H42V35.5H35V52.5H42V56H22V52.5H29V35.5H22Z" fill="var(--ink)" stroke="var(--ink)" stroke-width="1" stroke-linejoin="round"/>
+  </symbol>
+
+  <!-- O: J on H's squircle. Self-contained: ignores theme vars. Spokes are cut with a mask so the gradient shows through. -->
+  <mask id="mO" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <rect width="64" height="64" fill="#fff"/>
+    <path d="M27 27V8M27 27 43.4 36.5M27 27 10.6 36.5" stroke="#000" stroke-width="2.6" fill="none"/>
+  </mask>
+  <symbol id="O" viewBox="0 0 64 64">
+    <path d="M0 22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V42C64 57.5 57.5 64 42 64H22C6.5 64 0 57.5 0 42Z" fill="url(#gH)"/>
+    <path d="M0 32V22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V32Z" fill="url(#gHs)"/>
+    <g transform="translate(32 32) scale(.78) translate(-31.5 -31.5)" fill="#fff">
+      <g mask="url(#mO)">
+        <path d="M27 27V8.5A18.5 18.5 0 0 1 43.02 36.25Z"/>
+        <path d="M27 27 43.02 36.25A18.5 18.5 0 0 1 10.98 36.25Z" fill-opacity=".62"/>
+        <path d="M27 27 10.98 36.25A18.5 18.5 0 0 1 27 8.5Z" fill-opacity=".32"/>
+      </g>
+      <circle cx="27" cy="27" r="22" fill="none" stroke="#fff" stroke-width="3.8"/>
+      <path d="M43.5 43.5 57 57" stroke="#fff" stroke-width="6.4" stroke-linecap="round"/>
+    </g>
+  </symbol>
+
+  <!-- P (after ref 858): disc cut by three spokes and a ring, three-point star at the heart -->
+  <mask id="mP" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <rect width="64" height="64" fill="#fff"/>
+    <path d="M32 32V0M32 32 59.7 48M32 32 4.3 48" stroke="#000" stroke-width="3.4" fill="none"/>
+    <circle cx="32" cy="32" r="14.5" fill="none" stroke="#000" stroke-width="2.8"/>
+  </mask>
+  <symbol id="P" viewBox="0 0 64 64">
+    <g mask="url(#mP)">
+      <path d="M32 32V3.5A28.5 28.5 0 0 1 56.7 46.25Z" fill="var(--c1)"/>
+      <path d="M32 32 56.7 46.25A28.5 28.5 0 0 1 7.3 46.25Z" fill="var(--c2)"/>
+      <path d="M32 32 7.3 46.25A28.5 28.5 0 0 1 32 3.5Z" fill="var(--c3)"/>
+    </g>
+    <path d="M32 19.5 35.5 28.5 44.8 38.5 32 35 19.2 38.5 28.5 28.5Z" fill="var(--ink)"/>
+  </symbol>
+
+  <!-- Q (after ref 578): three ribbon loops that spiral into the centre, arrowheads pointing in -->
+  <g id="loopQ">
+    <path d="M30.5 29.5C21 22 19 5 32 5S45 22 35.5 29" fill="none" stroke-width="4.6" stroke-linejoin="round"/>
+    <path d="M32.2 33.2 24.2 31 29.8 24.9Z" stroke-linejoin="round" stroke-width="1.6"/>
+  </g>
+  <symbol id="Q" viewBox="0 0 64 64">
+    <use href="#loopQ" transform="rotate(0 32 36)" stroke="var(--c1)" fill="var(--c1)"/>
+    <use href="#loopQ" transform="rotate(120 32 36)" stroke="var(--c2)" fill="var(--c2)"/>
+    <use href="#loopQ" transform="rotate(240 32 36)" stroke="var(--c3)" fill="var(--c3)"/>
+  </symbol>
+
+  <!-- R (after ref 1152): three arms of three stripes, each bending round the triangle -->
+  <g id="stripeR" fill="none" stroke-width="3.1">
+    <path d="M10 58C16 46 22 38 34 38H58"/>
+    <path d="M17 58C21 50 26 45 34 45H58"/>
+    <path d="M24 58C27 54 30 52 34 52H58"/>
+  </g>
+  <symbol id="R" viewBox="0 0 64 64">
+    <use href="#stripeR" stroke="var(--c1)" transform="rotate(0 32 38)"/>
+    <use href="#stripeR" stroke="var(--c2)" transform="rotate(120 32 38)"/>
+    <use href="#stripeR" stroke="var(--c3)" transform="rotate(240 32 38)"/>
+  </symbol>
+
+  <!-- S (after ref 1156): three interlocking capsules, white-line seams, hollow triangle at the centre -->
+  <g id="capS" stroke-width="2.2"><rect x="18" y="4" width="28" height="36" rx="14"/></g>
+  <symbol id="S" viewBox="0 0 64 64">
+    <use href="#capS" transform="rotate(0 32 36)" fill="var(--c1)" stroke="var(--bg)"/>
+    <use href="#capS" transform="rotate(120 32 36)" fill="var(--c2)" stroke="var(--bg)"/>
+    <use href="#capS" transform="rotate(240 32 36)" fill="var(--c3)" stroke="var(--bg)"/>
+  </symbol>
+
+  <!-- T (after ref 1160): three hollow channels in a Y -->
+  <path id="armT" d="M25.5 31.5V9.5H38.5V31.5" fill="none" stroke-width="6" stroke-linejoin="miter"/>
+  <symbol id="T" viewBox="0 0 64 64">
+    <use href="#armT" stroke="var(--c1)" transform="rotate(0 32 38)"/>
+    <use href="#armT" stroke="var(--c2)" transform="rotate(120 32 38)"/>
+    <use href="#armT" stroke="var(--c3)" transform="rotate(240 32 38)"/>
+  </symbol>
+
   <!-- F: the "i" of magi = hex dot + text-cursor I-beam stem -->
   <symbol id="F" viewBox="0 0 64 64">
     <g transform="translate(0 3)">
@@ -161,13 +286,24 @@
     ["G", "Depth scope", "A friendly microscope: the lens focuses on a small fan of files on the stage, one lit in accent (the match, like A), so it reads as 'looking inside your files' (OCR, PDFs, embeddings). Not a magnifier, but the same 'look closer' idea."],
     ["H", "iOS icon", "Full-color app icon: squircle with a diagonal sky-blue → accent-blue → EVA-01 purple gradient, soft top sheen, white microscope. Same idea as G: the lens is focused on a small fan of files, minimal single-weight strokes."],
     ["I", "Vote display", "Straight from the MAGI voting screen, hard edges and no rounding: three rectangular arms (Melchior, Balthasar, Casper) with the arcs between them and only MAGI on the center plate. Two arms lit, one dimmed = a 2-of-3 vote. The plate is only readable at 48 px and up."],
+    ["J", "Tri-lens", "A classic magnifier (so it reads as search at a glance) whose lens is split into three equal wedges: the three MAGI (Melchior, Balthasar, Casper) and the three retrievers they stand for (keyword, text vectors, image vectors). Wedges step down in tone so it survives mono."],
+    ["K", "Hex tri-lens", "J with the EVA warning-hexagon as the lens and hard-edged wedges (no rounding), closer to the MAGI screens. Same tone steps; the square handle keeps the angular feel."],
+    ["L", "Split rim", "Only the border of the lens is divided: three arcs with gaps, stepping down in tone, and an open lens. Lightest of the set and the one that holds up best at 16 px."],
+    ["M", "Vote lens", "A magnifier holding three dots in a triangle: two filled, one hollow. The 2-of-3 MAGI vote (and keyword + text + image agreeing) inside the universal search shape."],
+    ["N", "Cursor lens", "The 'i' of magi: a small lens as the dot over an I-beam text-cursor stem. Like F but the dot is a magnifier, so the mark says 'search' and 'type' at once. Best as a lowercase lockup.", `mag${ic("N", 52, "inl")}`],
+    ["O", "Squircle tri-lens", "J on H's full-colour squircle: gradient tile, soft sheen, white magnifier with the three wedges stepping down in opacity. The candidate OS app icon."],
+    ["P", "Spokes disc (ref 858)", "Disc cut by three spokes and an inner ring into three coloured plates, a three-point star in the heart. Heaviest and most 'MAGI console'."],
+    ["Q", "Ribbon loops (ref 578)", "Three looping ribbons spiralling into a centre, each ending in an arrowhead. Reads as 'three things converging on one result'."],
+    ["R", "Stripe pinwheel (ref 1152)", "Three arms of three stripes bending round a triangle. One stripe per model, three hues; the most dynamic and the busiest at small sizes."],
+    ["S", "Interlock (ref 1156)", "Three capsules interlocked in three hues, separated by thin seams. Strongest 'three become one' read."],
+    ["T", "Channels (ref 1160)", "Three hollow rectangular channels in a Y, one hue each. Simplest and most robust at 16 px."],
   ];
-  const sizes = cls => `<div class="panel ${cls}" style="align-items:flex-end">${[128, 64, 40, 32, 20].map(s => ic("H", s)).join("")}</div>`;
+  const sizes = (cls, id) => `<div class="panel ${cls}" style="align-items:flex-end">${[128, 64, 40, 32, 20].map(s => ic(id, s)).join("")}</div>`;
   const dock = `<div class="panel" style="background:linear-gradient(160deg,#1b2a4a,#3b1f4d);gap:16px">
-    ${[["#34C759"], ["#FF9F0A"], ["#8E8E93"]].map(([c]) => `<svg width="64" height="64"><path d="M0 22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V42C64 57.5 57.5 64 42 64H22C6.5 64 0 57.5 0 42Z" fill="${c}"/></svg>`).join("")}${ic("H", 64)}</div>`;
+    ${[["#34C759"], ["#FF9F0A"], ["#8E8E93"]].map(([c]) => `<svg width="64" height="64"><path d="M0 22C0 6.5 6.5 0 22 0H42C57.5 0 64 6.5 64 22V42C64 57.5 57.5 64 42 64H22C6.5 64 0 57.5 0 42Z" fill="${c}"/></svg>`).join("")}${ic("H", 64)}${ic("O", 64)}</div>`;
   document.getElementById("out").innerHTML = concepts.map(([id, name, why, custom]) => {
-    if (id === "H") return `<div class="card"><h2>${id} — ${name}</h2><p>${why}</p>
-      <div class="row">${sizes("dark")}${sizes("light")}${dock}</div></div>`;
+    if (id === "H" || id === "O") return `<div class="card"><h2>${id} — ${name}</h2><p>${why}</p>
+      <div class="row">${sizes("dark", id)}${sizes("light", id)}${dock}</div></div>`;
     const word = custom
       ? `<span class="word">${custom}</span>`
       : id === "D"
