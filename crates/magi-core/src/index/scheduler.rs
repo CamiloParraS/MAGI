@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use crate::db::files::{self, PendingFile};
+use crate::db::roots;
 use crate::discovery::{self, WalkEntry};
 use crate::dto::FileErrorCode;
 use crate::error::Result;
@@ -122,6 +123,20 @@ impl Scheduler {
     /// One pass: notice new `pending` rows, re-check waiting ones, and return
     /// what is ready, newest first, up to the room left in the pipeline.
     pub fn poll(&mut self, conn: &Connection, now: Now) -> Result<Vec<Action>> {
+        // A root switched off (or gone unreadable) since a file was held: let
+        // go of its waiting files. They are looked at again if the root is back.
+        let usable: Vec<i64> = roots::list(conn)?
+            .into_iter()
+            .filter(|r| r.indexable())
+            .map(|r| r.id)
+            .collect();
+        self.held.retain(|_, hold| match hold {
+            Hold::InFlight => true,
+            Hold::Watching { file, .. }
+            | Hold::Deferred { file, .. }
+            | Hold::Ready { file, .. } => usable.contains(&file.root_id),
+        });
+
         let mut actions = Vec::new();
         let mut room = self.max_in_flight.saturating_sub(self.in_flight());
 
@@ -392,6 +407,26 @@ mod tests {
         let later = second.plus(Duration::from_secs(20));
         assert!(s.poll(&f.conn, later).unwrap().is_empty(), "watched again");
         let ready = s.poll(&f.conn, later.plus(Duration::from_secs(2))).unwrap();
+        assert_eq!(extracted_ids(&ready), vec![id]);
+    }
+
+    /// Files already stat'd and waiting must not start once their root is off.
+    #[test]
+    fn waiting_files_of_a_switched_off_root_are_not_handed_out() {
+        let f = Fixture::new();
+        let id = f.queue("held.txt", "x");
+        let mut s = Scheduler::new(8);
+        let t0 = Now::current().plus(Duration::from_secs(10));
+        assert!(s.poll(&f.conn, t0).unwrap().is_empty(), "watched");
+
+        roots::set_enabled(&f.conn, f.root_id, false).unwrap();
+        let later = t0.plus(Duration::from_secs(2));
+        assert!(s.poll(&f.conn, later).unwrap().is_empty(), "root is off");
+
+        roots::set_enabled(&f.conn, f.root_id, true).unwrap();
+        let again = later.plus(Duration::from_secs(1));
+        assert!(s.poll(&f.conn, again).unwrap().is_empty(), "watched anew");
+        let ready = s.poll(&f.conn, again.plus(Duration::from_secs(2))).unwrap();
         assert_eq!(extracted_ids(&ready), vec![id]);
     }
 
