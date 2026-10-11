@@ -1036,6 +1036,8 @@ fn a_changed_text_model_id_re_embeds_unchanged_files() {
     // Same model: the hash-skip holds.
     let embedded = env.embedder.chunks();
     let engine = env.start();
+    // The DB already holds the files: wait out the startup scan, which runs first.
+    engine.rescan().recv().unwrap().unwrap();
     env.wait_drained(2);
     engine.shutdown();
     assert_eq!(
@@ -1052,6 +1054,8 @@ fn a_changed_text_model_id_re_embeds_unchanged_files() {
         )
         .unwrap();
     let _engine = env.start();
+    // The DB already holds the files: wait out the startup scan, which runs first.
+    _engine.rescan().recv().unwrap().unwrap();
     env.wait_drained(2);
     assert_eq!(
         (env.embedder.chunks() - embedded) as i64,
@@ -1091,6 +1095,8 @@ fn changes_made_while_stopped_converge_on_restart() {
     env.write("created.txt", "brand new arrival");
 
     let _engine = env.start();
+    // The DB already holds the files: wait out the startup scan, which runs first.
+    _engine.rescan().recv().unwrap().unwrap();
     env.wait_drained(3);
 
     let mut on_disk: Vec<String> = std::fs::read_dir(env.root())

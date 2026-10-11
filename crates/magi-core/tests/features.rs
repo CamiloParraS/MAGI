@@ -153,6 +153,8 @@ fn turning_ocr_off_keeps_the_text_already_read_and_re_reads_nothing() {
     let embedded = env.embedder.chunks();
 
     let _engine = env.start(env.text());
+    // The DB already holds the files: wait out the startup scan, which runs first.
+    _engine.rescan().recv().unwrap().unwrap();
     env.wait_drained(1);
     assert_eq!(
         env.count("SELECT COUNT(*) FROM chunks WHERE source = 'ocr'"),
@@ -219,6 +221,8 @@ fn enabling_meaning_embeds_only_the_files_missing_it() {
     let before = env.embedder.chunks();
 
     let _engine = env.start(env.text());
+    // The DB already holds the files: wait out the startup scan, which runs first.
+    _engine.rescan().recv().unwrap().unwrap();
     env.wait_drained(2);
     let b_chunks = env.count(
         "SELECT COUNT(*) FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.file_name = 'b.txt'",
