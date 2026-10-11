@@ -107,11 +107,29 @@ impl OnboardingView {
         // Seen once, so it may arrive with a little life: it grows into its
         // fixed 52px slot (nothing around it moves) as it fades in.
         let accent = p.accent;
+        let ring = div()
+            .absolute()
+            .rounded_full()
+            .border_2()
+            .border_color(accent)
+            .with_animation(
+                "done-ring",
+                Animation::new(RING_OUT).with_easing(ease_out_quint()),
+                |el, t| {
+                    let size = 44. + 36. * t;
+                    el.size(px(size))
+                        .top(px((52. - size) / 2.))
+                        .left(px((52. - size) / 2.))
+                        .opacity(0.35 * (1. - t))
+                },
+            );
         let check = div()
+            .relative()
             .size(px(52.))
             .flex()
             .items_center()
             .justify_center()
+            .child(ring)
             .child(
                 div()
                     .rounded_full()
@@ -346,3 +364,5 @@ const STAGGER_IN: Duration = Duration::from_millis(240);
 
 /// The finish screen's check growing in.
 const CHECK_IN: Duration = Duration::from_millis(320);
+/// The ring behind it, once: out past the slot while fading away.
+const RING_OUT: Duration = Duration::from_millis(700);
