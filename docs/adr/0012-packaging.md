@@ -31,5 +31,7 @@ Facts checked on 2026-10-11 against the cargo-packager 0.11.8 source and docs:
 
 - No new Rust dependencies. cargo-packager is a CLI used only in CI and on dev machines.
 - Release builds are unsigned (Windows) or ad-hoc signed (macOS). Users must click through SmartScreen or Gatekeeper (README "Install"). On macOS, privacy grants are tied to the code signature, so each new test build may ask again (`docs/permissions.md`).
-- `packager.json` repeats the version. `release.yml` fails a tag that does not match it.
+- `packager.json` repeats the version. `release.yml` fails a tag that does not match it, or a `packager.json` version that does not match `Cargo.toml`'s.
+- The libraries sit in `Contents/Resources` and are loaded by full path, not through `@rpath` (SPEC M8 was updated to match). That is fine for ad-hoc signed test builds. A notarized build needs them in `Contents/Frameworks`, signed with the app's identity. Revisit this when a Developer ID exists.
+- An AppImage runs from a mount under `/tmp`, so launch at login registers `$APPIMAGE` (the file itself) instead of the running executable (`paths::installed_exe`).
 - The `.deb`'s `depends` list is written by hand and is unverified on a clean machine (M8 verification). The AppImage bundles its libraries through linuxdeploy.

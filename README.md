@@ -19,7 +19,8 @@ not signed yet, so each OS warns the first time you open Magi.
   **Open Anyway**. Magi lives in the menu bar (no Dock icon). Each new test
   build may ask for folder access again (`docs/permissions.md`).
 - **Linux (x64):** either install the `.deb` (`sudo apt install ./<file>.deb`),
-  or make the `.AppImage` executable (`chmod +x <file>.AppImage`) and run it. The tray icon needs AppIndicator support (GNOME: the AppIndicator
+  or make the `.AppImage` executable (`chmod +x <file>.AppImage`) and run it.
+  The tray icon needs AppIndicator support (GNOME: the AppIndicator
   extension); without it, open Magi again or bind `magi --toggle` to a key.
 
 Check a download against `SHA256SUMS` on the same release.

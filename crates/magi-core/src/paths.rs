@@ -88,9 +88,31 @@ pub fn installed_library(file: &str) -> Option<PathBuf> {
     bundled_library(file, &exe, appdir.as_deref())
 }
 
+/// The path to register for launch at login: the `.AppImage` file itself
+/// (`$APPIMAGE`) when running from one, since `exe` is then inside a mount
+/// under `/tmp` that is gone after a reboot; `exe` otherwise.
+pub fn launch_path(exe: &Path, appimage: Option<&Path>) -> PathBuf {
+    appimage.unwrap_or(exe).to_path_buf()
+}
+
+/// [`launch_path`] for the running executable.
+pub fn installed_exe() -> std::io::Result<PathBuf> {
+    let exe = env::current_exe()?;
+    let appimage = env::var_os("APPIMAGE").map(PathBuf::from);
+    Ok(launch_path(&exe, appimage.as_deref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_appimage_launches_from_its_own_file_not_the_mount() {
+        let mounted = Path::new("/tmp/.mount_magiAb12/usr/bin/magi");
+        let appimage = Path::new("/home/me/Apps/magi.AppImage");
+        assert_eq!(launch_path(mounted, Some(appimage)), appimage);
+        assert_eq!(launch_path(mounted, None), mounted);
+    }
 
     #[test]
     fn a_bundled_library_is_found_where_each_package_puts_it() {

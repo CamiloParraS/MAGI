@@ -591,7 +591,7 @@ impl Render for StartFailure {
 /// login launch passes `--background`, which opens no window. Per user,
 /// never system-wide.
 fn set_launch_at_login(on: bool) {
-    let done = std::env::current_exe()
+    let done = magi_core::paths::installed_exe()
         .map_err(anyhow::Error::from)
         .and_then(|exe| {
             let launch = auto_launch::AutoLaunchBuilder::new()

@@ -4,7 +4,7 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+### 0.1.0 (first test build)
 
 First test build: local hybrid search (keywords, meaning, text in images,
 image content) over folders you choose, with a menu-bar/tray app, a global

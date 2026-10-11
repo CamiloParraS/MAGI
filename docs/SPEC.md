@@ -1014,7 +1014,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - Windows: NSIS installer (x64)
   - macOS: `.dmg` (aarch64 required; universal if x86_64 is supported)
   - Linux: AppImage + `.deb` (optionally `.rpm`)
-- PDFium and ONNX Runtime correctly bundled and located at runtime. Use `@rpath` on macOS, next to the executable on Windows, and inside the AppImage on Linux. (HEIC needs no bundling — ADR-0003.)
+- PDFium and ONNX Runtime correctly bundled and located at runtime: loaded by full path from where the package puts them — `Contents/Resources` on macOS, next to the executable on Windows, `$APPDIR/usr/lib/magi` in the AppImage, `/usr/lib/magi` for the `.deb` (ADR-0012; a notarized macOS build moves them to `Contents/Frameworks`). (HEIC needs no bundling — ADR-0003.)
 - `THIRD_PARTY_LICENSES.md` generated with `cargo-about`, plus manual entries for bundled native libraries. An ADR decides static linking vs. dynamic loading for `ort`, verified on clean machines.
 - `release.yml`: on tag `v*`, build all bundles with the packaging tool chosen in §9 Q9, attach SHA-256 checksums, create a draft GitHub Release.
 - README "Install" section for **unsigned builds**:

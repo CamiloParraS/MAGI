@@ -27,12 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The tag matches packager.json's version
+      - name: The tag matches packager.json's and Cargo.toml's version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           version=$(jq -r .version packager.json)
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "magi-desktop") | .version')
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, packager.json $version"; exit 1; }
+          test "$crate" = "$version" || { echo "Cargo.toml $crate, packager.json $version"; exit 1; }
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
