@@ -16,8 +16,8 @@ use rusqlite::Connection;
 use crate::config::{self, Config};
 use crate::db::{self, files};
 use crate::dto::{
-    FeatureStatus, FileError, IndexStatus, Install, MatchSource, RootStatus, SearchRequest,
-    SearchResponse, SearchResult, Snippet,
+    FeatureStatus, FileError, IndexStatus, Install, MatchSource, PermissionIssue, RootStatus,
+    SearchRequest, SearchResponse, SearchResult, Snippet, permission_issues,
 };
 use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
@@ -28,6 +28,8 @@ use crate::search::{QueryVectors, SearchHit, search_with};
 pub enum HostEvent {
     Status(IndexStatus),
     Features(Vec<FeatureStatus>),
+    /// The complete list whenever it changes, never a delta.
+    Permissions(Vec<PermissionIssue>),
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +221,12 @@ impl Host {
         crate::engine::root_statuses(&lock(&self.inner.reader))
     }
 
+    /// The roots that need the user, from the database like
+    /// [`list_roots`](Self::list_roots).
+    pub fn permissions_report(&self) -> Result<Vec<PermissionIssue>> {
+        Ok(permission_issues(&self.list_roots()?))
+    }
+
     pub fn list_errors(&self, limit: u32) -> Result<Vec<FileError>> {
         files::list_errors(&lock(&self.inner.reader), limit)
     }
@@ -300,6 +308,7 @@ fn supervise(
     features: &Receiver<Vec<FeatureStatus>>,
     on_event: &dyn Fn(HostEvent),
 ) {
+    let mut issues = None;
     loop {
         // Read before starting: `start_engine` loads config and components and
         // then blocks in `Engine::start`, so a feature change that lands during
@@ -312,12 +321,12 @@ fn supervise(
         if let Some(running) = shared.running()
             && let Ok(status) = running.engine.status()
         {
-            on_event(HostEvent::Status(status));
+            forward(status, &mut issues, on_event);
         }
         let next = loop {
             select! {
                 recv(status_rx) -> status => match status {
-                    Ok(status) => on_event(HostEvent::Status(status)),
+                    Ok(status) => forward(status, &mut issues, on_event),
                     Err(_) => {
                         tracing::warn!("the engine's status channel closed");
                         status_rx = crossbeam_channel::never();
@@ -366,6 +375,20 @@ fn supervise(
                 return;
             }
         }
+    }
+}
+
+/// Sends the status, and the permission issues when they differ from `last`.
+fn forward(
+    status: IndexStatus,
+    last: &mut Option<Vec<PermissionIssue>>,
+    on_event: &dyn Fn(HostEvent),
+) {
+    let issues = permission_issues(&status.roots);
+    on_event(HostEvent::Status(status));
+    if last.as_ref() != Some(&issues) {
+        *last = Some(issues.clone());
+        on_event(HostEvent::Permissions(issues));
     }
 }
 

@@ -1,7 +1,7 @@
 //! App state every window shows besides its own: the shell keeps it
 //! current; an open window re-renders on every change.
 
-use magi_core::dto::{FeatureStatus, IndexStatus};
+use magi_core::dto::{FeatureStatus, IndexStatus, PermissionIssue};
 use magi_core::features::Feature;
 
 use crate::i18n::Lang;
@@ -15,6 +15,8 @@ pub struct Live {
     /// The last busy status while the scan row leaves, after the work ended.
     pub scan_left: Option<IndexStatus>,
     pub features: Vec<FeatureStatus>,
+    /// Roots that need the user, with what to tell them (M7).
+    pub permissions: Vec<PermissionIssue>,
     /// ponytail: hints closed this session only; persist in config if a
     /// hint that returns after a restart annoys anyone.
     pub dismissed: Vec<Feature>,
@@ -39,6 +41,7 @@ impl Live {
             status: None,
             scan_left: None,
             features: Vec::new(),
+            permissions: Vec::new(),
             dismissed: Vec::new(),
             shortcut_dismissed: false,
             hotkey_presses: 0,

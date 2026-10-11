@@ -197,6 +197,12 @@ impl Shell {
                     cx.notify();
                 });
             }
+            AppEvent::Host(HostEvent::Permissions(issues)) => {
+                self.live.update(cx, |live, cx| {
+                    live.permissions = issues;
+                    cx.notify();
+                });
+            }
             AppEvent::Tray(TrayAction::OpenSearch) => {
                 if !activate(self.window, cx) {
                     self.open_window(true, cx);

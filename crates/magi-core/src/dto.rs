@@ -129,6 +129,71 @@ impl RootStatus {
     }
 }
 
+/// A root that needs the user (`get_permissions_report`, the `permissions`
+/// event; SPEC.md §5.7): an enabled root whose status is not `ok`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionIssue {
+    pub root_id: i64,
+    pub path: String,
+    pub status: Health,
+    pub guidance: Guidance,
+}
+
+/// What the user can do about a root, per OS. A code the UI words
+/// (locale neutrality, SPEC.md §5.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum Guidance {
+    /// The folder is gone: moved, deleted, or its drive unplugged.
+    Missing,
+    /// macOS: allow Magi in Privacy & Security › Files and Folders.
+    MacFilesAndFolders,
+    /// macOS: allow Magi in Privacy & Security › Full Disk Access.
+    MacFullDiskAccess,
+    /// Windows or Linux: this user account cannot read the folder.
+    AccessDenied,
+    /// Linux: out of inotify watches, so polled; raise
+    /// `fs.inotify.max_user_watches` (now `limit`).
+    WatchLimit { limit: Option<u64> },
+    /// A network drive: checked every 15 minutes, not live.
+    Polled,
+}
+
+impl Guidance {
+    /// The settings page that fixes it, where the OS has one; the UI opens it.
+    pub fn settings_url(self) -> Option<&'static str> {
+        match self {
+            Self::MacFilesAndFolders => Some(crate::platform::MACOS_FILES_AND_FOLDERS_URL),
+            Self::MacFullDiskAccess => Some(crate::platform::MACOS_FULL_DISK_ACCESS_URL),
+            _ => None,
+        }
+    }
+}
+
+/// The issues among `roots`, for the running OS.
+pub fn permission_issues(roots: &[RootStatus]) -> Vec<PermissionIssue> {
+    let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf());
+    roots
+        .iter()
+        .filter(|root| root.enabled)
+        .filter_map(|root| {
+            let guidance = crate::platform::guidance(
+                crate::platform::CURRENT_OS,
+                root.status,
+                std::path::Path::new(&root.path),
+                home.as_deref(),
+                crate::platform::inotify_watch_limit(),
+            )?;
+            Some(PermissionIssue {
+                root_id: root.id,
+                path: root.path.clone(),
+                status: root.status,
+                guidance,
+            })
+        })
+        .collect()
+}
+
 /// A snippet plus the byte ranges of its matched terms in `text`
 /// (`&text[start..end]`), always on char boundaries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

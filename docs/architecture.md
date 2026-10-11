@@ -611,7 +611,7 @@ its own read-only DB connection for search.
   `rescan_all`, `open_file`, `reveal_file`, `get_settings`,
   `update_settings`, `list_errors`, `retry_errors`, `features_status`,
   `set_feature_enabled`, `download_feature`, `cancel_download`,
-  `remove_download`, `clear_index` (on `Host` or its `EngineHandle`). All
+  `remove_download`, `clear_index`, `permissions_report` (on `Host` or its `EngineHandle`). All
   block, so the desktop app runs them on GPUI's background executor and the
   UI thread never waits on the database or a model. `open_file`/`reveal_file`
   resolve the path from the DB (`Host::file_path`, which also errors when
@@ -619,9 +619,22 @@ its own read-only DB connection for search.
   while the engine restarts, and `search` clamps its `limit` to 1..=500. The
   supervisor coalesces what queues up while the engine starts or stops: the
   newest feature state only, and one control (Stop > Clear > Restart).
-- **Events**: `HostEvent::Status` (`IndexStatus`) and `HostEvent::Features`
-  (`FeatureStatus[]`, always complete), delivered through `Host::start`'s
-  callback.
+- **Events**: `HostEvent::Status` (`IndexStatus`), `HostEvent::Features`
+  (`FeatureStatus[]`, always complete) and `HostEvent::Permissions`
+  (`PermissionIssue[]`, always complete, sent only when it changes),
+  delivered through `Host::start`'s callback.
+- **Permission report (M7)**: `Host::permissions_report` (SPEC.md
+  `get_permissions_report`) → `PermissionIssue { root_id, path, status,
+  guidance }` for every enabled root whose health is not `ok`. Computed from
+  root health alone (no new DB state), by the same function the supervisor
+  runs on each status to decide whether to push `Permissions`. `Guidance`
+  (`#[serde(tag = "code")]`): `missing`, `mac_files_and_folders`,
+  `mac_full_disk_access`, `access_denied`, `watch_limit { limit }`, `polled`;
+  `Guidance::settings_url` gives the macOS System Settings page, `None`
+  elsewhere. The OS choice is `platform::guidance(OsKind, …)`, pure, so every
+  OS's rules are tested on any OS. On macOS a denied folder under Desktop,
+  Documents, Downloads, iCloud Drive (`~/Library/Mobile Documents`) or
+  `/Volumes` needs Files and Folders; anything else, Full Disk Access.
 - **`ErrorCode`** (`dto.rs`): every command's `Result` error side, `{ code,
   ...params }` (`#[serde(tag = "code")]`), built from `crate::Error` by
   `ErrorCode::from`. Locale-neutral by construction — see

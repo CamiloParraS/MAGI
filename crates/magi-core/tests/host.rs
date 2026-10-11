@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use magi_core::config::{Config, FeaturesConfig};
-use magi_core::dto::{SearchRequest, SearchResult};
+use magi_core::db::roots::Health;
+use magi_core::dto::{Guidance, PermissionIssue, SearchRequest, SearchResult};
 use magi_core::features::Feature;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
@@ -123,7 +124,7 @@ fn the_host_forwards_engine_status_and_feature_state() {
         match env.events.recv_timeout(Duration::from_secs(1)) {
             Ok(HostEvent::Status(s)) => indexed |= s.indexed == 1,
             Ok(HostEvent::Features(f)) => features |= f.len() == Feature::ALL.len(),
-            Err(_) => {}
+            Ok(HostEvent::Permissions(_)) | Err(_) => {}
         }
     }
 }
@@ -293,6 +294,38 @@ fn search_clamps_the_requested_limit() {
         2,
         "a huge limit still answers"
     );
+}
+
+#[test]
+fn a_lost_folder_is_reported_until_it_comes_back() {
+    let env = Env::start(meaning_only());
+    assert!(env.host.permissions_report().unwrap().is_empty());
+    let pushed = |expected: &[PermissionIssue]| {
+        wait_until(Duration::from_secs(10), "the report to be pushed", || {
+            matches!(
+                env.events.recv_timeout(Duration::from_secs(1)),
+                Ok(HostEvent::Permissions(issues)) if issues == expected
+            )
+        });
+    };
+    pushed(&[]);
+
+    let kept = env.root().with_extension("away");
+    std::fs::rename(env.root(), &kept).unwrap();
+    env.host.engine().unwrap().rescan().recv().unwrap().unwrap();
+    let report = env.host.permissions_report().unwrap();
+    assert_eq!(report.len(), 1);
+    assert_eq!(
+        (report[0].status, report[0].guidance),
+        (Health::Missing, Guidance::Missing)
+    );
+    assert_eq!(report[0].guidance.settings_url(), None);
+    pushed(&report);
+
+    std::fs::rename(&kept, env.root()).unwrap();
+    env.host.engine().unwrap().rescan().recv().unwrap().unwrap();
+    assert!(env.host.permissions_report().unwrap().is_empty());
+    pushed(&[]);
 }
 
 #[test]
