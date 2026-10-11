@@ -148,6 +148,13 @@ impl OnboardingView {
         let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
             .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS, &self.held))
             .unwrap_or_default();
+        let (last, presses) = (
+            caps.len(),
+            self.live
+                .read(cx)
+                .hotkey_presses
+                .saturating_sub(self.hotkey_presses),
+        );
         let plus = !magi_core::platform::SYMBOL_MODIFIERS;
         let keys =
             div()
@@ -157,8 +164,21 @@ impl OnboardingView {
                 .children(caps.into_iter().enumerate().flat_map(|(ix, c)| {
                     let sep = (plus && ix > 0)
                         .then(|| div().text_color(p.mute).child("+").into_any_element());
-                    sep.into_iter()
-                        .chain([keycap(c, recording, p).into_any_element()])
+                    let cap = keycap(c, recording, p);
+                    // The registered hotkey swallows the last key, so it
+                    // never lights; each press dips it instead, once.
+                    let cap = if ix + 1 == last && presses > 0 {
+                        cap.relative()
+                            .with_animation(
+                                ("hotkey-press", presses as usize),
+                                Animation::new(PRESS),
+                                |el, t| el.top(px(2. * (std::f32::consts::PI * t).sin())),
+                            )
+                            .into_any_element()
+                    } else {
+                        cap.into_any_element()
+                    };
+                    sep.into_iter().chain([cap])
                 }));
         let tried = self.hotkey_tried(cx);
         let try_it = if recording {
@@ -366,3 +386,7 @@ const STAGGER_IN: Duration = Duration::from_millis(240);
 const CHECK_IN: Duration = Duration::from_millis(320);
 /// The ring behind it, once: out past the slot while fading away.
 const RING_OUT: Duration = Duration::from_millis(700);
+
+/// The last keycap's dip when the hotkey is pressed: short, since the
+/// press is the user's own.
+const PRESS: Duration = Duration::from_millis(140);
