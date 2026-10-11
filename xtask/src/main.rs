@@ -311,6 +311,33 @@ fn fetch_models() -> Result<()> {
     Ok(())
 }
 
+/// Copies this OS's PDFium and ONNX Runtime from `vendor/` into
+/// `target/bundle-libs/`, which `packager.json` ships as resources
+/// (ADR-0012). Run after `fetch-pdfium` and `fetch-onnxruntime`.
+fn stage_libs() -> Result<()> {
+    use magi_core::platform as p;
+    let root = workspace_root()?;
+    let out = root.join("target/bundle-libs");
+    fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+    let libs = [
+        root.join("vendor/pdfium")
+            .join(p::pdfium_vendor_dir())
+            .join(p::pdfium_library_subdir())
+            .join(p::pdfium_library_filename()),
+        root.join("vendor/onnxruntime")
+            .join(p::onnxruntime_vendor_dir())
+            .join("lib")
+            .join(p::onnxruntime_library_filename()),
+    ];
+    for lib in libs {
+        let name = lib.file_name().context("library path has no file name")?;
+        fs::copy(&lib, out.join(name))
+            .with_context(|| format!("copying {} (run `just setup` first)", lib.display()))?;
+        println!("staged: {}", out.join(name).display());
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
@@ -318,9 +345,12 @@ fn main() -> Result<()> {
         Some("fetch-onnxruntime") => fetch_onnxruntime(),
         Some("fetch-models") => fetch_models(),
         Some("bench-corpus") => bench_corpus::bench_corpus(),
+        Some("stage-libs") => stage_libs(),
         Some(other) => bail!("unknown xtask command: {other}"),
         None => {
-            bail!("usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus>")
+            bail!(
+                "usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus|stage-libs>"
+            )
         }
     }
 }

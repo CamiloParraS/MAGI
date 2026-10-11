@@ -1,0 +1,37 @@
+{
+  "name": "magi",
+  "productName": "Magi",
+  "version": "0.1.0",
+  "identifier": "dev.magi.magi",
+  "description": "Local, on-device semantic file search",
+  "publisher": "Camilo Parra",
+  "licenseFile": "LICENSE",
+  "outDir": "target/packages",
+  "binariesDir": "target/release",
+  "beforePackagingCommand": "cargo build -p magi-desktop --release",
+  "binaries": [{ "path": "magi", "main": true }],
+  "icons": [
+    "apps/desktop/assets/brand/magi.icns",
+    "apps/desktop/assets/brand/magi.ico",
+    "apps/desktop/assets/brand/png/magi-32.png",
+    "apps/desktop/assets/brand/png/magi-128.png",
+    "apps/desktop/assets/brand/png/magi-256.png",
+    "apps/desktop/assets/brand/png/magi-512.png"
+  ],
+  "resources": ["target/bundle-libs/*"],
+  "macos": {
+    "minimumSystemVersion": "13.0",
+    "infoPlistPath": "apps/desktop/Info.plist",
+    "backgroundApp": true
+  },
+  "deb": {
+    "depends": [
+      "libgtk-3-0",
+      "libayatana-appindicator3-1",
+      "libxdo3",
+      "libxkbcommon0",
+      "libxkbcommon-x11-0",
+      "libvulkan1"
+    ]
+  }
+}

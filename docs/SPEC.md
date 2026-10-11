@@ -1076,6 +1076,6 @@ Rules:
 | Q6     | License for the repository (MIT assumed)                                                                                                                        | M0     | MIT                                                                                                      |
 | ~~Q7~~ | Should launch-at-login default to on after onboarding?                                                                                                          | —      | **Answered 2026-09-25:** Offered in onboarding, checked by default (ADR-0010)                            |
 | ~~Q8~~ | If ADR-0003 must fall back to native HEIC decoders and Windows lacks the HEVC extension, is "HEIC not supported on this PC, install the extension" acceptable?  | —      | **Moot 2026-09-19:** ADR-0003 chose `heic-rs`, which decodes in-process on every platform.               |
-| Q9     | Packaging tool for the GPUI app: `cargo-packager` vs. per-OS scripts (as Zed does) — produces the NSIS, `.dmg`, AppImage and `.deb` bundles M8 lists (ADR-0011) | M8     | Decide at the start of M8                                                                                |
+| Q9     | Packaging tool for the GPUI app: `cargo-packager` vs. per-OS scripts (as Zed does) — produces the NSIS, `.dmg`, AppImage and `.deb` bundles M8 lists (ADR-0011) | M8     | **Decided 2026-10-11:** cargo-packager 0.11.8, `packager.json` (ADR-0012)                                                                                |
 
 Record answers here (with date) and update affected sections.

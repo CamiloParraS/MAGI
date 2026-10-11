@@ -51,3 +51,8 @@ bench:
 # Build the desktop app in release mode (installers: SPEC.md §9 Q9)
 build:
     cargo build -p magi-desktop --release
+
+# Installer for this OS into target/packages (ADR-0012; needs `cargo install cargo-packager --locked`)
+package formats="default":
+    cargo run -p xtask -- stage-libs
+    cargo packager --release --formats {{formats}}

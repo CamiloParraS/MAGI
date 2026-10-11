@@ -1,0 +1,107 @@
+name: Release
+
+# On a `v*` tag (or by hand): builds the installers with cargo-packager
+# (ADR-0012) on each OS, then makes a draft pre-release with them and
+# SHA256SUMS. Unsigned: README "Install" says how to open them.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            formats: nsis
+          - os: macos-14
+            formats: app
+          - os: ubuntu-22.04
+            formats: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches packager.json's version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(jq -r .version packager.json)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, packager.json $version"; exit 1; }
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file pkg-config libssl-dev \
+            clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1 \
+            libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev \
+            libgtk-3-dev libxdo-dev libayatana-appindicator3-dev libfuse2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Fetch and stage PDFium and ONNX Runtime
+        run: |
+          cargo run -p xtask -- fetch-pdfium
+          cargo run -p xtask -- fetch-onnxruntime
+          cargo run -p xtask -- stage-libs
+
+      - name: Package
+        run: cargo packager --release --formats ${{ matrix.formats }}
+
+      # cargo-packager signs only with a real identity; an ad-hoc signature
+      # keeps a downloaded, unsigned app from being reported as "damaged".
+      - name: Ad-hoc sign the app and make the .dmg
+        if: runner.os == 'macOS'
+        run: |
+          version=$(jq -r .version packager.json)
+          codesign --force --deep --sign - target/packages/Magi.app
+          codesign --verify --deep --strict target/packages/Magi.app
+          hdiutil create -volname Magi -srcfolder target/packages/Magi.app -ov -format UDZO \
+            "target/packages/Magi_${version}_aarch64.dmg"
+          rm -rf target/packages/Magi.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ runner.os }}
+          path: |
+            target/packages/*.exe
+            target/packages/*.dmg
+            target/packages/*.deb
+            target/packages/*.AppImage
+          if-no-files-found: error
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Draft pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in v*) ;; *) tag="test-${GITHUB_RUN_NUMBER}" ;; esac
+          gh release create "$tag" dist/* --draft --prerelease \
+            --target "$GITHUB_SHA" --title "Magi $tag" \
+            --notes "Unsigned test build. See the README's Install section for how to open it on each OS."
