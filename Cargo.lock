@@ -4657,7 +4657,7 @@ checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
 name = "magi-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "magi-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "calamine",
@@ -4726,7 +4726,7 @@ dependencies = [
 
 [[package]]
 name = "magi-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -10291,7 +10291,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "magi-core",

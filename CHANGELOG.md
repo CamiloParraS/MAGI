@@ -4,7 +4,7 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
-### Fixed (Linux)
+### 0.1.1 (Linux fixes)
 
 - The app no longer crashes at startup: the tray icon talks to the desktop
   over D-Bus (StatusNotifierItem) instead of GTK. A left click on it now
