@@ -25,4 +25,10 @@ pub(crate) fn init() {
         Ok(file) => builder.with_writer(Mutex::new(file)).init(),
         Err(_) => builder.with_writer(std::io::stderr).init(),
     }
+    // A panic goes to stderr, which a launch from the desktop never shows.
+    let print = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(%info, "panic");
+        print(info);
+    }));
 }
