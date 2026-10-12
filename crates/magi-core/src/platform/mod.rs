@@ -295,6 +295,15 @@ pub fn is_wayland() -> bool {
     }
 }
 
+/// Whether a borderless pop-up window can take the keyboard. On X11 GPUI's
+/// pop-up is override-redirect: no window manager focuses it and GPUI does
+/// not either, so search opens as a managed floating window there. GPUI
+/// picks Wayland by `WAYLAND_DISPLAY`, so this does too.
+pub fn popup_takes_focus() -> bool {
+    cfg!(not(target_os = "linux"))
+        || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty())
+}
+
 /// The kernel's inotify watch limit, for `magi-cli doctor`. `None` on
 /// platforms without inotify.
 pub fn inotify_watch_limit() -> Option<u64> {

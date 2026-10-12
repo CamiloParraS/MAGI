@@ -401,7 +401,11 @@ impl Shell {
                 size: size(view::WIDTH, view::OPEN_HEIGHT),
             })),
             display_id: display,
-            kind: WindowKind::PopUp,
+            kind: if magi_core::platform::popup_takes_focus() {
+                WindowKind::PopUp
+            } else {
+                WindowKind::Floating
+            },
             is_movable: false,
             is_resizable: false,
             focus: true,
