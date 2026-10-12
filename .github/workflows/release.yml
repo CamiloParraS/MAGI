@@ -84,8 +84,43 @@ jobs:
             target/packages/*.AppImage
           if-no-files-found: error
 
-  release:
+  # The .deb on a clean Debian: its depends list must be enough to start
+  # Magi. Xvfb and Mesa's software Vulkan stand in for a desktop and a GPU
+  # driver (not the package's to bring); X11 only, Wayland is unchecked.
+  deb-check:
     needs: package
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-Linux
+          path: dist
+
+      - name: Install the .deb
+        run: |
+          apt-get update
+          apt-get install -y ./dist/*.deb
+          apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers
+
+      - name: Every linked library resolves
+        run: |
+          ldd "$(command -v magi)" | tee ldd.txt
+          ! grep "not found" ldd.txt
+
+      - name: Magi starts and stays up
+        run: |
+          export MAGI_CONFIG_DIR=$(mktemp -d) MAGI_DATA_DIR=$(mktemp -d) MAGI_FAKE_EMBEDDER=1
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          DISPLAY=:99 magi &
+          sleep 20
+          cat "$MAGI_DATA_DIR/logs/magi.log" || true
+          kill -0 $! || { echo "magi exited"; exit 1; }
+          ! grep -q " panic" "$MAGI_DATA_DIR/logs/magi.log"
+
+  release:
+    needs: [package, deb-check]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
