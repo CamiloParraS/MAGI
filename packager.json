@@ -26,9 +26,11 @@
   },
   "deb": {
     "depends": [
-      "libgtk-3-0",
-      "libayatana-appindicator3-1",
-      "libxdo3",
+      "libfontconfig1",
+      "libwayland-client0",
+      "libx11-6",
+      "libx11-xcb1",
+      "libxcb1",
       "libxkbcommon0",
       "libxkbcommon-x11-0",
       "libvulkan1"

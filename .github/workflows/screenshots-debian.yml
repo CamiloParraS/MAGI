@@ -22,7 +22,6 @@ jobs:
             build-essential curl wget file pkg-config libssl-dev \
             clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1 \
             libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev \
-            libgtk-3-dev libxdo-dev libayatana-appindicator3-dev \
             xvfb openbox xdotool imagemagick feh mesa-vulkan-drivers fonts-dejavu
 
       - uses: actions/checkout@v4
