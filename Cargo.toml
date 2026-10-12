@@ -89,7 +89,9 @@ gpui-kit = "0.7"
 # Embeds the app icon in the Windows exe (build script only). Already in the tree as a GPUI build dependency.
 embed-resource = "3.0.11"
 # Tray icon and menu; GPUI has none (ADR-0011). Runs on GPUI's main thread.
-tray-icon = "0.25.1"
+# On Linux the KSNI (D-Bus) backend: the default AppIndicator one is GTK and
+# needs `gtk::init` and a GTK loop on that thread, which GPUI does not run.
+tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 # System-wide hotkey; GPUI has none (ADR-0011).
 global-hotkey = "0.8.0"
 # Launch at login (FR-10), per user; GPUI has none (ADR-0011).
