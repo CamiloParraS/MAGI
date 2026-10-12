@@ -189,8 +189,8 @@ Use **one repository (monorepo)** containing a Cargo workspace (core, CLI, deskt
 
 **Linux (Debian/Ubuntu)**
 
-- `build-essential`, `pkg-config`, and the system libraries GPUI needs for X11, Wayland, fonts and Vulkan/GL. `clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev`, plus `libgtk-3-dev libxdo-dev libayatana-appindicator3-dev` for the tray. Taken from Zed's `script/linux` at `1a28cff`; CI is the check.
-- The tray (`tray-icon`) needs GTK 3 and AppIndicator development packages (e.g. `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libxdo-dev`). **Agents MUST check the `tray-icon` and `global-hotkey` READMEs and Zed's script, and update this list and its Fedora equivalents, the first time the Linux build runs.**
+- `build-essential`, `pkg-config`, and the system libraries GPUI needs for X11, Wayland, fonts and Vulkan/GL. `clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev`. Taken from Zed's `script/linux` at `1a28cff`; CI is the check.
+- The tray (`tray-icon`) uses its `ksni` backend (StatusNotifierItem over D-Bus, pure Rust): no system packages. The default AppIndicator backend is GTK, which needs `gtk::init` and a GTK loop on the main thread; GPUI runs neither, and the app panicked at startup.
 - A Vulkan 1.3 or GL driver at runtime (Mesa is enough on Intel/AMD integrated graphics).
 
 ### 4.4 Bootstrap steps (performed in M0)
@@ -719,7 +719,7 @@ The `platform/` module implements these traits for each OS:
 | inotify limits  | One watch per directory. On `ENOSPC` / "too many watches", mark the root `watch_failed`, fall back to polling, and show guidance: `sysctl fs.inotify.max_user_watches` (and how to persist it). Show the current limit in `magi-cli doctor`. |
 | Wayland hotkeys | Global shortcuts may not work under Wayland. Detect `XDG_SESSION_TYPE=wayland`. If registration fails, show instructions to bind a desktop-environment shortcut to `magi --toggle`.                                                          |
 | `--toggle`      | The first instance listens on a local socket (named pipe on Windows, Unix domain socket elsewhere, via `interprocess`); a second process forwards its args there and exits. Never loopback TCP (NFR-9). Works on all OSes.                   |
-| Tray            | Requires AppIndicator support. GNOME may need the AppIndicator extension. The app MUST remain fully usable without a tray (launcher, hotkey or `--toggle` open search; its gear opens settings).                                                      |
+| Tray            | Requires StatusNotifierItem support. GNOME needs the AppIndicator extension. The app MUST remain fully usable without a tray (launcher, hotkey or `--toggle` open search; its gear opens settings).                                                      |
 | Autostart       | `.desktop` file in `~/.config/autostart` (`auto-launch`).                                                                                                                                                                                    |
 | Priority        | `nice(10)`; optionally `ioprio` idle class.                                                                                                                                                                                                  |
 
