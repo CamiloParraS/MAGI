@@ -455,9 +455,10 @@ fn backdrop_override(var: Option<&str>, detected: BackdropSupport) -> BackdropSu
 /// name (Ctrl, Alt, Shift).
 pub const SYMBOL_MODIFIERS: bool = cfg!(target_os = "macos");
 
-/// A click on a Windows tray icon opens its app; a macOS menu-bar icon
-/// shows its menu, and Linux's AppIndicator reports no clicks at all.
-pub const TRAY_CLICK_OPENS_APP: bool = cfg!(target_os = "windows");
+/// A click on a Windows or Linux (StatusNotifierItem) tray icon opens its
+/// app, the menu staying on the right click; a macOS menu-bar icon shows
+/// its menu.
+pub const TRAY_CLICK_OPENS_APP: bool = cfg!(any(target_os = "windows", target_os = "linux"));
 
 /// The user asked the OS for less motion: Windows' "Show animations" off,
 /// macOS "Reduce motion", GNOME animations off. `false` when unknown.
