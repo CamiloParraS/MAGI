@@ -1,0 +1,53 @@
+name: Screenshots_Debian
+
+# Manual only: launches the desktop app on Debian (a debian:trixie container
+# on a hosted runner, under Xvfb + openbox, Vulkan through Mesa's lavapipe)
+# and photographs onboarding, search and settings in light and dark, over a
+# wallpaper, plus search and settings with the blur forced
+# (.github/scripts/linux-screenshots.sh). The images are the run's
+# `debian-screenshots` artifact.
+on:
+  workflow_dispatch:
+
+jobs:
+  debian:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 67
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates jq \
+            build-essential curl wget file pkg-config libssl-dev \
+            clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1 \
+            libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev \
+            libgtk-3-dev libxdo-dev libayatana-appindicator3-dev \
+            xvfb openbox xdotool imagemagick feh mesa-vulkan-drivers fonts-dejavu
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch PDFium and ONNX Runtime binaries
+        run: |
+          cargo run -p xtask -- fetch-pdfium
+          cargo run -p xtask -- fetch-onnxruntime
+
+      - name: Build
+        run: cargo build -p magi-desktop -p magi-cli
+
+      - name: Take screenshots
+        run: bash .github/scripts/linux-screenshots.sh
+        env:
+          OUT: shots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debian-screenshots
+          path: shots/
+          if-no-files-found: warn
