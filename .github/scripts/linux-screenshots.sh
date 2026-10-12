@@ -55,6 +55,7 @@ launch() {
   pid=$!
   # A debug build on a software renderer takes a while to show its first window.
   sleep 15
+  kill -0 "$pid" 2>/dev/null || { echo "magi exited on launch (its stderr is above)" >&2; exit 1; }
 }
 
 # Click at $1,$2 in the focused window's content (xdotool's --window
