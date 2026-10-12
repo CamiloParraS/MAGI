@@ -16,6 +16,17 @@ mkdir -p "$OUT" "$WORK/corpus"
 export MAGI_FAKE_EMBEDDER=1
 for i in 1 2 3; do echo "note $i about invoices" > "$WORK/corpus/n$i.txt"; done
 
+# A home with the usual user folders, which setup and settings suggest: the
+# container has none, nor the user-dirs.dirs that names them.
+export HOME="$WORK/home"
+mkdir -p "$HOME/.config" "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads" "$HOME/Pictures"
+cat > "$HOME/.config/user-dirs.dirs" <<'EOF'
+XDG_DESKTOP_DIR="$HOME/Desktop"
+XDG_DOCUMENTS_DIR="$HOME/Documents"
+XDG_DOWNLOAD_DIR="$HOME/Downloads"
+XDG_PICTURES_DIR="$HOME/Pictures"
+EOF
+
 # A virtual screen with a window manager, so windows get focus and a frame.
 export DISPLAY=${DISPLAY:-:99}
 Xvfb "$DISPLAY" -screen 0 1920x1080x24 &
