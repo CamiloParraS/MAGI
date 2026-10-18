@@ -8,7 +8,7 @@ mod es;
 use chrono::NaiveDate;
 use icu_calendar::{Date, Gregorian};
 use icu_datetime::FixedCalendarDateTimeFormatter;
-use icu_datetime::fieldsets::YMD;
+use icu_datetime::fieldsets::{MD, YMD};
 use icu_decimal::DecimalFormatter;
 use icu_decimal::input::Decimal;
 use icu_locale_core::{Locale, locale};
@@ -48,6 +48,9 @@ pub struct Strings {
     pub search_failed: &'static str,
     /// After the second failure in a row, above the ways out.
     pub search_still_failing: &'static str,
+    /// Under it, when the error says why.
+    pub search_cause_starting: &'static str,
+    pub search_cause_internal: &'static str,
     pub rebuild_index: &'static str,
     /// Asks before the rebuild: it empties the index.
     pub rebuild_index_confirm: &'static str,
@@ -68,6 +71,12 @@ pub struct Strings {
     pub today: &'static str,
     pub yesterday: &'static str,
     pub source_keyword: &'static str,
+    pub source_keyword_tip: &'static str,
+    pub source_semantic_tip: &'static str,
+    pub source_ocr_tip: &'static str,
+    pub source_visual_tip: &'static str,
+    pub source_qr_tip: &'static str,
+    pub source_filename_tip: &'static str,
     pub source_semantic: &'static str,
     pub source_ocr: &'static str,
     pub source_visual: &'static str,
@@ -331,6 +340,18 @@ impl Strings {
         }
     }
 
+    /// What a match source means, for the tag's tooltip.
+    pub fn source_tip(&self, source: MatchSource) -> &'static str {
+        match source {
+            MatchSource::Keyword => self.source_keyword_tip,
+            MatchSource::Semantic => self.source_semantic_tip,
+            MatchSource::Ocr => self.source_ocr_tip,
+            MatchSource::Visual => self.source_visual_tip,
+            MatchSource::Qr => self.source_qr_tip,
+            MatchSource::Filename => self.source_filename_tip,
+        }
+    }
+
     pub fn feature(&self, feature: Feature) -> &FeatureText {
         match feature {
             Feature::Meaning => &self.meaning,
@@ -402,28 +423,36 @@ impl Lang {
         (if one { p.one } else { p.other }).replace("{n}", &self.number(n))
     }
 
-    /// "today", "yesterday", else the date: one format down the results
+    /// "today", "yesterday", else the date (the year only when it is not
+    /// this one): one format down the results
     /// column, not a relative count that turns into a date at some cutoff.
     pub fn date(self, date: NaiveDate, today: NaiveDate) -> String {
         let s = self.strings();
         match (today - date).num_days() {
             0 => s.today.into(),
             1 => s.yesterday.into(),
-            _ => self.absolute_date(date),
+            _ => self.absolute_date(date, today),
         }
     }
 
-    fn absolute_date(self, date: NaiveDate) -> String {
+    /// "Sep 17" this year, "Sep 17, 2025" before: the year is noise for
+    /// recent files.
+    fn absolute_date(self, date: NaiveDate, today: NaiveDate) -> String {
         use chrono::Datelike as _;
-        let formatter = FixedCalendarDateTimeFormatter::<Gregorian, _>::try_new(
-            self.locale().into(),
-            YMD::medium(),
-        );
-        let icu_date = Date::try_new_gregorian(date.year(), date.month() as u8, date.day() as u8);
-        match (formatter, icu_date) {
-            (Ok(f), Ok(d)) => f.format(&d).to_string(),
-            _ => date.to_string(),
-        }
+        let Ok(icu_date) =
+            Date::try_new_gregorian(date.year(), date.month() as u8, date.day() as u8)
+        else {
+            return date.to_string();
+        };
+        let locale = self.locale().into();
+        let shown = if date.year() == today.year() {
+            FixedCalendarDateTimeFormatter::<Gregorian, _>::try_new(locale, MD::medium())
+                .map(|f| f.format(&icu_date).to_string())
+        } else {
+            FixedCalendarDateTimeFormatter::<Gregorian, _>::try_new(locale, YMD::medium())
+                .map(|f| f.format(&icu_date).to_string())
+        };
+        shown.unwrap_or_else(|_| date.to_string())
     }
 
     /// Download sizes: "812 MB", "1.2 GB" (decimal units, like the OS).
@@ -479,16 +508,18 @@ mod tests {
     }
 
     #[test]
-    fn dates_are_today_or_yesterday_then_absolute() {
+    fn dates_are_today_or_yesterday_then_absolute_with_the_year_only_when_not_this_year() {
         let today = day(2026, 9, 29);
         assert_eq!(Lang::En.date(today, today), "today");
         assert_eq!(Lang::En.date(day(2026, 9, 28), today), "yesterday");
-        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "Sep 17, 2026");
-        assert_eq!(Lang::En.date(day(2026, 8, 18), today), "Aug 18, 2026");
-        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "26 sept 2026");
-        assert_eq!(Lang::Es.date(day(2026, 8, 18), today), "18 ago 2026");
+        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "Sep 17");
+        assert_eq!(Lang::En.date(day(2026, 8, 18), today), "Aug 18");
+        assert_eq!(Lang::En.date(day(2025, 8, 18), today), "Aug 18, 2025");
+        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "26 sept");
+        assert_eq!(Lang::Es.date(day(2026, 8, 18), today), "18 ago");
+        assert_eq!(Lang::Es.date(day(2025, 8, 18), today), "18 ago 2025");
         // A file dated in the future (clock skew) shows its date.
-        assert_eq!(Lang::En.date(day(2026, 10, 2), today), "Oct 2, 2026");
+        assert_eq!(Lang::En.date(day(2026, 10, 2), today), "Oct 2");
     }
 
     #[test]

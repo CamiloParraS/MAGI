@@ -10,7 +10,6 @@ mod setup;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{FeaturesConfig, Onboarding, UiConfig};
@@ -578,7 +577,16 @@ impl Render for OnboardingView {
                     .border_color(p.line)
                     // Why Start is off, or that nothing downloads.
                     .when(self.step == Step::Setup, |bar| {
-                        bar.child(note(&p).mt_0().child(summary))
+                        bar.child(
+                            note(&p)
+                                .mt_0()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(summary),
+                        )
                     })
                     // Back across from the way forward, where wizards keep it.
                     .when(self.step == Step::Indexing, |bar| {
@@ -591,21 +599,7 @@ impl Render for OnboardingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
                         )
                     })
-                    .child(div().flex_1())
-                    // Start with the computer: a choice made at the way
-                    // forward, on by default.
-                    .when(self.step == Step::Setup, |bar| {
-                        bar.child(
-                            Checkbox::new("start-at-login")
-                                .label(s.launch_at_login)
-                                .tooltip(s.launch_at_login_note)
-                                .checked(self.launch_at_login)
-                                .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                                    this.launch_at_login = on;
-                                    cx.notify();
-                                })),
-                        )
-                    })
+                    .when(self.step == Step::Indexing, |bar| bar.child(div().flex_1()))
                     .child(
                         Button::new("next")
                             .when(can_continue, |b| b.cursor_pointer())

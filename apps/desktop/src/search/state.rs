@@ -3,6 +3,18 @@
 
 use magi_core::dto::{ErrorCode, SearchResponse, SearchResult};
 
+use crate::i18n::Strings;
+
+/// One plain sentence for why a search failed, when the error says. Anything
+/// else gets none: the generic line already says it.
+pub fn cause(error: &ErrorCode, s: &Strings) -> Option<&'static str> {
+    match error {
+        ErrorCode::EngineStarting => Some(s.search_cause_starting),
+        ErrorCode::Internal { .. } => Some(s.search_cause_internal),
+        _ => None,
+    }
+}
+
 /// A search to run after the debounce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {
@@ -178,6 +190,17 @@ mod tests {
         let q = s.retry().unwrap();
         s.apply(q.generation, reply(&[1]));
         assert_eq!(s.failures(), 0);
+    }
+
+    #[test]
+    fn only_errors_that_say_why_get_a_cause() {
+        let s = crate::i18n::Lang::En.strings();
+        assert_eq!(
+            cause(&ErrorCode::EngineStarting, s),
+            Some("The search engine is still starting.")
+        );
+        assert!(cause(&ErrorCode::Internal { detail: "x".into() }, s).is_some());
+        assert_eq!(cause(&ErrorCode::FileIdNotFound { file_id: 1 }, s), None);
     }
 
     #[test]

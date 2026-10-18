@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -13,6 +14,7 @@ use super::{COPY_FLASH, LIST_MAX_HEIGHT, SearchView};
 use crate::i18n::Lang;
 use crate::search::highlight;
 use crate::search::hint::hint;
+use crate::search::state::cause;
 use crate::theme::{self, Palette};
 
 impl SearchView {
@@ -100,7 +102,17 @@ impl SearchView {
             } else {
                 s.search_still_failing
             };
-            return Some(block().child(message).child(actions).into_any_element());
+            let why = state
+                .error()
+                .and_then(|e| cause(e, s))
+                .filter(|_| !self.confirm_rebuild);
+            return Some(
+                block()
+                    .child(message)
+                    .children(why.map(|why| crate::ui::note(p).mt_0().child(why)))
+                    .child(actions)
+                    .into_any_element(),
+            );
         }
         if state.query().is_empty() {
             let intro = live
@@ -312,6 +324,14 @@ fn row(
         .map(|&m| s.source(m))
         .collect::<Vec<_>>()
         .join(", ");
+    // What each source means, one per line.
+    let sources_tip: SharedString = r
+        .match_sources
+        .iter()
+        .map(|&m| format!("{}: {}", s.source(m), s.source_tip(m)))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into();
     // Feedback on mouse down; the click opens on release.
     let pressed = Hsla {
         a: p.selection.a * 2.,
@@ -373,7 +393,11 @@ fn row(
                     // detail of the selection.
                     None if !sources.is_empty() => d.child(
                         div()
+                            .id(("match-sources", ix))
                             .text_color(if selected { p.accent } else { p.mute })
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(sources_tip.clone()).build(window, cx)
+                            })
                             .child(sources),
                     ),
                     None => d,

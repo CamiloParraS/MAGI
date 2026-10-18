@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
@@ -274,12 +275,27 @@ impl OnboardingView {
                         self.folders(s, p, cx),
                         p,
                     )))
-                    .child(column().child(section(
-                        s.ob_features,
-                        s.ob_features_note,
-                        self.features(s, p, cx),
-                        p,
-                    ))),
+                    .child(
+                        column()
+                            .child(section(
+                                s.ob_features,
+                                s.ob_features_note,
+                                self.features(s, p, cx),
+                                p,
+                            ))
+                            // Start with the computer: on by default, a quiet
+                            // line under the features rather than a card.
+                            .child(
+                                Checkbox::new("start-at-login")
+                                    .label(s.launch_at_login)
+                                    .tooltip(s.launch_at_login_note)
+                                    .checked(self.launch_at_login)
+                                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                                        this.launch_at_login = on;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
             )
     }
 }
