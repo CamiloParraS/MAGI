@@ -779,6 +779,56 @@ noise, which is expected because neither can match across languages.
 All `cross` numbers earlier in this file were graded with the twin counted
 and are not comparable with these.
 
+## 2026-10-18: image fusion weight, and where the `cross` misses sit
+
+Three changes to how misses are read and ranked. Release build, real models,
+fresh DB.
+
+**`magi-cli eval` explains each hybrid miss.** Under every miss it prints the
+expected file's rank in the keyword, text-vector and visual lists (fetched 500
+deep, past the 100 hybrid reads) and the chunk source that matched. Run
+`just eval-random realistic_names`.
+
+**The 7 `cross` misses (realistic names).** The right file is in the
+text-vector list for all seven, at ranks 14, 17, 18, 21, 23, 27 and 74; the
+keyword and visual lists do not have it. Fusion cannot help, and a reranker
+over the top 30 would reach six of the seven. Prefixes (`query: ` /
+`passage: `), mean pooling, L2 normalisation and best-chunk-per-file in
+`embed/e5.rs` and `search/vector.rs` were checked and are correct, so the
+limit is `multilingual-e5-small` int8 itself. Ticket:
+`docs/tickets/0001-cross-lingual-ranker.md`.
+
+**Image matches were buried: `IMAGE_WEIGHT` 0.8 -> 1.1.** Five image misses
+had the right file at rank 1-2 of the visual list. The visual list already
+passed `IMAGE_MIN_COSINE`, yet at weight 0.8 a visual rank 1 (0.8/61) scored
+like text-vector rank ~17, so image-only matches fell out of the top 10.
+Sweep on realistic names (hybrid):
+
+| Weight | r@5   | MRR   | `en` MRR | `es` MRR | `img` / `img2` r@5 |
+| ------ | ----: | ----: | -------: | -------: | -----------------: |
+| 0.8    | 0.908 | 0.858 |    0.975 |    0.950 |      0.931 / 0.889 |
+| 1.1    | 0.939 | 0.873 |    0.950 |    0.925 |      0.966 / 0.963 |
+| 1.25   | 0.939 | 0.869 |    0.925 |    0.925 |      0.966 / 0.963 |
+| 1.5    | 0.933 | 0.865 |    0.925 |    0.900 |      0.966 / 0.963 |
+| 2.5, 4 | 0.933 | 0.846 |    0.900 |    0.867 |      0.966 / 0.963 |
+
+Above 1.1 nothing more is recovered, and unrelated images start outranking
+text hits ("team meeting notes" returns a photo first); at 1.5 and up the QR
+query `qrwp` falls to rank 7. Kept 1.1. Across the three query files:
+
+| Hybrid, 0.8 -> 1.1 | r@5             | r@10            | MRR             |
+| ------------------ | --------------: | --------------: | --------------: |
+| realistic names    | 0.908 -> 0.939  | 0.908 -> 0.939  | 0.858 -> 0.873  |
+| random names       | 0.896 -> 0.920  | 0.908 -> 0.933  | 0.847 -> 0.862  |
+| named (`just eval`)| 0.982 -> 0.982  | 0.988 -> 0.988  | 0.918 -> 0.901  |
+
+Random names: `img` r@5 0.862 -> 0.966, `img2` 0.944 -> 0.963; four image
+misses fixed. The cost is the named set's MRR (-0.017) and `qr` MRR on
+realistic names (1.0 -> 0.833, still found at r@5). Still missing in all
+three sets: "a Hot Wheels package", and "una moto" / "a hiking trail along a
+grassy ridge" on the name-obfuscated ones; those are the visual model, not
+fusion. SPEC §5.6 step 4 updated.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
