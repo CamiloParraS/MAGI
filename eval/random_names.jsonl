@@ -38,26 +38,26 @@
 {"query": "ayuno analisis de sangre seguro", "lang": "es", "expected": ["f76371615b65de3b.txt"], "notes": "copy of es/cita_medica.txt"}
 {"query": "rotacion de llantas proximo servicio", "lang": "es", "expected": ["65ff88ec495c0414.txt"], "notes": "copy of es/mantenimiento_auto.txt"}
 {"query": "novela de misterio votacion", "lang": "es", "expected": ["5a393d4ff3f59f57.txt"], "notes": "copy of es/club_lectura.txt"}
-{"query": "electrician invoice", "lang": "cross", "expected": ["c3443f03283eaa06.pdf"], "notes": "copy of pdf/factura_electricista.pdf"}
-{"query": "receta de arepas", "lang": "cross", "expected": ["97135c3e8ebd5fee.txt"], "notes": "copy of en/arepas_recipe.txt"}
-{"query": "quarterly financial report", "lang": "cross", "expected": ["53fbbd8257b2cd0f.txt"], "notes": "copy of es/informe_trimestral.txt"}
-{"query": "informe de ingresos trimestrales", "lang": "cross", "expected": ["5f705a2e5458b0fe.pdf"], "notes": "copy of pdf/report.pdf"}
-{"query": "team meeting notes", "lang": "cross", "expected": ["fcc695f2eadd2ed9.txt"], "notes": "copy of es/notas_reunion.txt"}
-{"query": "notas de la reunion de equipo", "lang": "cross", "expected": ["b17c45a75e42ccbc.txt"], "notes": "copy of en/meeting_notes.txt"}
-{"query": "travel itinerary flight hotel", "lang": "cross", "expected": ["c90f34b157b5426c.txt"], "notes": "copy of es/itinerario_viaje.txt"}
-{"query": "itinerario de viaje vuelo hotel", "lang": "cross", "expected": ["abfe3d16df54d6bd.txt"], "notes": "copy of en/travel_itinerary.txt"}
-{"query": "doctor appointment reminder", "lang": "cross", "expected": ["f76371615b65de3b.txt"], "notes": "copy of es/cita_medica.txt"}
-{"query": "cita medica recordatorio", "lang": "cross", "expected": ["a5d1b43ee56bb296.txt"], "notes": "copy of en/doctor_appointment.txt"}
-{"query": "lease agreement rent deposit", "lang": "cross", "expected": ["db03131ad84443b4.txt"], "notes": "copy of es/contrato_alquiler.txt"}
-{"query": "contrato de alquiler deposito", "lang": "cross", "expected": ["831c1334a365bcaf.txt"], "notes": "copy of en/lease_agreement.txt"}
-{"query": "grocery shopping list", "lang": "cross", "expected": ["f95d7b59f4bbf63c.txt"], "notes": "copy of es/lista_compras.txt"}
-{"query": "lista de compras del supermercado", "lang": "cross", "expected": ["d5ac7ef8cdb7c7cd.txt"], "notes": "copy of en/grocery_list.txt"}
-{"query": "software bug report watcher", "lang": "cross", "expected": ["8e625ba35ba1b75b.txt"], "notes": "copy of es/reporte_error.txt"}
-{"query": "reporte de error de software", "lang": "cross", "expected": ["330c366fd863830c.txt"], "notes": "copy of en/bug_report.txt"}
-{"query": "birthday party planning cake", "lang": "cross", "expected": ["5fcc7ad6c955b62d.txt"], "notes": "copy of es/fiesta_cumpleanos.txt"}
-{"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["de6247770860ba40.txt"], "notes": "copy of en/birthday_party.txt"}
-{"query": "car maintenance oil change", "lang": "cross", "expected": ["65ff88ec495c0414.txt"], "notes": "copy of es/mantenimiento_auto.txt"}
-{"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["b7c37a7762bfffa9.txt"], "notes": "copy of en/book_club.txt"}
+{"query": "electrician invoice", "lang": "cross", "expected": ["c3443f03283eaa06.pdf"], "ignore": ["29ab99be9520eacd.txt"], "notes": "copy of pdf/factura_electricista.pdf"}
+{"query": "receta de arepas", "lang": "cross", "expected": ["97135c3e8ebd5fee.txt"], "ignore": ["ee10d00796d70045.txt"], "notes": "copy of en/arepas_recipe.txt"}
+{"query": "quarterly financial report", "lang": "cross", "expected": ["53fbbd8257b2cd0f.txt"], "ignore": ["5f705a2e5458b0fe.pdf"], "notes": "copy of es/informe_trimestral.txt"}
+{"query": "informe de ingresos trimestrales", "lang": "cross", "expected": ["5f705a2e5458b0fe.pdf"], "ignore": ["53fbbd8257b2cd0f.txt"], "notes": "copy of pdf/report.pdf"}
+{"query": "team meeting notes", "lang": "cross", "expected": ["fcc695f2eadd2ed9.txt"], "ignore": ["b17c45a75e42ccbc.txt"], "notes": "copy of es/notas_reunion.txt"}
+{"query": "notas de la reunion de equipo", "lang": "cross", "expected": ["b17c45a75e42ccbc.txt"], "ignore": ["fcc695f2eadd2ed9.txt"], "notes": "copy of en/meeting_notes.txt"}
+{"query": "travel itinerary flight hotel", "lang": "cross", "expected": ["c90f34b157b5426c.txt"], "ignore": ["abfe3d16df54d6bd.txt"], "notes": "copy of es/itinerario_viaje.txt"}
+{"query": "itinerario de viaje vuelo hotel", "lang": "cross", "expected": ["abfe3d16df54d6bd.txt"], "ignore": ["c90f34b157b5426c.txt"], "notes": "copy of en/travel_itinerary.txt"}
+{"query": "doctor appointment reminder", "lang": "cross", "expected": ["f76371615b65de3b.txt"], "ignore": ["a5d1b43ee56bb296.txt"], "notes": "copy of es/cita_medica.txt"}
+{"query": "cita medica recordatorio", "lang": "cross", "expected": ["a5d1b43ee56bb296.txt"], "ignore": ["f76371615b65de3b.txt"], "notes": "copy of en/doctor_appointment.txt"}
+{"query": "lease agreement rent deposit", "lang": "cross", "expected": ["db03131ad84443b4.txt"], "ignore": ["831c1334a365bcaf.txt"], "notes": "copy of es/contrato_alquiler.txt"}
+{"query": "contrato de alquiler deposito", "lang": "cross", "expected": ["831c1334a365bcaf.txt"], "ignore": ["db03131ad84443b4.txt"], "notes": "copy of en/lease_agreement.txt"}
+{"query": "grocery shopping list", "lang": "cross", "expected": ["f95d7b59f4bbf63c.txt"], "ignore": ["d5ac7ef8cdb7c7cd.txt"], "notes": "copy of es/lista_compras.txt"}
+{"query": "lista de compras del supermercado", "lang": "cross", "expected": ["d5ac7ef8cdb7c7cd.txt"], "ignore": ["f95d7b59f4bbf63c.txt"], "notes": "copy of en/grocery_list.txt"}
+{"query": "software bug report watcher", "lang": "cross", "expected": ["8e625ba35ba1b75b.txt"], "ignore": ["330c366fd863830c.txt"], "notes": "copy of es/reporte_error.txt"}
+{"query": "reporte de error de software", "lang": "cross", "expected": ["330c366fd863830c.txt"], "ignore": ["8e625ba35ba1b75b.txt"], "notes": "copy of en/bug_report.txt"}
+{"query": "birthday party planning cake", "lang": "cross", "expected": ["5fcc7ad6c955b62d.txt"], "ignore": ["de6247770860ba40.txt"], "notes": "copy of es/fiesta_cumpleanos.txt"}
+{"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["de6247770860ba40.txt"], "ignore": ["5fcc7ad6c955b62d.txt"], "notes": "copy of en/birthday_party.txt"}
+{"query": "car maintenance oil change", "lang": "cross", "expected": ["65ff88ec495c0414.txt"], "ignore": ["6443a25da3c9aea3.txt"], "notes": "copy of es/mantenimiento_auto.txt"}
+{"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["b7c37a7762bfffa9.txt"], "ignore": ["5a393d4ff3f59f57.txt"], "notes": "copy of en/book_club.txt"}
 {"query": "Calculadora sumar", "lang": "kw", "expected": ["5f65259813f182b8.py"], "notes": "copy of code/muestra.py"}
 {"query": "saludar nombre", "lang": "kw", "expected": ["5f65259813f182b8.py"], "notes": "copy of code/muestra.py"}
 {"query": "struct Point origin", "lang": "kw", "expected": ["780dc5452b4995fa.rs"], "notes": "copy of code/sample.rs"}

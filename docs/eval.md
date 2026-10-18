@@ -691,6 +691,94 @@ hex names to 0.804 / 0.629 but cost the named corpus 0.982 -> 0.957; rejected.)
   beat text-vector junk. With the fix gone every photo is in both lists again,
   so it would be tuning against the accident rather than removing it; not run.
 
+## 2026-10-18: RRF k and list depth sweep (shipped values kept)
+
+The question: does fusing 100-deep lists with k=60 let deep two-list hits
+(a photo at rank 40 in both text-vector and visual) beat a #1 in one list,
+and would shorter lists or a smaller k fix it? Throwaway build (not
+committed): `RRF_K` from an env var, and each list cut to the first `depth`
+files inside `rank_and_boost` before fusion, after the usual 100/100/50
+fetch. One index per corpus, then all 25 configs back to back on it.
+Release, real models. The shipped row reproduces the recorded baselines
+(0.982 / 0.881 named, 0.902 / 0.834 realistic), so the harness is sound.
+
+Hybrid r@5 / MRR (`just eval`, 164 queries, 116 files indexed):
+
+| k \ depth |           100 |            50 |            30 |            10 |
+| --------- | ------------: | ------------: | ------------: | ------------: |
+| **60**    | **0.982 / 0.881** | 0.970 / 0.877 | 0.951 / 0.860 | 0.921 / 0.829 |
+| 30        | 0.982 / 0.883 | 0.970 / 0.883 | 0.951 / 0.867 | 0.921 / 0.840 |
+| 20        | 0.982 / 0.882 | 0.970 / 0.883 | 0.951 / 0.868 | 0.921 / 0.842 |
+| 10        | 0.982 / 0.882 | 0.982 / 0.881 | 0.982 / 0.874 | 0.982 / 0.851 |
+| 5         | 0.982 / 0.877 | 0.982 / 0.876 | 0.982 / 0.874 | 0.982 / 0.853 |
+
+Hybrid r@5 / MRR (`just eval-random realistic_names`, 163 queries):
+
+| k \ depth |           100 |            50 |            30 |            10 |
+| --------- | ------------: | ------------: | ------------: | ------------: |
+| **60**    | **0.902 / 0.834** | 0.773 / 0.715 | 0.681 / 0.623 | 0.571 / 0.519 |
+| 30        | 0.902 / 0.836 | 0.773 / 0.732 | 0.681 / 0.650 | 0.571 / 0.558 |
+| 20        | 0.902 / 0.825 | 0.773 / 0.737 | 0.681 / 0.659 | 0.571 / 0.570 |
+| 10        | 0.926 / 0.763 | 0.926 / 0.735 | 0.920 / 0.685 | 0.920 / 0.608 |
+| 5         | 0.933 / 0.728 | 0.933 / 0.706 | 0.933 / 0.692 | 0.933 / 0.637 |
+
+(Depth 20 is left out of both tables. On the named corpus it equals depth 30
+at every k. On realistic names it falls between depth 30 and depth 10.)
+
+- **Cutting the lists is a loss everywhere, and a collapse on realistic
+  names**: depth 50 at k=60 takes realistic r@5 from 0.902 to 0.773, `img2`
+  from 0.889 to 0.648. The hypothesis was backwards. Photos *depend* on
+  their deep text-vector rank: the visual list alone often does not put the
+  right photo first, and the second list's small contribution is what lifts
+  it. Removing the tail removes the signal, not the noise.
+- **A small k trades MRR for recall on realistic names**: k=5 lifts r@5
+  0.902 -> 0.933 (`img2` 0.889 -> 0.963) but drops MRR 0.834 -> 0.728.
+  A small k makes a top-ranked hit in any single list dominate. More
+  right answers get into the top 5, but fewer of them end up first.
+- **k=30 at depth 100 is the best cell on both corpora, by +0.002 MRR**:
+  one query's worth, inside run-to-run noise. Not worth a constant change.
+- `cross` MRR rises with smaller k on the named corpus (0.363 -> 0.422).
+  As "pricing the boosts" notes, that bucket's MRR has a ceiling near 0.5
+  because a same-language twin correctly ranks first. So this is not
+  evidence on its own.
+
+**Kept: k=60, full 100/100/50 lists.** RRF's shape is not where the
+remaining MRR is. Next candidates: grade `cross` so the twin counts, and a
+reranker over the fused top results (needs an ADR and a model).
+
+## 2026-10-18: `cross` graded without its twin (new baseline)
+
+Every `cross` query has a same-language twin that correctly ranks first
+(`team meeting notes` -> `en/meeting_notes.txt`), which held the bucket's
+MRR near 0.5 whatever the ranking did. Each `cross` query now lists its twin
+under `ignore` (eval/README.md). `magi-cli eval` removes ignored paths from
+the hits before ranking and fetches one extra hit per ignored path, so
+recall@10 still sees ten candidates. Only the 20 `cross` lines changed in
+the three query files, so every other bucket is the same as before. The
+search code is unchanged. Release build, real models, fresh DB:
+
+| Hybrid                  | before r@5 / MRR | **now r@5 / MRR** |
+| ----------------------- | ---------------: | ----------------: |
+| named, `cross`          |    0.900 / 0.363 | **0.900 / 0.667** |
+| named, overall          |    0.982 / 0.881 | **0.982 / 0.918** |
+| realistic, `cross`      |    0.600 / 0.245 | **0.650 / 0.443** |
+| realistic, overall      |    0.902 / 0.834 | **0.908 / 0.858** |
+
+Text-vector-only `cross` (named): r@5 0.900, MRR 0.742, ahead of hybrid's
+0.667. On this bucket the keyword and visual lists only add other-language
+noise, which is expected because neither can match across languages.
+
+- **Named corpus:** the misses are unchanged, `informe de ingresos
+  trimestrales` (not in the top 10) and `doctor appointment reminder` (rank
+  10). The MRR gain is the twin no longer pushing every hit down a rank.
+- **Realistic names:** r@5 0.600 -> 0.650 is one query: its document was
+  rank 6 behind the twin and is now rank 5. Seven queries still miss the top
+  10 even with the twin removed. That is the real cross-lingual gap without
+  helpful names, and the target for a reranker or a stronger embedder.
+
+All `cross` numbers earlier in this file were graded with the twin counted
+and are not comparable with these.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

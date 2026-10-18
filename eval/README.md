@@ -12,6 +12,13 @@
   is here, so adding a bucket needs no code change.
 - `expected` — relative paths (forward slashes, relative to the corpus
   root) of files that count as a correct top-k hit. Usually one path.
+- `ignore` — optional; paths removed from the hit list before ranking,
+  neither right nor wrong. Every `cross` query lists its same-language twin
+  here (`team meeting notes` ignores `en/meeting_notes.txt` and expects
+  `es/notas_reunion.txt`): the twin correctly ranks first, and counting it
+  would cap the bucket's MRR near 0.5 whatever the ranking does. With it,
+  `cross` measures how far up the other-language document gets.
+  `tools/random_names_queries.py` maps these paths to the copies too.
 - `notes` — free text; `"keyword+semantic"` means the query's terms
   literally appear in the document, `"semantic paraphrase"` means they
   don't (only a real embedder can find it), `"cross-lingual"` self-explains.

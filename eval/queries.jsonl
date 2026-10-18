@@ -38,26 +38,26 @@
 {"query": "ayuno analisis de sangre seguro", "lang": "es", "expected": ["es/cita_medica.txt"], "notes": "semantic paraphrase"}
 {"query": "rotacion de llantas proximo servicio", "lang": "es", "expected": ["es/mantenimiento_auto.txt"], "notes": "semantic paraphrase"}
 {"query": "novela de misterio votacion", "lang": "es", "expected": ["es/club_lectura.txt"], "notes": "semantic paraphrase"}
-{"query": "electrician invoice", "lang": "cross", "expected": ["pdf/factura_electricista.pdf"], "notes": "SPEC.md §7 M3 example"}
-{"query": "receta de arepas", "lang": "cross", "expected": ["en/arepas_recipe.txt"], "notes": "SPEC.md §7 M3 example, reverse direction"}
-{"query": "quarterly financial report", "lang": "cross", "expected": ["es/informe_trimestral.txt"], "notes": "cross-lingual"}
-{"query": "informe de ingresos trimestrales", "lang": "cross", "expected": ["pdf/report.pdf"], "notes": "cross-lingual"}
-{"query": "team meeting notes", "lang": "cross", "expected": ["es/notas_reunion.txt"], "notes": "cross-lingual"}
-{"query": "notas de la reunion de equipo", "lang": "cross", "expected": ["en/meeting_notes.txt"], "notes": "cross-lingual"}
-{"query": "travel itinerary flight hotel", "lang": "cross", "expected": ["es/itinerario_viaje.txt"], "notes": "cross-lingual"}
-{"query": "itinerario de viaje vuelo hotel", "lang": "cross", "expected": ["en/travel_itinerary.txt"], "notes": "cross-lingual"}
-{"query": "doctor appointment reminder", "lang": "cross", "expected": ["es/cita_medica.txt"], "notes": "cross-lingual"}
-{"query": "cita medica recordatorio", "lang": "cross", "expected": ["en/doctor_appointment.txt"], "notes": "cross-lingual"}
-{"query": "lease agreement rent deposit", "lang": "cross", "expected": ["es/contrato_alquiler.txt"], "notes": "cross-lingual"}
-{"query": "contrato de alquiler deposito", "lang": "cross", "expected": ["en/lease_agreement.txt"], "notes": "cross-lingual"}
-{"query": "grocery shopping list", "lang": "cross", "expected": ["es/lista_compras.txt"], "notes": "cross-lingual"}
-{"query": "lista de compras del supermercado", "lang": "cross", "expected": ["en/grocery_list.txt"], "notes": "cross-lingual"}
-{"query": "software bug report watcher", "lang": "cross", "expected": ["es/reporte_error.txt"], "notes": "cross-lingual"}
-{"query": "reporte de error de software", "lang": "cross", "expected": ["en/bug_report.txt"], "notes": "cross-lingual"}
-{"query": "birthday party planning cake", "lang": "cross", "expected": ["es/fiesta_cumpleanos.txt"], "notes": "cross-lingual"}
-{"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["en/birthday_party.txt"], "notes": "cross-lingual"}
-{"query": "car maintenance oil change", "lang": "cross", "expected": ["es/mantenimiento_auto.txt"], "notes": "cross-lingual"}
-{"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["en/book_club.txt"], "notes": "cross-lingual"}
+{"query": "electrician invoice", "lang": "cross", "expected": ["pdf/factura_electricista.pdf"], "ignore": ["en/electrician_invoice.txt"], "notes": "SPEC.md §7 M3 example"}
+{"query": "receta de arepas", "lang": "cross", "expected": ["en/arepas_recipe.txt"], "ignore": ["es/receta_arepas.txt"], "notes": "SPEC.md §7 M3 example, reverse direction"}
+{"query": "quarterly financial report", "lang": "cross", "expected": ["es/informe_trimestral.txt"], "ignore": ["pdf/report.pdf"], "notes": "cross-lingual"}
+{"query": "informe de ingresos trimestrales", "lang": "cross", "expected": ["pdf/report.pdf"], "ignore": ["es/informe_trimestral.txt"], "notes": "cross-lingual"}
+{"query": "team meeting notes", "lang": "cross", "expected": ["es/notas_reunion.txt"], "ignore": ["en/meeting_notes.txt"], "notes": "cross-lingual"}
+{"query": "notas de la reunion de equipo", "lang": "cross", "expected": ["en/meeting_notes.txt"], "ignore": ["es/notas_reunion.txt"], "notes": "cross-lingual"}
+{"query": "travel itinerary flight hotel", "lang": "cross", "expected": ["es/itinerario_viaje.txt"], "ignore": ["en/travel_itinerary.txt"], "notes": "cross-lingual"}
+{"query": "itinerario de viaje vuelo hotel", "lang": "cross", "expected": ["en/travel_itinerary.txt"], "ignore": ["es/itinerario_viaje.txt"], "notes": "cross-lingual"}
+{"query": "doctor appointment reminder", "lang": "cross", "expected": ["es/cita_medica.txt"], "ignore": ["en/doctor_appointment.txt"], "notes": "cross-lingual"}
+{"query": "cita medica recordatorio", "lang": "cross", "expected": ["en/doctor_appointment.txt"], "ignore": ["es/cita_medica.txt"], "notes": "cross-lingual"}
+{"query": "lease agreement rent deposit", "lang": "cross", "expected": ["es/contrato_alquiler.txt"], "ignore": ["en/lease_agreement.txt"], "notes": "cross-lingual"}
+{"query": "contrato de alquiler deposito", "lang": "cross", "expected": ["en/lease_agreement.txt"], "ignore": ["es/contrato_alquiler.txt"], "notes": "cross-lingual"}
+{"query": "grocery shopping list", "lang": "cross", "expected": ["es/lista_compras.txt"], "ignore": ["en/grocery_list.txt"], "notes": "cross-lingual"}
+{"query": "lista de compras del supermercado", "lang": "cross", "expected": ["en/grocery_list.txt"], "ignore": ["es/lista_compras.txt"], "notes": "cross-lingual"}
+{"query": "software bug report watcher", "lang": "cross", "expected": ["es/reporte_error.txt"], "ignore": ["en/bug_report.txt"], "notes": "cross-lingual"}
+{"query": "reporte de error de software", "lang": "cross", "expected": ["en/bug_report.txt"], "ignore": ["es/reporte_error.txt"], "notes": "cross-lingual"}
+{"query": "birthday party planning cake", "lang": "cross", "expected": ["es/fiesta_cumpleanos.txt"], "ignore": ["en/birthday_party.txt"], "notes": "cross-lingual"}
+{"query": "planificacion de fiesta de cumpleanos", "lang": "cross", "expected": ["en/birthday_party.txt"], "ignore": ["es/fiesta_cumpleanos.txt"], "notes": "cross-lingual"}
+{"query": "car maintenance oil change", "lang": "cross", "expected": ["es/mantenimiento_auto.txt"], "ignore": ["en/car_maintenance.txt"], "notes": "cross-lingual"}
+{"query": "club de lectura discusion del libro", "lang": "cross", "expected": ["en/book_club.txt"], "ignore": ["es/club_lectura.txt"], "notes": "cross-lingual"}
 {"query": "Calculadora sumar", "lang": "kw", "expected": ["code/muestra.py"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "saludar nombre", "lang": "kw", "expected": ["code/muestra.py"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}
 {"query": "struct Point origin", "lang": "kw", "expected": ["code/sample.rs"], "notes": "keyword-decisive: rare literal token, thin semantic signal"}

@@ -52,6 +52,10 @@ with open("eval/queries.jsonl", encoding="utf-8") as src, open(
             raise SystemExit(f"no copy of {query['expected']} for {query['query']!r}")
         query["notes"] = f"copy of {', '.join(query['expected'])}"
         query["expected"] = expected
+        if "ignore" in query:
+            query["ignore"] = [
+                name for e in query["ignore"] if e in original for name in copies[original[e]]
+            ]
         out.write(json.dumps(query, ensure_ascii=False) + "\n")
         written += 1
 

@@ -18,6 +18,10 @@ struct EvalQuery {
     query: String,
     lang: String,
     expected: Vec<String>,
+    /// Hits that are neither right nor wrong, removed before ranking: a
+    /// `cross` query's same-language twin, which correctly ranks first.
+    #[serde(default)]
+    ignore: Vec<String>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -76,11 +80,13 @@ fn relative_slash_path(path: &Path, corpus_dir: &Path) -> String {
         .join("/")
 }
 
-/// 1-based rank of the first hit whose path is in `expected`, if any.
-fn first_match_rank(hit_paths: &[String], expected: &[String]) -> Option<usize> {
+/// 1-based rank of the first hit whose path is in `expected`, if any, with
+/// the `ignore`d hits taken out of the list first.
+fn first_match_rank(hit_paths: &[String], expected: &[String], ignore: &[String]) -> Option<usize> {
     hit_paths
         .iter()
-        .position(|p| expected.iter().any(|e| e == p))
+        .filter(|p| !ignore.contains(p))
+        .position(|p| expected.contains(p))
         .map(|i| i + 1)
 }
 
@@ -123,6 +129,8 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         let mut by_lang: BTreeMap<String, Accum> = BTreeMap::new();
 
         for q in &queries {
+            // An ignored hit must not cost the query a top-10 slot.
+            let limit = FETCH_LIMIT + q.ignore.len() as u32;
             // All three modes go through `rank_and_boost`, so the
             // baselines are the same ranking function as hybrid with one
             // input list emptied — not a different one. Comparing raw
@@ -132,12 +140,12 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
             let hits = match mode {
                 "fts" => {
                     let fts = search_fts(&conn, &q.query, search::FTS_FETCH_LIMIT)?;
-                    search::rank_and_boost(&q.query, &fts, &[], &[], FETCH_LIMIT)
+                    search::rank_and_boost(&q.query, &fts, &[], &[], limit)
                 }
                 "vector" => {
                     let embedding = embedder.embed_query(&q.query)?;
                     let vector = search_vector_text(&conn, &embedding, search::VECTOR_FETCH_LIMIT)?;
-                    search::rank_and_boost(&q.query, &[], &vector, &[], FETCH_LIMIT)
+                    search::rank_and_boost(&q.query, &[], &vector, &[], limit)
                 }
                 "visual" => {
                     let embedding = image_embedder.embed_query(&q.query)?;
@@ -147,14 +155,14 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                         search::IMAGE_FETCH_LIMIT,
                         search::IMAGE_MIN_COSINE,
                     )?;
-                    search::rank_and_boost(&q.query, &[], &[], &visual, FETCH_LIMIT)
+                    search::rank_and_boost(&q.query, &[], &[], &visual, limit)
                 }
                 "hybrid" => search::hybrid_search(
                     &conn,
                     Some(embedder.as_ref()),
                     Some(image_embedder.as_ref()),
                     &q.query,
-                    FETCH_LIMIT,
+                    limit,
                 )?,
                 _ => unreachable!(),
             };
@@ -163,7 +171,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                 .map(|h| relative_slash_path(&h.path, &root.path))
                 .collect();
 
-            let rank = first_match_rank(&hit_paths, &q.expected);
+            let rank = first_match_rank(&hit_paths, &q.expected, &q.ignore);
             // Bucket averages hide which query failed; list the misses.
             if mode == "hybrid" && rank.is_none_or(|r| r > 5) {
                 println!(
@@ -184,4 +192,22 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(p: &[&str]) -> Vec<String> {
+        p.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn ignored_hits_do_not_take_a_rank() {
+        let hits = paths(&["en/meeting_notes.txt", "es/notas_reunion.txt"]);
+        let expected = paths(&["es/notas_reunion.txt"]);
+        assert_eq!(first_match_rank(&hits, &expected, &[]), Some(2));
+        let ignore = paths(&["en/meeting_notes.txt"]);
+        assert_eq!(first_match_rank(&hits, &expected, &ignore), Some(1));
+    }
 }
