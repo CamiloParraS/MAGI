@@ -640,7 +640,7 @@ Rules:
    - (b) `vec_text` KNN, top 100, using `"query: " + q` through e5.
    - (c) `vec_image` KNN, top 50, using the SigLIP text tower.
 3. **Aggregate to files:** each file's score in each list is its best chunk rank.
-4. **Fuse** with Reciprocal Rank Fusion: `score = Σ w_i / (60 + rank_i)`. Default weights: BM25 1.0, text 1.0, image 0.8. Make them configurable internally, not in the UI.
+4. **Fuse** with Reciprocal Rank Fusion: `score = Σ w_i / (60 + rank_i)`. Default weights: BM25 1.0, text 1.0, image 1.1 (was 0.8; see `IMAGE_WEIGHT`). Make them configurable internally, not in the UI.
 5. **Boosts:** filename-token overlap (×1.2 max) and mild recency (≤ ×1.1 for files modified in the last 30 days).
 6. **Snippet:** use the best-matching chunk. For BM25 hits, use FTS5 `snippet()` with highlight markers. For vector-only hits, show the chunk's first ~200 characters. OCR snippets are labeled "Text in image"; QR snippets "QR code".
 7. Return the top `max_results` files.

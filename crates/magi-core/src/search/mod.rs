@@ -29,8 +29,12 @@ pub const IMAGE_FETCH_LIMIT: u32 = 50;
 /// the weakest non-OCR one is ~0.105. Tied to the model: recalibrate when the
 /// image model changes.
 pub const IMAGE_MIN_COSINE: f32 = 0.10;
-/// SPEC.md §5.6 step 4: the visual list counts for less than text.
-const IMAGE_WEIGHT: f64 = 0.8;
+/// A visual match already passed `IMAGE_MIN_COSINE`, so its list counts a
+/// touch more than text: at 0.8 a rank-1 image lost to text-vector rank ~17
+/// and fell out of the top 10. Swept on realistic_names: 1.1 recovers all
+/// of the gain (hybrid recall@5 0.908 -> 0.939); 1.5+ adds nothing and
+/// pushes unrelated images above text hits (en/es MRR drops).
+const IMAGE_WEIGHT: f64 = 1.1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {

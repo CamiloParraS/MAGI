@@ -6,12 +6,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
+use magi_core::search::FileHit;
 use magi_core::search::fts::search_fts;
 use magi_core::search::vector::{search_vector_image, search_vector_text};
 use magi_core::{config, db, search};
 use serde::Deserialize;
 
 const FETCH_LIMIT: u32 = 10;
+/// Files fetched per list when explaining a miss: past the 100 hybrid reads,
+/// so "beyond 100" and "not found" differ. Corpora here are ~120 files.
+const DIAGNOSE_DEPTH: u32 = 500;
 
 #[derive(Deserialize)]
 struct EvalQuery {
@@ -78,6 +82,28 @@ fn relative_slash_path(path: &Path, corpus_dir: &Path) -> String {
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// `expected`'s rank in one input list as `"<rank> (<chunk source>)"`, or
+/// `"-"` when the list does not have it. Ignored hits take no rank.
+fn list_rank(hits: &[FileHit], corpus_dir: &Path, q: &EvalQuery) -> String {
+    let paths: Vec<String> = hits
+        .iter()
+        .map(|h| relative_slash_path(&h.path, corpus_dir))
+        .collect();
+    match first_match_rank(&paths, &q.expected, &q.ignore) {
+        Some(rank) => {
+            let hit = hits.iter().find(|h| {
+                q.expected
+                    .contains(&relative_slash_path(&h.path, corpus_dir))
+            });
+            match hit.and_then(|h| h.source) {
+                Some(source) => format!("{rank} ({source:?})"),
+                None => rank.to_string(),
+            }
+        }
+        None => "-".to_string(),
+    }
 }
 
 /// 1-based rank of the first hit whose path is in `expected`, if any, with
@@ -179,6 +205,24 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                     q.lang,
                     q.query,
                     hit_paths.first().map_or("-", String::as_str)
+                );
+                // Where the answer sits in each input list, fetched past
+                // what hybrid reads: tells "fusion buried it" from "no list
+                // found it", e.g. reranker vs. embedder work.
+                let fts = search_fts(&conn, &q.query, DIAGNOSE_DEPTH)?;
+                let vector =
+                    search_vector_text(&conn, &embedder.embed_query(&q.query)?, DIAGNOSE_DEPTH)?;
+                let visual = search_vector_image(
+                    &conn,
+                    &image_embedder.embed_query(&q.query)?,
+                    DIAGNOSE_DEPTH,
+                    search::IMAGE_MIN_COSINE,
+                )?;
+                println!(
+                    "    lists: keyword {}, text-vector {}, visual {}",
+                    list_rank(&fts, &root.path, q),
+                    list_rank(&vector, &root.path, q),
+                    list_rank(&visual, &root.path, q),
                 );
             }
             overall.add(rank);
