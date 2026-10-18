@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -34,9 +34,40 @@ impl SearchView {
                 .text_color(p.mute)
         };
         if state.error().is_some() {
-            return Some(
-                block()
-                    .child(s.search_failed)
+            // The first failure retries by itself and only says so; the
+            // second leaves ways out, the input still taking new text.
+            if state.failures() < 2 {
+                return Some(block().child(s.search_failed).into_any_element());
+            }
+            let actions = if self.confirm_rebuild {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("rebuild-confirm")
+                            .cursor_pointer()
+                            .danger()
+                            .small()
+                            .label(s.rebuild_index)
+                            .on_click(cx.listener(|this, _, _, cx| this.rebuild_index(cx))),
+                    )
+                    .child(
+                        Button::new("rebuild-cancel")
+                            .cursor_pointer()
+                            .ghost()
+                            .small()
+                            .label(s.cancel)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.confirm_rebuild = false;
+                                cx.notify();
+                            })),
+                    )
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .child(
                         Button::new("retry")
                             .cursor_pointer()
@@ -44,8 +75,32 @@ impl SearchView {
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
                     )
-                    .into_any_element(),
-            );
+                    .child(
+                        Button::new("rebuild")
+                            .cursor_pointer()
+                            .ghost()
+                            .small()
+                            .label(s.rebuild_index)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.confirm_rebuild = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("open-logs")
+                            .cursor_pointer()
+                            .ghost()
+                            .small()
+                            .label(s.open_logs)
+                            .on_click(|_, _, cx| cx.reveal_path(&crate::logging::path())),
+                    )
+            };
+            let message = if self.confirm_rebuild {
+                s.rebuild_index_confirm
+            } else {
+                s.search_still_failing
+            };
+            return Some(block().child(message).child(actions).into_any_element());
         }
         if state.query().is_empty() {
             let intro = live
@@ -69,6 +124,16 @@ impl SearchView {
             return Some(
                 block()
                     .children(intro)
+                    .child(
+                        Button::new("example")
+                            .cursor_pointer()
+                            .ghost()
+                            .small()
+                            .label(s.try_example.replace("{q}", s.example_query))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.try_example(window, cx)),
+                            ),
+                    )
                     .children(indexing)
                     .into_any_element(),
             );
@@ -200,8 +265,18 @@ fn row(
             s.page.replace("{n}", &lang.number(n.max(0) as u64))
         ))
     });
-    let detail = match (&r.snippet, selected) {
-        (Some(snippet), true) => div()
+    // The same detail whether selected or not, so the list does not change
+    // height as the selection moves. A snippet leaves no room for the path,
+    // so the folder's name follows the file's instead.
+    let folder = r.snippet.is_some().then(|| {
+        div()
+            .min_w_0()
+            .truncate()
+            .text_color(p.mute)
+            .child(format!("  ·  {}", folder_name(&r.path)))
+    });
+    let detail = match &r.snippet {
+        Some(snippet) => div()
             .mt(px(2.))
             .text_size(px(12.5))
             .line_height(relative(1.45))
@@ -220,7 +295,7 @@ fn row(
                     ),
                 ),
             ),
-        _ => div()
+        None => div()
             .text_xs()
             .text_color(p.mute)
             .overflow_hidden()
@@ -268,7 +343,8 @@ fn row(
                         .flex()
                         .min_w_0()
                         .child(div().truncate().child(r.file_name.clone()))
-                        .children(page),
+                        .children(page)
+                        .children(folder),
                 )
                 .child(detail),
         )
@@ -293,24 +369,28 @@ fn row(
                             .child(s.row_copied),
                         ("row-copied", n),
                     )),
-                    None if selected && !sources.is_empty() => {
-                        d.child(div().text_color(p.accent).child(sources))
-                    }
+                    // On every row: why it matched is the product, not a
+                    // detail of the selection.
+                    None if !sources.is_empty() => d.child(
+                        div()
+                            .text_color(if selected { p.accent } else { p.mute })
+                            .child(sources),
+                    ),
                     None => d,
                 }),
         )
 }
 
 fn icon(r: &SearchResult) -> AnyElement {
-    let kind = r.kind;
+    let (kind, name) = (r.kind, r.file_name.clone());
     match &r.thumb_path {
         Some(path) => img(PathBuf::from(path))
             .size(px(32.))
             .rounded(px(3.))
             .object_fit(ObjectFit::Cover)
-            .with_fallback(move || theme::kind_glyph(kind, px(32.)).into_any_element())
+            .with_fallback(move || theme::file_glyph(kind, &name, px(32.)).into_any_element())
             .into_any_element(),
-        None => theme::kind_glyph(kind, px(32.)).into_any_element(),
+        None => theme::file_glyph(kind, &name, px(32.)).into_any_element(),
     }
 }
 
@@ -318,6 +398,15 @@ fn folder_of(path: &str) -> String {
     Path::new(path)
         .parent()
         .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// The name of the folder a file is in.
+fn folder_name(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 

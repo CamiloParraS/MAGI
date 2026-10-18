@@ -6,14 +6,14 @@
 
 mod finish;
 mod setup;
-mod strip;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::config::{Onboarding, UiConfig};
+use magi_core::config::{FeaturesConfig, Onboarding, UiConfig};
 use magi_core::dto::{ErrorCode, FeatureStatus, IndexState, IndexStatus, Install, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
@@ -26,7 +26,7 @@ use crate::live::Live;
 use crate::settings::{error_text, turn_on};
 use crate::theme::{self, Palette};
 use crate::ui::folders::pick_folders;
-use crate::ui::note;
+use crate::ui::{note, warn_note};
 
 pub const SIZE: Size<Pixels> = size(px(880.), px(600.));
 /// The smallest the window resizes to: below this width the two columns and
@@ -64,12 +64,14 @@ impl From<Onboarding> for Step {
     }
 }
 
-/// The features checked when the step opens: what the config wants, which
-/// by default is ADR-0010's selection (meaning and image text).
+/// The features checked when the step opens: the ones labelled Recommended
+/// (ADR-0010's selection: meaning and image text), whatever the config says
+/// until the user confirms.
 pub fn preselected(features: &[FeatureStatus]) -> Vec<Feature> {
+    let recommended = FeaturesConfig::default();
     features
         .iter()
-        .filter(|f| f.enabled)
+        .filter(|f| recommended.enabled(f.feature))
         .map(|f| f.feature)
         .collect()
 }
@@ -183,8 +185,6 @@ pub struct OnboardingView {
     recording: bool,
     /// The modifiers held down, lit on the finish screen's keycaps.
     held: Modifiers,
-    /// The window title last set; it follows the step.
-    title: &'static str,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -246,7 +246,6 @@ impl OnboardingView {
             recorder: cx.focus_handle(),
             recording: false,
             held: Modifiers::default(),
-            title: "",
             _subscriptions: subscriptions,
         };
         window.focus(&view.focus, cx);
@@ -311,7 +310,9 @@ impl OnboardingView {
         }
         match self.step {
             Step::Setup => {
-                let changes = feature_changes(&self.live.read(cx).features, &self.chosen(cx));
+                let chosen = self.chosen(cx);
+                let changes = feature_changes(&self.live.read(cx).features, &chosen);
+                self.chosen = Some(chosen);
                 let ui = json!({
                     "launch_at_login": self.launch_at_login,
                     "onboarding": Onboarding::Done,
@@ -465,23 +466,16 @@ impl OnboardingView {
 }
 
 impl Render for OnboardingView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
-        let title = match self.step {
-            Step::Setup => s.welcome,
-            Step::Indexing => s.ob_done,
-        };
-        if self.title != title {
-            window.set_window_title(title);
-            self.title = title;
-        }
         let body = match self.step {
             Step::Setup => self.setup(s, &p, cx),
             Step::Indexing => self.indexing(s, &p, cx),
         };
         let can_continue = self.can_continue(cx);
         let no_folder = self.roots(cx).is_none_or(|roots| roots.is_empty());
+        let folder_count = self.roots(cx).map_or(0, |roots| roots.len());
         let total = download_total(&self.live.read(cx).features, &self.chosen(cx));
         // The consent is the button: it says what agreeing downloads.
         let next_label: SharedString = match self.step {
@@ -491,6 +485,22 @@ impl Render for OnboardingView {
                 .into(),
             Step::Setup => s.ob_start.into(),
             Step::Indexing => s.ob_start_searching.into(),
+        };
+        // What Start sets up, in one line: the folders and the download.
+        let summary: SharedString = if no_folder {
+            s.ob_need_folder.into()
+        } else {
+            let lang = self.live.read(cx).lang;
+            let folders = lang.plural(&s.ob_folder_count, folder_count as u64);
+            if total > 0 {
+                format!(
+                    "{folders} · {}",
+                    s.ob_download_size.replace("{size}", &lang.size(total))
+                )
+            } else {
+                format!("{folders} · {}", s.ob_nothing_to_download)
+            }
+            .into()
         };
         // A soft wash of the accent behind the top of the window: light mode
         // otherwise has no color but the button.
@@ -551,12 +561,11 @@ impl Render for OnboardingView {
                     .flex_col()
                     .when(self.step == Step::Indexing, |d| d.justify_center())
                     .child(slide_in(body, self.step, self.forward))
-                    .children(self.error.as_ref().map(|error| {
-                        note(&p)
-                            .mt(px(10.))
-                            .text_color(p.warn)
-                            .child(error_text(error, s))
-                    })),
+                    .children(
+                        self.error
+                            .as_ref()
+                            .map(|error| warn_note(&p, error_text(error, s)).mt(px(10.))),
+                    ),
             )
             .child(
                 div()
@@ -569,12 +578,7 @@ impl Render for OnboardingView {
                     .border_color(p.line)
                     // Why Start is off, or that nothing downloads.
                     .when(self.step == Step::Setup, |bar| {
-                        let hint = if no_folder {
-                            Some(s.ob_need_folder)
-                        } else {
-                            (total == 0).then_some(s.ob_nothing_to_download)
-                        };
-                        bar.children(hint.map(|h| note(&p).mt_0().child(h)))
+                        bar.child(note(&p).mt_0().child(summary))
                     })
                     // Back across from the way forward, where wizards keep it.
                     .when(self.step == Step::Indexing, |bar| {
@@ -588,6 +592,20 @@ impl Render for OnboardingView {
                         )
                     })
                     .child(div().flex_1())
+                    // Start with the computer: a choice made at the way
+                    // forward, on by default.
+                    .when(self.step == Step::Setup, |bar| {
+                        bar.child(
+                            Checkbox::new("start-at-login")
+                                .label(s.launch_at_login)
+                                .tooltip(s.launch_at_login_note)
+                                .checked(self.launch_at_login)
+                                .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                                    this.launch_at_login = on;
+                                    cx.notify();
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("next")
                             .when(can_continue, |b| b.cursor_pointer())
@@ -604,10 +622,6 @@ impl Render for OnboardingView {
 /// How long a screen takes to slide in; onboarding is seen once, so a
 /// little longer than [`theme::FADE`].
 const STEP_IN: Duration = Duration::from_millis(220);
-
-/// Three folders stacked, drawn after Lucide's `folders` (which stops at
-/// two); served by the app's assets.
-pub const FOLDERS_3: &str = "icons/magi-folders-3.svg";
 
 /// A screen's body fades in from 8px toward where it came from: forward
 /// from the right, back from the left. Under reduced motion GPUI shows the

@@ -119,6 +119,13 @@ impl SettingsView {
                 suggested_folders(offered, s, p, cx, Self::add_folders)
                     .map(|chips| chips.mt(px(12.)))
             }))
+            .child(
+                div()
+                    .mt(px(16.))
+                    .mb(px(8.))
+                    .child(subheading(s.what_to_index, p)),
+            )
+            .child(self.what_to_index(s, p, cx))
             .child(self.advanced(s, p, cx))
     }
 

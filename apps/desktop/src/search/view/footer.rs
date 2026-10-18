@@ -3,6 +3,7 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::{IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
@@ -24,22 +25,21 @@ impl SearchView {
                 .child(p.dot(status_tone(st)))
                 .child(div().truncate().child(status_line(st, lang)))
         });
-        let pairs: &[(&str, &'static str)] = if self.state.results().is_empty() {
-            &[("escape", s.close)]
-        } else {
-            &[
-                ("enter", s.open),
-                ("secondary-enter", s.reveal),
-                (
-                    COPY_KEY,
-                    if self.copied.is_some() {
-                        s.copied
-                    } else {
-                        s.copy_path
-                    },
-                ),
-            ]
-        };
+        // Always shown, so they are learned in the empty window; dimmed while
+        // there is no result to act on.
+        let idle = self.state.results().is_empty();
+        let pairs: &[(&str, &'static str)] = &[
+            ("enter", s.open),
+            ("secondary-enter", s.reveal),
+            (
+                COPY_KEY,
+                if self.copied.is_some() {
+                    s.copied
+                } else {
+                    s.copy_path
+                },
+            ),
+        ];
         div()
             .flex()
             .items_center()
@@ -63,11 +63,22 @@ impl SearchView {
                     })),
             )
             .child(div().flex_1().min_w_0().children(status))
-            .child(keys(
-                pairs,
-                self.copied.is_some().then_some((self.copies, p)),
-            ))
+            .child(
+                keys(pairs, self.copied.is_some().then_some((self.copies, p)))
+                    .when(idle, |keys| keys.opacity(0.7))
+                    .child(esc_key(p)),
+            )
     }
+}
+
+/// Escape closes the window; a plain `esc` keycap says so without a label.
+fn esc_key(p: &Palette) -> Div {
+    div()
+        .px(px(5.))
+        .rounded(px(3.))
+        .border_1()
+        .border_color(p.line)
+        .child("esc")
 }
 
 /// Key hints; `keys` are GPUI keystrokes (`secondary` is Ctrl, or Cmd on

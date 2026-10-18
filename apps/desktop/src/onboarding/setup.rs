@@ -236,24 +236,6 @@ impl OnboardingView {
         grouped(p, rows)
     }
 
-    /// "Start with your computer" (FR-10), on by default.
-    fn launch_row(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        group(p).child(
-            row(IconName::Power, s.launch_at_login, None, p).child(
-                Switch::new("start-at-login")
-                    .cursor_pointer()
-                    .checked(self.launch_at_login)
-                    .color(p.accent)
-                    .tooltip(s.launch_at_login_note)
-                    .accessibility_label(s.launch_at_login)
-                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                        this.launch_at_login = on;
-                        cx.notify();
-                    })),
-            ),
-        )
-    }
-
     /// The one setup screen: the welcome over two columns, folders on the
     /// left, features and startup on the right.
     pub(super) fn setup(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -265,7 +247,22 @@ impl OnboardingView {
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(heading(s.welcome).mb_0().text_center().text_size(px(26.)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(heading(s.welcome).mb_0().text_center().text_size(px(26.)))
+                    // The promise first: this is a consent screen.
+                    .child(
+                        note(p)
+                            .mt_0()
+                            .text_center()
+                            .text_size(px(14.))
+                            .child(s.ob_privacy),
+                    ),
+            )
             .child(
                 div()
                     .flex()
@@ -277,17 +274,12 @@ impl OnboardingView {
                         self.folders(s, p, cx),
                         p,
                     )))
-                    .child(
-                        column()
-                            .child(section(
-                                s.ob_features,
-                                s.ob_features_note,
-                                self.features(s, p, cx),
-                                p,
-                            ))
-                            .child(self.launch_row(s, p, cx))
-                            .child(self.strip(s, p, cx)),
-                    ),
+                    .child(column().child(section(
+                        s.ob_features,
+                        s.ob_features_note,
+                        self.features(s, p, cx),
+                        p,
+                    ))),
             )
     }
 }

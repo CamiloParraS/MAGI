@@ -354,7 +354,7 @@ impl Shell {
     fn open_onboarding(&mut self, cx: &mut App) {
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some(self.live.read(cx).lang.strings().welcome.into()),
+                title: Some("Magi".into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -477,11 +477,6 @@ struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        if path == crate::onboarding::FOLDERS_3 {
-            return Ok(Some(
-                include_bytes!("../assets/folders-3.svg").as_slice().into(),
-            ));
-        }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets.load(path),

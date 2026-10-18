@@ -17,7 +17,7 @@ use crate::i18n::Strings;
 use crate::settings::hotkey_keystroke;
 use crate::theme::{self, Palette, Tone};
 use crate::ui::keycaps::{key_caps, keycap};
-use crate::ui::{card, heading, note};
+use crate::ui::{card, heading, note, warn_note};
 
 impl OnboardingView {
     fn hotkey_tried(&self, cx: &App) -> bool {
@@ -310,7 +310,8 @@ impl OnboardingView {
             .iter()
             .filter(|f| matches!(f.install, Install::Failed { .. }))
             .map(|f| {
-                note(p).text_color(p.warn).child(
+                warn_note(
+                    p,
                     s.ob_download_failed
                         .replace("{name}", s.feature(f.feature).name),
                 )

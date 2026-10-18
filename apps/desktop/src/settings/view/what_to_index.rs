@@ -4,7 +4,6 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::switch::Switch;
@@ -21,27 +20,7 @@ use crate::settings::{
     max_size_from_text, toggle_kind,
 };
 use crate::theme::{self, Palette};
-use crate::ui::{grouped, note, row_icon, stack};
-
-/// `el` styled for `on` (`style` takes 0 for off, 1 for on). Right after a
-/// click it plays there from the other state, over [`theme::FADE`].
-fn toggled(
-    el: Div,
-    touched: bool,
-    on: bool,
-    id: impl Into<ElementId>,
-    style: impl Fn(Div, f32) -> Div + 'static,
-) -> AnyElement {
-    if !touched {
-        return style(el, f32::from(u8::from(on))).into_any_element();
-    }
-    el.with_animation(
-        id,
-        Animation::new(theme::FADE).with_easing(ease_out_quint()),
-        move |el, t| style(el, if on { t } else { 1. - t }),
-    )
-    .into_any_element()
-}
+use crate::ui::{grouped, note, row_icon, stack, warn_note};
 
 impl SettingsView {
     pub(super) fn save_max_size(
@@ -85,151 +64,49 @@ impl SettingsView {
     pub(super) fn what_to_index(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let types = &self.indexing.file_types;
         let images_needed = images_needed(types, &self.live.read(cx).features);
-        let kinds = FILE_TYPES.into_iter().map(|kind| {
+        // One grouped list, as the search features above: a type's glyph, its
+        // name and extensions, then the switch.
+        let rows = FILE_TYPES.into_iter().map(|kind| {
             let on = types.contains(&kind);
-            let (accent, line) = (p.accent, p.line);
-            // Only a tile just clicked animates (the frame, the tick and the
-            // glyph, both ways); opening the section shows each as it is.
-            let touched = self.kinds_touched.contains(&kind);
-            let key = kind as usize * 2 + usize::from(on);
-            let frame = (on || touched).then(|| {
-                toggled(
-                    div().absolute().inset_0().rounded(px(8.)).border_1(),
-                    touched,
-                    on,
-                    ("kind-frame", key),
-                    move |el, a| {
-                        el.border_color(accent.opacity(a))
-                            .bg(accent.opacity(0.08 * a))
-                    },
-                )
-            });
-            let tick = toggled(
-                div()
-                    .flex_none()
-                    .size(px(18.))
-                    .rounded_full()
-                    .border_1()
-                    .flex()
-                    .items_center()
-                    .justify_center(),
-                touched,
-                on,
-                ("kind-tick", key),
-                move |el, a| {
-                    el.border_color(line.blend(accent.opacity(a)))
-                        .bg(accent.opacity(a))
-                        .when(a > 0., |d| {
-                            d.child(
-                                Icon::new(IconName::Check)
-                                    .size(px(8. + 4. * a))
-                                    .text_color(white().opacity(a)),
-                            )
-                        })
-                },
-            );
-            let glyph = toggled(
-                div().child(theme::kind_glyph(kind, px(26.))),
-                touched,
-                on,
-                ("kind-glyph", key),
-                |el, a| el.opacity(0.45 + 0.55 * a),
-            );
-            let warning = (kind == Kind::Image && images_needed)
-                .then(|| note(p).text_color(p.warn).child(s.images_needed));
-            // A button, so Tab and Enter reach every type; the cell makes
-            // tiles in a row the same height.
-            let tile = Button::new(("kind", kind as usize))
-                .cursor_pointer()
-                .ghost()
-                .w_full()
-                .h_auto()
-                .text_size(px(14.))
-                .bg(p.solid)
-                .border_1()
-                .border_color(p.line)
-                .p_0()
-                .rounded(px(8.))
-                .accessibility_label(kind_label(kind, s))
+            let name = kind_label(kind, s);
+            self.row(Field::FileTypes, p)
+                .py(px(10.))
+                .child(div().flex_none().child(theme::kind_glyph(kind, px(26.))))
                 .child(
                     div()
-                        .relative()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap_2()
-                        .p_3()
-                        .children(frame)
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(glyph)
-                                .child(tick),
-                        )
-                        .child(
-                            div()
-                                .text_left()
-                                .child(
-                                    div()
-                                        .text_size(px(14.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(kind_label(kind, s)),
-                                )
-                                .children(kind_examples(kind).map(|e| note(p).child(e)))
-                                .children(warning),
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                        .children(kind_examples(kind).map(|e| note(p).child(e)))
+                        // Why it reads nothing yet, in the muted tone: a state, not an alarm.
+                        .children(
+                            (kind == Kind::Image && images_needed)
+                                .then(|| note(p).child(s.images_needed)),
                         ),
                 )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !this.kinds_touched.contains(&kind) {
-                        this.kinds_touched.push(kind);
-                    }
-                    let on = !this.indexing.file_types.contains(&kind);
-                    let types = toggle_kind(&this.indexing.file_types, kind, on);
-                    this.save(
-                        Field::FileTypes,
-                        json!({ "indexing": { "file_types": types } }),
-                        window,
-                        cx,
-                    );
-                }));
-            // An odd last tile takes the whole row.
-            div()
-                .flex()
-                .when(
-                    kind == FILE_TYPES[FILE_TYPES.len() - 1] && FILE_TYPES.len() % 2 == 1,
-                    |d| d.col_span(2),
+                .child(
+                    Switch::new(("kind", kind as usize))
+                        .cursor_pointer()
+                        .checked(on)
+                        .color(p.accent)
+                        .accessibility_label(name)
+                        .on_click(cx.listener(move |this, &on: &bool, window, cx| {
+                            let types = toggle_kind(&this.indexing.file_types, kind, on);
+                            this.save(
+                                Field::FileTypes,
+                                json!({ "indexing": { "file_types": types } }),
+                                window,
+                                cx,
+                            );
+                        })),
                 )
-                .child(tile)
         });
-        let none = types
-            .is_empty()
-            .then(|| note(p).mt_0().text_color(p.warn).child(s.kind_none));
-        let file_types = self
-            .row(Field::FileTypes, p)
-            .flex_col()
-            .items_start()
-            .gap_3()
-            .py(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(row_icon(IconName::Files, p))
-                    .child(self.labelled(
-                        s.file_types,
-                        Some(s.file_types_note),
-                        Field::FileTypes,
-                        s,
-                        p,
-                    )),
-            )
-            .child(div().grid().grid_cols(2).w_full().gap_2().children(kinds))
-            .children(none);
+        let none = types.is_empty().then(|| warn_note(p, s.kind_none).mt_0());
+        let file_types = div()
+            .child(note(p).mb(px(8.)).child(s.file_types_note))
+            .child(grouped(p, rows))
+            .children(none.map(|n| div().mt(px(8.)).child(n)))
+            .children(self.problem(Field::FileTypes, s, p));
         let max_size = self.setting(
             Field::MaxSize,
             IconName::FileUp,
@@ -243,9 +120,7 @@ impl SettingsView {
             s,
             p,
         );
-        stack()
-            .child(grouped(p, [file_types]))
-            .child(grouped(p, [max_size]))
+        stack().child(file_types).child(grouped(p, [max_size]))
     }
 
     /// Under General: when indexing runs, not what it reads.

@@ -1,7 +1,8 @@
 //! Light/dark, the variant A palette and window background resolution
 //! (ADR-0010, ADR-0011).
 
-use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::{Icon, Theme, ThemeMode};
 use std::time::Duration;
 
 use gpui_kit::{
@@ -52,6 +53,20 @@ pub fn dim<E: IntoElement + Styled + 'static>(
     )
 }
 
+/// An Office file's label and color by extension, as Word, Excel and
+/// PowerPoint each own one; anything else Office is "DOC".
+fn office_glyph(file_name: &str) -> (&'static str, u32) {
+    let ext = file_name
+        .rsplit_once('.')
+        .map_or("", |(_, ext)| ext)
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "xls" | "xlsx" | "xlsm" | "ods" => ("XLS", 0x1e7145),
+        "ppt" | "pptx" | "pps" | "ppsx" | "odp" => ("PPT", 0xc43e1c),
+        _ => ("DOC", 0x185abd),
+    }
+}
+
 /// A file type's colored square, the same in the results and in settings.
 pub fn kind_glyph(kind: Kind, size: Pixels) -> Div {
     let (label, color) = match kind {
@@ -59,9 +74,24 @@ pub fn kind_glyph(kind: Kind, size: Pixels) -> Div {
         Kind::Office => ("DOC", 0x185abd),
         Kind::Code => ("</>", 0x5c2d91),
         Kind::Text => ("TXT", 0x6b7280),
-        Kind::Image => ("IMG", 0x6b7280),
+        Kind::Image => ("IMG", 0x0f766e),
         Kind::Other => ("•", 0x6b7280),
     };
+    glyph(label, color, size)
+}
+
+/// [`kind_glyph`] for a file: Word, Excel and PowerPoint files are told apart.
+pub fn file_glyph(kind: Kind, file_name: &str, size: Pixels) -> Div {
+    match kind {
+        Kind::Office => {
+            let (label, color) = office_glyph(file_name);
+            glyph(label, color, size)
+        }
+        _ => kind_glyph(kind, size),
+    }
+}
+
+fn glyph(label: &'static str, color: u32, size: Pixels) -> Div {
     div()
         .flex_none()
         .size(size)
@@ -165,6 +195,9 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
             t.switch = palette.mute.opacity(0.6);
             t.switch_thumb = palette.ink;
         }
+        // The focus ring: the accent at the framework's half strength, not
+        // the default gray halo.
+        t.ring = accent;
         t.primary = accent;
         t.primary_hover = accent.opacity(0.9);
         t.primary_active = accent.opacity(0.8);
@@ -213,7 +246,7 @@ impl Palette {
             Self {
                 dark,
                 ink: rgb(0xf3f3f5).into(),
-                mute: rgb(0xa4a6ad).into(),
+                mute: rgb(0xb4b6bd).into(),
                 line: rgba(0xffffff14).into(),
                 panel: rgb(0x202024),
                 accent: rgb(0x4cc2ff).into(),
@@ -231,7 +264,7 @@ impl Palette {
             Self {
                 dark,
                 ink: rgb(0x1b1b1f).into(),
-                mute: rgb(0x636366).into(),
+                mute: rgb(0x5a5a5e).into(),
                 line: rgba(0x00000014).into(),
                 panel: rgb(0xf6f6f8),
                 accent: rgb(0x0a64d8).into(),
@@ -281,7 +314,14 @@ impl Palette {
             .gap(px(6.))
             .text_xs()
             .text_color(color)
-            .child(self.dot(tone))
+            // A problem carries an icon as well as its color.
+            .child(match tone {
+                Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert)
+                    .size(px(12.))
+                    .flex_none()
+                    .into_any_element(),
+                _ => self.dot(tone).into_any_element(),
+            })
             .child(text)
     }
 
@@ -339,6 +379,14 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn office_files_are_told_apart_by_extension() {
+        assert_eq!(office_glyph("budget.XLSX").0, "XLS");
+        assert_eq!(office_glyph("deck.pptx").0, "PPT");
+        assert_eq!(office_glyph("lease.docx").0, "DOC");
+        assert_eq!(office_glyph("no-extension").0, "DOC");
+    }
 
     #[test]
     fn a_forced_theme_forces_the_window_chrome_too() {

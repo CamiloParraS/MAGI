@@ -28,6 +28,8 @@ pub const DEBOUNCE: Duration = Duration::from_millis(150);
 /// A search shows it is loading only once it has run this long, so fast ones
 /// never flash the bar or dim the list.
 const SLOW: Duration = Duration::from_millis(150);
+/// How long the first failed search waits before trying again by itself.
+const AUTO_RETRY: Duration = Duration::from_millis(1500);
 /// How long "Path copied" replaces "Copy path".
 const COPIED: Duration = Duration::from_millis(1200);
 /// The footer's copy hint, whose label becomes "Path copied".
@@ -55,6 +57,8 @@ pub struct SearchView {
     events: Events,
     input: Entity<InputState>,
     state: SearchState,
+    /// The error pane is asking before it rebuilds the index.
+    confirm_rebuild: bool,
     scroll: ScrollHandle,
     focus: FocusHandle,
     backdrop: Backdrop,
@@ -121,6 +125,7 @@ impl SearchView {
             events,
             input,
             state: SearchState::default(),
+            confirm_rebuild: false,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             backdrop,
@@ -179,6 +184,7 @@ impl SearchView {
                 self.live
                     .update(cx, |live, _| live.last_query.clone_from(&text));
                 self.pending = None;
+                self.confirm_rebuild = false;
                 // Leading edge: a keystroke while idle searches at once; only
                 // the ones that follow while a search is pending wait.
                 let delay = if self.state.is_loading() {
@@ -202,10 +208,58 @@ impl SearchView {
         }
     }
 
+    /// Fills the input with the example query and searches it, as typing would.
+    fn try_example(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.live.read(cx).lang.strings().example_query;
+        self.input.update(cx, |input, cx| {
+            input.set_value(text, window, cx);
+            input.focus(window, cx);
+        });
+        self.live
+            .update(cx, |live, _| live.last_query = text.into());
+        if let Some(query) = self.state.set_query(text) {
+            self.run(query, Duration::ZERO, cx);
+        }
+    }
+
+    /// Empties the index and reads the folders again, then searches again.
+    /// Behind its own confirmation: it forgets everything Magi learned.
+    fn rebuild_index(&mut self, cx: &mut Context<Self>) {
+        self.confirm_rebuild = false;
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async move { host.clear_index() })
+                .await;
+            if let Err(error) = done {
+                tracing::warn!(%error, "could not rebuild the index");
+            }
+            let _ = this.update(cx, |view, cx| view.retry(cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn retry(&mut self, cx: &mut Context<Self>) {
+        self.confirm_rebuild = false;
         if let Some(query) = self.state.retry() {
             self.run(query, Duration::ZERO, cx);
         }
+    }
+
+    /// The first failure is tried again on its own: the engine is usually
+    /// just restarting. Typing in the meantime clears the error and cancels it.
+    fn retry_soon(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(AUTO_RETRY).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.state.should_auto_retry() {
+                    view.retry(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     fn run(&mut self, query: Query, delay: Duration, cx: &mut Context<Self>) {
@@ -226,6 +280,9 @@ impl SearchView {
             let _ = this.update(cx, |view, cx| {
                 view.state.apply(query.generation, reply);
                 view.scroll.scroll_to_item(0);
+                if view.state.should_auto_retry() {
+                    view.retry_soon(cx);
+                }
                 cx.notify();
             });
         }));

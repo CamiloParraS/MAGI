@@ -17,6 +17,8 @@ pub struct SearchState {
     results: Vec<SearchResult>,
     selected: usize,
     error: Option<ErrorCode>,
+    /// Searches that failed in a row; one reply that works clears it.
+    failures: u32,
     loading: bool,
 }
 
@@ -38,6 +40,8 @@ impl SearchState {
             self.loading = false;
             return None;
         }
+        // The old message is about the old text.
+        self.error = None;
         self.loading = true;
         Some(Query {
             generation: self.generation,
@@ -70,10 +74,12 @@ impl SearchState {
             Ok(response) => {
                 self.results = response.results;
                 self.error = None;
+                self.failures = 0;
             }
             Err(error) => {
                 self.results.clear();
                 self.error = Some(error);
+                self.failures += 1;
             }
         }
         self.selected = 0;
@@ -100,6 +106,17 @@ impl SearchState {
 
     pub fn results(&self) -> &[SearchResult] {
         &self.results
+    }
+
+    /// Searches that failed in a row.
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+
+    /// The first failure is tried again without being asked (the engine is
+    /// often just restarting); a second one is the user's to act on.
+    pub fn should_auto_retry(&self) -> bool {
+        self.error.is_some() && self.failures == 1
     }
 
     pub fn error(&self) -> Option<&ErrorCode> {
@@ -142,6 +159,35 @@ mod tests {
             results: ids.iter().copied().map(hit).collect(),
             took_ms: 1,
         })
+    }
+
+    #[test]
+    fn failures_count_in_a_row_and_one_success_clears_them() {
+        let mut s = SearchState::default();
+        let q = s.set_query("rent").unwrap();
+        s.apply(q.generation, Err(ErrorCode::EngineStarting));
+        assert_eq!(s.failures(), 1);
+        assert!(s.should_auto_retry());
+        let q = s.retry().unwrap();
+        s.apply(q.generation, Err(ErrorCode::EngineStarting));
+        assert_eq!(s.failures(), 2);
+        assert!(
+            !s.should_auto_retry(),
+            "only the first failure retries alone"
+        );
+        let q = s.retry().unwrap();
+        s.apply(q.generation, reply(&[1]));
+        assert_eq!(s.failures(), 0);
+    }
+
+    #[test]
+    fn typing_after_an_error_drops_the_message_at_once() {
+        let mut s = SearchState::default();
+        let q = s.set_query("ren").unwrap();
+        s.apply(q.generation, Err(ErrorCode::EngineStarting));
+        s.set_query("rent").unwrap();
+        assert!(s.error().is_none());
+        assert!(!s.should_auto_retry());
     }
 
     #[test]

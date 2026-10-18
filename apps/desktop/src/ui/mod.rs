@@ -59,6 +59,23 @@ pub(crate) fn note(p: &Palette) -> Div {
     div().mt(px(2.)).text_xs().text_color(p.mute)
 }
 
+/// A problem line: the alert icon and the text in the warning color, so it
+/// reads without the color.
+pub(crate) fn warn_note(p: &Palette, text: impl IntoElement) -> Div {
+    note(p)
+        .flex()
+        .items_start()
+        .gap(px(4.))
+        .text_color(p.warn)
+        .child(
+            div()
+                .flex_none()
+                .pt(px(1.))
+                .child(Icon::new(IconName::TriangleAlert).size(px(12.))),
+        )
+        .child(div().min_w_0().child(text))
+}
+
 pub(crate) fn heading(text: &'static str) -> Div {
     div()
         .mb(px(18.))

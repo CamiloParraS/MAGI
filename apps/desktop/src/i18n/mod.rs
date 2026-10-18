@@ -42,7 +42,16 @@ pub struct Strings {
     pub intro: Plural,
     /// `{q}` is the query.
     pub no_match: &'static str,
+    /// A query worth trying in the empty window, and its button (`{q}`).
+    pub example_query: &'static str,
+    pub try_example: &'static str,
     pub search_failed: &'static str,
+    /// After the second failure in a row, above the ways out.
+    pub search_still_failing: &'static str,
+    pub rebuild_index: &'static str,
+    /// Asks before the rebuild: it empties the index.
+    pub rebuild_index_confirm: &'static str,
+    pub open_logs: &'static str,
     pub try_again: &'static str,
     pub still_indexing: Plural,
     /// `{n}` is the page number.
@@ -58,7 +67,6 @@ pub struct Strings {
     pub close: &'static str,
     pub today: &'static str,
     pub yesterday: &'static str,
-    pub days_ago: Plural,
     pub source_keyword: &'static str,
     pub source_semantic: &'static str,
     pub source_ocr: &'static str,
@@ -266,13 +274,17 @@ pub struct Strings {
     pub ob_download_and_start: &'static str,
     /// The setup button when nothing downloads.
     pub ob_start: &'static str,
+    /// Under the welcome heading: the promise, before any choice.
+    pub ob_privacy: &'static str,
     /// Beside a feature on by default (ADR-0010).
     /// The finish screen's arrow back to setup.
     pub back: &'static str,
     /// Beside Start while no folder is chosen: why it is off.
     pub ob_need_folder: &'static str,
-    /// Under the setup strip's folder glyphs.
+    /// In the setup footer, before the download size.
     pub ob_folder_count: Plural,
+    /// The footer's download size, e.g. "148 MB download".
+    pub ob_download_size: &'static str,
     pub ob_recommended: &'static str,
     /// In place of a downloaded feature's size.
     pub ob_installed: &'static str,
@@ -390,13 +402,13 @@ impl Lang {
         (if one { p.one } else { p.other }).replace("{n}", &self.number(n))
     }
 
-    /// "today", "yesterday", "N days ago" within a month, else the date.
+    /// "today", "yesterday", else the date: one format down the results
+    /// column, not a relative count that turns into a date at some cutoff.
     pub fn date(self, date: NaiveDate, today: NaiveDate) -> String {
         let s = self.strings();
         match (today - date).num_days() {
             0 => s.today.into(),
             1 => s.yesterday.into(),
-            days @ 2..31 => self.plural(&s.days_ago, days as u64),
             _ => self.absolute_date(date),
         }
     }
@@ -459,18 +471,21 @@ mod tests {
             "Indexing, 1,284 files to go"
         );
         let s = Lang::Es.strings();
-        assert_eq!(Lang::Es.plural(&s.days_ago, 1), "hace 1 día");
+        assert_eq!(
+            Lang::Es.plural(&s.status_indexing, 1),
+            "Indexando, falta 1 archivo"
+        );
         assert_eq!(Lang::Es.number(12345), "12.345");
     }
 
     #[test]
-    fn dates_are_relative_within_a_month_then_absolute() {
+    fn dates_are_today_or_yesterday_then_absolute() {
         let today = day(2026, 9, 29);
         assert_eq!(Lang::En.date(today, today), "today");
         assert_eq!(Lang::En.date(day(2026, 9, 28), today), "yesterday");
-        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "12 days ago");
+        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "Sep 17, 2026");
         assert_eq!(Lang::En.date(day(2026, 8, 18), today), "Aug 18, 2026");
-        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "hace 3 días");
+        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "26 sept 2026");
         assert_eq!(Lang::Es.date(day(2026, 8, 18), today), "18 ago 2026");
         // A file dated in the future (clock skew) shows its date.
         assert_eq!(Lang::En.date(day(2026, 10, 2), today), "Oct 2, 2026");

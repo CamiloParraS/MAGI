@@ -52,7 +52,7 @@ use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
-use crate::ui::{heading, note, row, row_icon};
+use crate::ui::{heading, note, row, row_icon, warn_note};
 use choices::{
     Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
 };
@@ -173,8 +173,6 @@ pub struct SettingsView {
     /// Focused while the shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
-    /// File types clicked since the window opened: only these animate.
-    kinds_touched: Vec<magi_core::discovery::Kind>,
     /// The Index tiles' counts, each on its way to the latest status.
     rolls: Option<[Roll; 4]>,
     /// Whether Folders' Advanced box is open.
@@ -365,7 +363,6 @@ impl SettingsView {
             see_through_focus: cx.focus_handle().tab_stop(true),
             recorder: cx.focus_handle(),
             recording: false,
-            kinds_touched: Vec::new(),
             rolls: None,
             advanced_open: false,
             advanced_flips: 0,
@@ -572,7 +569,7 @@ impl SettingsView {
             .map(|(_, error)| {
                 let text = error_text(error, s);
                 let id = SharedString::from(format!("problem-{field:?}-{text}"));
-                theme::fade_in(note(p).text_color(p.warn).child(text), id)
+                theme::fade_in(warn_note(p, text), id)
             })
     }
 
