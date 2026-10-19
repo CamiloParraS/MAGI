@@ -111,6 +111,8 @@ pub struct Strings {
     pub status_idle: &'static str,
     pub status_idle_errors: Plural,
     pub settings: &'static str,
+    /// The footer's "3 files could not be read": opens the list.
+    pub see_unreadable: &'static str,
     pub folders: &'static str,
     pub add_folder: &'static str,
     pub remove: &'static str,

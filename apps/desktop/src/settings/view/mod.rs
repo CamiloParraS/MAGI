@@ -215,6 +215,19 @@ impl SettingsView {
         // ponytail: this and `list_roots` below are small reads on the main
         // thread; move them to the background executor if they ever show up
         // in a frame trace.
+    /// Switches the pane, the way a click on its nav item does.
+    fn show(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.recording = false;
+        self.prev_section = self.section;
+        self.section = section;
+        self.error = None;
+        self.pane_scroll.set_offset(Point::default());
+        if section == Section::Index {
+            self.load_unreadable(cx);
+        }
+        cx.notify();
+    }
+
         let config = host
             .settings()
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
@@ -267,6 +280,11 @@ impl SettingsView {
                 if let Some(status) = &live.read(cx).status {
                     this.removing
                         .retain(|id| status.roots.iter().any(|root| root.id == *id));
+                }
+                // The search footer's "see which files".
+                if live.read(cx).show_unreadable {
+                    live.update(cx, |live, _| live.show_unreadable = false);
+                    this.show(Section::Index, cx);
                 }
                 cx.notify();
             }),
@@ -393,6 +411,13 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription
+        // Opened by the search footer's "see which files".
+        if view.live.read(cx).show_unreadable {
+            view.live
+                .clone()
+                .update(cx, |live, _| live.show_unreadable = false);
+            view.show(Section::Index, cx);
+        }
     where
         T: Clone + PartialEq + 'static,
     {
@@ -676,17 +701,7 @@ impl Render for SettingsView {
                             .child(section.title(s)),
                     )
                     .accessibility_label(section.title(s))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.recording = false;
-                        this.prev_section = this.section;
-                        this.section = section;
-                        this.error = None;
-                        this.pane_scroll.set_offset(Point::default());
-                        if section == Section::Index {
-                            this.load_unreadable(cx);
-                        }
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(section, cx)))
             }))
             .child(bar);
         let nav = div()

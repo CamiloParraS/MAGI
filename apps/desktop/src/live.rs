@@ -22,6 +22,9 @@ pub struct Live {
     pub dismissed: Vec<Feature>,
     /// The shortcut line was closed (this session, as the hints).
     pub shortcut_dismissed: bool,
+    /// The search footer asked for Settings on its Index section, where the
+    /// unreadable files are listed; Settings takes the request when it sees it.
+    pub show_unreadable: bool,
     /// Hotkey presses this run; onboarding confirms one it sees.
     pub hotkey_presses: u32,
     /// A shortcut that could not be registered (another app or the OS has
@@ -44,6 +47,7 @@ impl Live {
             permissions: Vec::new(),
             dismissed: Vec::new(),
             shortcut_dismissed: false,
+            show_unreadable: false,
             hotkey_presses: 0,
             hotkey_conflict: None,
             search_open: false,

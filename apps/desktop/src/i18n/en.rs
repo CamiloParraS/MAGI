@@ -87,6 +87,7 @@ pub const STRINGS: Strings = Strings {
         other: "Up to date, {n} files could not be read",
     },
     settings: "Settings",
+    see_unreadable: "See which files",
     folders: "Folders",
     add_folder: "Add folders",
     remove: "Remove",

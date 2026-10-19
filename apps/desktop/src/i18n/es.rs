@@ -87,6 +87,7 @@ pub const STRINGS: Strings = Strings {
         other: "Al día, {n} archivos no se pudieron leer",
     },
     settings: "Configuración",
+    see_unreadable: "Ver qué archivos",
     folders: "Carpetas",
     add_folder: "Agregar carpetas",
     remove: "Quitar",

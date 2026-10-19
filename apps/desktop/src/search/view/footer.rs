@@ -2,16 +2,27 @@
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
+use crate::app::AppEvent;
 use crate::search::state::{footer_status, hidden_reason};
 use crate::theme::{Palette, Tone};
 use crate::tray::{status_line, status_tone};
 
 impl SearchView {
+    /// Opens Settings on the Index section, which lists the unreadable files.
+    fn show_unreadable(&mut self, cx: &mut Context<Self>) {
+        self.live.update(cx, |live, cx| {
+            live.show_unreadable = true;
+            cx.notify();
+        });
+        let _ = self.events.try_send(AppEvent::Settings);
+    }
+
     /// Always there: the settings gear, the index status (as in the tray)
     /// and the keys that apply now.
     pub(super) fn footer(&self, p: &Palette, cx: &Context<Self>) -> Div {
@@ -28,12 +39,32 @@ impl SearchView {
             .and_then(|r| hidden_reason(&r.match_sources, s));
         let status = live.status.as_ref().map(footer_status).map(|st| {
             let st = &st;
-            let line = div().flex().items_center().gap_2().min_w_0();
+            let line = div()
+                .id("index-status")
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .role(Role::Status);
             match why.filter(|_| matches!(status_tone(st), Tone::Ok | Tone::Err)) {
-                Some(why) => line.child(div().truncate().child(why)),
-                None => line
-                    .child(p.dot(status_tone(st)))
-                    .child(div().truncate().child(status_line(st, lang))),
+                Some(why) => line.child(div().truncate().child(why)).into_any_element(),
+                None => {
+                    let line = line
+                        .child(p.dot(status_tone(st)))
+                        .child(div().truncate().child(status_line(st, lang)));
+                    // "3 files could not be read" is a way to see which.
+                    if status_tone(st) == Tone::Err {
+                        let tip: SharedString = s.see_unreadable.into();
+                        line.cursor_pointer()
+                            .role(Role::Button)
+                            .aria_label(s.see_unreadable)
+                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                            .on_click(cx.listener(|this, _, _, cx| this.show_unreadable(cx)))
+                            .into_any_element()
+                    } else {
+                        line.into_any_element()
+                    }
+                }
             }
         });
         // Always shown, so they are learned in the empty window; dimmed while

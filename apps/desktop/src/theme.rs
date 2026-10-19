@@ -448,6 +448,54 @@ mod tests {
         );
     }
 
+    /// WCAG relative luminance and contrast ratio.
+    fn luminance(c: Rgba) -> f32 {
+        let lin = |v: f32| {
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// The panel's colour as it looks over a flat backdrop of grey `level`.
+    fn over(panel: Rgba, alpha: f32, level: f32) -> Rgba {
+        let mix = |c: f32| c * alpha + level * (1. - alpha);
+        Rgba {
+            r: mix(panel.r),
+            g: mix(panel.g),
+            b: mix(panel.b),
+            a: 1.,
+        }
+    }
+
+    /// Muted text (dates, tags, snippets, the footer) at the least tint the
+    /// slider allows, over the backdrops that hurt most. 4.5:1 is WCAG AA for
+    /// small text. Over a mid-grey blur both themes pass it; over pure white
+    /// (dark) or pure black (light) the floors are what is left.
+    #[test]
+    fn muted_text_stays_readable_at_the_tint_floor() {
+        let blur = |a| Backdrop::Blurred { tint_alpha: a };
+        let lo = *TRANSPARENCY_INTENSITY.start();
+        for (dark, worst) in [(true, 1.0), (false, 0.0)] {
+            let p = Palette::new(dark);
+            let alpha = p.tint_alpha(blur(lo));
+            let mute = p.mute.to_rgb();
+            let mid = contrast(mute, over(p.panel, alpha, 0.5));
+            let extreme = contrast(mute, over(p.panel, alpha, worst));
+            println!("dark={dark} mid={mid:.2} worst={extreme:.2}");
+            assert!(mid >= 4.5, "dark={dark}: {mid:.2} over mid-grey");
+            assert!(extreme >= 3.0, "dark={dark}: {extreme:.2} over the worst");
+        }
+    }
+
     #[test]
     fn both_themes_keep_a_readable_tint() {
         let blur = |a| Backdrop::Blurred { tint_alpha: a };

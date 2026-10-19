@@ -245,6 +245,7 @@ impl SearchView {
                 .child(
                     div()
                         .id("results")
+                        .role(Role::ListBox)
                         .flex()
                         .flex_col()
                         .max_h(LIST_MAX_HEIGHT)
@@ -371,8 +372,12 @@ fn row(
         a: p.selection.a * 2.,
         ..p.selection
     };
+    let label = row_label(&r.file_name, &folder_name(&r.path), &date, &sources);
     div()
         .id(ix)
+        .role(Role::ListBoxOption)
+        .aria_selected(selected)
+        .aria_label(label)
         // A result opens like a link: the hand, as on every clickable thing.
         .cursor_pointer()
         .relative()
@@ -459,6 +464,17 @@ fn folder_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What a screen reader says for a row: the name, where it is, when, and why
+/// it matched (the footer's reason for the mouse-less is the same fact).
+fn row_label(name: &str, folder: &str, date: &str, sources: &str) -> String {
+    [name, folder, date, sources]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The last two folders of the path, `…\Documents\Contratos`: enough to
 /// tell two files of one name apart; the tooltip has the rest.
 fn short_folder(path: &str) -> String {
@@ -495,7 +511,16 @@ fn local_date(unix_ms: i64) -> Option<NaiveDate> {
 
 #[cfg(test)]
 mod tests {
-    use super::short_folder;
+    use super::{row_label, short_folder};
+
+    #[test]
+    fn a_row_is_read_as_name_place_date_and_reason() {
+        assert_eq!(
+            row_label("a.pdf", "Contratos", "18 sept", "Related"),
+            "a.pdf, Contratos, 18 sept, Related"
+        );
+        assert_eq!(row_label("a.pdf", "", "", ""), "a.pdf");
+    }
 
     #[test]
     fn a_deep_path_keeps_its_last_two_folders() {
