@@ -315,14 +315,7 @@ fn row(
             .ml_3()
             .text_color(p.mute)
             .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
-            // Only the selected row shows it; the others keep its space so
-            // the folder's name does not move as the selection does.
-            .child(
-                div()
-                    .flex_none()
-                    .when(!selected, |d| d.invisible())
-                    .child(Icon::new(IconName::Folder).size(px(12.))),
-            )
+            .child(Icon::new(IconName::Folder).size(px(12.)).flex_none())
             .child(div().truncate().child(folder_name(&r.path)))
     });
     let detail = match &r.snippet {
