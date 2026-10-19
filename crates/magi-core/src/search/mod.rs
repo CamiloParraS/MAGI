@@ -173,8 +173,14 @@ pub fn rank_and_boost(
             match hit.source {
                 Some(ChunkSource::Ocr) => match_sources.push(MatchSource::Ocr),
                 Some(ChunkSource::Qr) => match_sources.push(MatchSource::Qr),
-                Some(ChunkSource::Filename) => match_sources.push(MatchSource::Filename),
-                Some(ChunkSource::Body | ChunkSource::CodeSymbol) | None => {}
+                // The name chunk only says the name matched when the keyword
+                // list found it; by vector alone it is just similar, and
+                // "Related" already says so.
+                Some(ChunkSource::Filename) if fts.is_some() => {
+                    match_sources.push(MatchSource::Filename)
+                }
+                Some(ChunkSource::Filename | ChunkSource::Body | ChunkSource::CodeSymbol)
+                | None => {}
             }
             Some(SearchHit {
                 file_id,
@@ -619,6 +625,28 @@ mod tests {
             (vec![Keyword], Some(3))
         );
         assert_eq!(by_id(3).match_sources, vec![Semantic, Qr]);
+    }
+
+    #[test]
+    fn a_name_is_tagged_only_when_the_keywords_matched_it() {
+        let name = |id: i64| FileHit {
+            file_id: id,
+            path: PathBuf::from(format!("/r/{id}")),
+            file_name: format!("f{id}"),
+            kind: Kind::Text,
+            mtime_ns: 0,
+            thumb_key: None,
+            snippet: "s".into(),
+            page: None,
+            source: Some(ChunkSource::Filename),
+        };
+        let hits = rank_and_boost("zzz", &[name(1)], &[name(2)], &[], 10);
+        let by_id = |id| hits.iter().find(|h| h.file_id == id).unwrap();
+        assert_eq!(
+            by_id(1).match_sources,
+            vec![MatchSource::Keyword, MatchSource::Filename]
+        );
+        assert_eq!(by_id(2).match_sources, vec![MatchSource::Semantic]);
     }
 
     /// Every ranked list joins the file's row, so the Host never goes back
