@@ -27,12 +27,24 @@ pub fn explain_sources(sources: &[MatchSource], s: &Strings, sep: &str) -> Strin
         .join(sep)
 }
 
+/// The sources a row names. "Related" is the least specific, nearly every
+/// row has it, so it is named only when it is the sole reason; beside Words,
+/// Looks like and the rest it only repeats them.
+pub fn shown_sources(sources: &[MatchSource]) -> Vec<MatchSource> {
+    sources
+        .iter()
+        .copied()
+        .filter(|m| *m != MatchSource::Semantic || sources.len() == 1)
+        .collect()
+}
+
 /// Why a file matched when the row does not show it, for the footer: the most
 /// specific source whose reason is not visible (no highlighted word, no file
 /// name match). "Related" is the least specific, nearly every row has it, so
 /// it speaks only when nothing else does. `None` for a match the row already
 /// explains.
 pub fn hidden_reason(sources: &[MatchSource], s: &Strings) -> Option<&'static str> {
+    let sources = shown_sources(sources);
     [
         MatchSource::Ocr,
         MatchSource::Qr,
@@ -273,7 +285,15 @@ mod tests {
         assert_eq!(hidden_reason(&[MatchSource::Keyword], s), None);
         assert_eq!(
             hidden_reason(&[MatchSource::Keyword, MatchSource::Semantic], s),
+            None
+        );
+        assert_eq!(
+            hidden_reason(&[MatchSource::Semantic], s),
             Some("Says something close to your search")
+        );
+        assert_eq!(
+            shown_sources(&[MatchSource::Semantic, MatchSource::Visual]),
+            vec![MatchSource::Visual]
         );
         assert_eq!(
             hidden_reason(&[MatchSource::Semantic, MatchSource::Visual], s),

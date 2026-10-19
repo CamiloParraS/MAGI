@@ -15,7 +15,7 @@ use super::{COPY_FLASH, LIST_MAX_HEIGHT, SearchView};
 use crate::i18n::Lang;
 use crate::search::highlight;
 use crate::search::hint::hint;
-use crate::search::state::{cause, explain_sources};
+use crate::search::state::{cause, explain_sources, shown_sources};
 use crate::theme::{self, Palette};
 
 impl SearchView {
@@ -313,6 +313,7 @@ fn row(
             .gap_1()
             .min_w_0()
             .ml_3()
+            .text_xs()
             .text_color(p.mute)
             .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
             .child(Icon::new(IconName::Folder).size(px(12.)).flex_none())
@@ -357,14 +358,14 @@ fn row(
     let date = local_date(r.modified_at)
         .map(|d| lang.date(d, today))
         .unwrap_or_default();
-    let sources = r
-        .match_sources
+    let shown = shown_sources(&r.match_sources);
+    let sources = shown
         .iter()
         .map(|&m| s.source(m))
         .collect::<Vec<_>>()
         .join(", ");
     // What each source means, one per line.
-    let sources_tip: SharedString = explain_sources(&r.match_sources, s, "\n").into();
+    let sources_tip: SharedString = explain_sources(&shown, s, "\n").into();
     // Feedback on mouse down; the click opens on release.
     let pressed = Hsla {
         a: p.selection.a * 2.,
