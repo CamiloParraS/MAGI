@@ -7,7 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
-use crate::search::state::hidden_reason;
+use crate::search::state::{footer_status, hidden_reason};
 use crate::theme::{Palette, Tone};
 use crate::tray::{status_line, status_tone};
 
@@ -26,7 +26,8 @@ impl SearchView {
             .state
             .selected()
             .and_then(|r| hidden_reason(&r.match_sources, s));
-        let status = live.status.as_ref().map(|st| {
+        let status = live.status.as_ref().map(footer_status).map(|st| {
+            let st = &st;
             let line = div().flex().items_center().gap_2().min_w_0();
             match why.filter(|_| matches!(status_tone(st), Tone::Ok | Tone::Err)) {
                 Some(why) => line.child(div().truncate().child(why)),

@@ -1,7 +1,9 @@
 //! What the search window shows, independent of GPUI: the current query,
 //! which reply belongs to it, and the selection.
 
-use magi_core::dto::{ErrorCode, MatchSource, SearchResponse, SearchResult};
+use magi_core::dto::{
+    ErrorCode, IndexState, IndexStatus, MatchSource, SearchResponse, SearchResult,
+};
 
 use crate::i18n::Strings;
 
@@ -33,6 +35,18 @@ pub fn hidden_reason(sources: &[MatchSource], s: &Strings) -> Option<&'static st
         .iter()
         .find(|m| !matches!(m, MatchSource::Keyword | MatchSource::Filename))
         .map(|&m| s.source_tip(m))
+}
+
+/// The status the footer shows: a paused index with nothing waiting to be
+/// indexed has nothing to be paused about (results are complete), so it reads
+/// as idle. The tray and Settings still say "paused".
+pub fn footer_status(status: &IndexStatus) -> IndexStatus {
+    let mut shown = status.clone();
+    if shown.state == IndexState::Paused && shown.queued == 0 {
+        shown.state = IndexState::Idle;
+        shown.paused_for = None;
+    }
+    shown
 }
 
 /// A search to run after the debounce.
@@ -220,6 +234,30 @@ mod tests {
             "Words: Has your exact words\nRelated: Says something close to your search"
         );
         assert_eq!(explain_sources(&[], s, "\n"), "");
+    }
+
+    #[test]
+    fn a_pause_with_nothing_waiting_is_not_shown_in_the_footer() {
+        use magi_core::dto::PauseReason;
+        let status = |state, queued| IndexStatus {
+            state,
+            paused_for: (state == IndexState::Paused).then_some(PauseReason::LowMemory),
+            scanned: 0,
+            queued,
+            indexed: 10,
+            skipped: 0,
+            errors: 0,
+            current_file: None,
+            roots: vec![],
+        };
+        let idle = footer_status(&status(IndexState::Paused, 0));
+        assert_eq!((idle.state, idle.paused_for), (IndexState::Idle, None));
+        let waiting = footer_status(&status(IndexState::Paused, 4));
+        assert_eq!(waiting.state, IndexState::Paused);
+        assert_eq!(
+            footer_status(&status(IndexState::Indexing, 0)).state,
+            IndexState::Indexing
+        );
     }
 
     #[test]
