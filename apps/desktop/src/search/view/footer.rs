@@ -7,7 +7,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
-use crate::theme::Palette;
+use crate::search::state::hidden_reason;
+use crate::theme::{Palette, Tone};
 use crate::tray::{status_line, status_tone};
 
 impl SearchView {
@@ -16,14 +17,23 @@ impl SearchView {
     pub(super) fn footer(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let (lang, s) = (live.lang, live.lang.strings());
+        // A selected result whose match the row does not show says why, for
+        // the keyboard as the tooltip does for the mouse. The index status
+        // gives way only when the results are complete (idle, with or
+        // without unreadable files); "results may be incomplete" (scanning,
+        // indexing, paused) is never hidden.
+        let why = self
+            .state
+            .selected()
+            .and_then(|r| hidden_reason(&r.match_sources, s));
         let status = live.status.as_ref().map(|st| {
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w_0()
-                .child(p.dot(status_tone(st)))
-                .child(div().truncate().child(status_line(st, lang)))
+            let line = div().flex().items_center().gap_2().min_w_0();
+            match why.filter(|_| matches!(status_tone(st), Tone::Ok | Tone::Err)) {
+                Some(why) => line.child(div().truncate().child(why)),
+                None => line
+                    .child(p.dot(status_tone(st)))
+                    .child(div().truncate().child(status_line(st, lang))),
+            }
         });
         // Always shown, so they are learned in the empty window; dimmed while
         // there is no result to act on.

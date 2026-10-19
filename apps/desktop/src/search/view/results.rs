@@ -1,6 +1,7 @@
 //! The search window's body: the intro, no match, or the results.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::NaiveDate;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -14,7 +15,7 @@ use super::{COPY_FLASH, LIST_MAX_HEIGHT, SearchView};
 use crate::i18n::Lang;
 use crate::search::highlight;
 use crate::search::hint::hint;
-use crate::search::state::cause;
+use crate::search::state::{cause, explain_sources};
 use crate::theme::{self, Palette};
 
 impl SearchView {
@@ -39,7 +40,26 @@ impl SearchView {
             // The first failure retries by itself and only says so; the
             // second leaves ways out, the input still taking new text.
             if state.failures() < 2 {
-                return Some(block().child(s.search_failed).into_any_element());
+                // A pulsing dot: the wait is the engine working, not a hang.
+                let dot = p.dot(theme::Tone::Busy).with_animation(
+                    "retry-dot",
+                    Animation::new(Duration::from_millis(900))
+                        .repeat()
+                        .with_easing(pulsating_between(0.3, 1.)),
+                    |dot, t| dot.opacity(t),
+                );
+                return Some(
+                    block()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(dot)
+                                .child(s.search_failed),
+                        )
+                        .into_any_element(),
+                );
             }
             let actions = if self.confirm_rebuild {
                 div()
@@ -141,6 +161,9 @@ impl SearchView {
                             .cursor_pointer()
                             .ghost()
                             .small()
+                            // Its label lines up with the intro's text, not
+                            // with the button's own padding.
+                            .ml(px(-8.))
                             .label(s.try_example.replace("{q}", s.example_query))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.try_example(window, cx)),
@@ -279,13 +302,28 @@ fn row(
     });
     // The same detail whether selected or not, so the list does not change
     // height as the selection moves. A snippet leaves no room for the path,
-    // so the folder's name follows the file's instead.
+    // so the folder's name follows the file's instead, behind a folder icon
+    // so it reads as where the file is, not as more of its name.
     let folder = r.snippet.is_some().then(|| {
+        let full: SharedString = folder_of(&r.path).into();
         div()
+            .id(("folder", ix))
+            .flex()
+            .items_center()
+            .gap_1()
             .min_w_0()
-            .truncate()
+            .ml_3()
             .text_color(p.mute)
-            .child(format!("  ·  {}", folder_name(&r.path)))
+            .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+            // Only the selected row shows it; the others keep its space so
+            // the folder's name does not move as the selection does.
+            .child(
+                div()
+                    .flex_none()
+                    .when(!selected, |d| d.invisible())
+                    .child(Icon::new(IconName::Folder).size(px(12.))),
+            )
+            .child(div().truncate().child(folder_name(&r.path)))
     });
     let detail = match &r.snippet {
         Some(snippet) => div()
@@ -306,14 +344,22 @@ fn row(
                         },
                     ),
                 ),
-            ),
+            )
+            .into_any_element(),
+        // The full path is in the tooltip.
         None => div()
+            .id(("path", ix))
             .text_xs()
             .text_color(p.mute)
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis_middle()
-            .child(folder_of(&r.path)),
+            .tooltip({
+                let full: SharedString = folder_of(&r.path).into();
+                move |window, cx| Tooltip::new(full.clone()).build(window, cx)
+            })
+            .child(short_folder(&r.path))
+            .into_any_element(),
     };
     let date = local_date(r.modified_at)
         .map(|d| lang.date(d, today))
@@ -325,13 +371,7 @@ fn row(
         .collect::<Vec<_>>()
         .join(", ");
     // What each source means, one per line.
-    let sources_tip: SharedString = r
-        .match_sources
-        .iter()
-        .map(|&m| format!("{}: {}", s.source(m), s.source_tip(m)))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .into();
+    let sources_tip: SharedString = explain_sources(&r.match_sources, s, "\n").into();
     // Feedback on mouse down; the click opens on release.
     let pressed = Hsla {
         a: p.selection.a * 2.,
@@ -425,6 +465,26 @@ fn folder_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The last two folders of the path, `...\Documents\Contratos`: enough to
+/// tell two files of one name apart; the tooltip has the rest.
+fn short_folder(path: &str) -> String {
+    let Some(parent) = Path::new(path).parent() else {
+        return String::new();
+    };
+    let names: Vec<_> = parent
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if names.len() <= 2 {
+        return parent.display().to_string();
+    }
+    let sep = std::path::MAIN_SEPARATOR.to_string();
+    format!("\u{2026}{sep}{}", names[names.len() - 2..].join(&sep))
+}
+
 /// The name of the folder a file is in.
 fn folder_name(path: &str) -> String {
     Path::new(path)
@@ -437,4 +497,20 @@ fn folder_name(path: &str) -> String {
 fn local_date(unix_ms: i64) -> Option<NaiveDate> {
     chrono::DateTime::from_timestamp_millis(unix_ms)
         .map(|t| t.with_timezone(&chrono::Local).date_naive())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_folder;
+
+    #[test]
+    fn a_deep_path_keeps_its_last_two_folders() {
+        let sep = std::path::MAIN_SEPARATOR;
+        let path = ["", "home", "ana", "Documents", "Contratos", "a.pdf"].join(&sep.to_string());
+        assert_eq!(
+            short_folder(&path),
+            format!("\u{2026}{sep}Documents{sep}Contratos")
+        );
+        assert_eq!(short_folder("a.pdf"), "");
+    }
 }

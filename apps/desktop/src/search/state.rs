@@ -1,7 +1,7 @@
 //! What the search window shows, independent of GPUI: the current query,
 //! which reply belongs to it, and the selection.
 
-use magi_core::dto::{ErrorCode, SearchResponse, SearchResult};
+use magi_core::dto::{ErrorCode, MatchSource, SearchResponse, SearchResult};
 
 use crate::i18n::Strings;
 
@@ -13,6 +13,26 @@ pub fn cause(error: &ErrorCode, s: &Strings) -> Option<&'static str> {
         ErrorCode::Internal { .. } => Some(s.search_cause_internal),
         _ => None,
     }
+}
+
+/// What each match source means, "Meaning: Says something close to what you
+/// typed", joined by `sep`: the tooltip's lines and the footer's line.
+pub fn explain_sources(sources: &[MatchSource], s: &Strings, sep: &str) -> String {
+    sources
+        .iter()
+        .map(|&m| format!("{}: {}", s.source(m), s.source_tip(m)))
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// Why a file matched when the row does not show it: the first source whose
+/// reason is not visible (no highlighted word, no file name match), for the
+/// footer. `None` for a match the row already explains.
+pub fn hidden_reason(sources: &[MatchSource], s: &Strings) -> Option<&'static str> {
+    sources
+        .iter()
+        .find(|m| !matches!(m, MatchSource::Keyword | MatchSource::Filename))
+        .map(|&m| s.source_tip(m))
 }
 
 /// A search to run after the debounce.
@@ -190,6 +210,27 @@ mod tests {
         let q = s.retry().unwrap();
         s.apply(q.generation, reply(&[1]));
         assert_eq!(s.failures(), 0);
+    }
+
+    #[test]
+    fn each_source_is_explained_on_its_own_line() {
+        let s = crate::i18n::Lang::En.strings();
+        assert_eq!(
+            explain_sources(&[MatchSource::Keyword, MatchSource::Semantic], s, "\n"),
+            "Words: Has your exact words\nRelated: Says something close to your search"
+        );
+        assert_eq!(explain_sources(&[], s, "\n"), "");
+    }
+
+    #[test]
+    fn only_a_match_you_cannot_see_is_explained_in_the_footer() {
+        let s = crate::i18n::Lang::En.strings();
+        assert_eq!(hidden_reason(&[MatchSource::Keyword], s), None);
+        assert_eq!(
+            hidden_reason(&[MatchSource::Keyword, MatchSource::Semantic], s),
+            Some("Says something close to your search")
+        );
+        assert_eq!(hidden_reason(&[], s), None);
     }
 
     #[test]

@@ -215,6 +215,12 @@ pub fn sync(theme: &str, window: &mut Window, cx: &mut App) -> bool {
 /// range is squeezed into `LIGHT_MIN_TINT..=1`.
 pub const LIGHT_MIN_TINT: f32 = 0.85;
 
+/// Dark mode too: muted text (dates, match tags, snippets, the footer) went
+/// grey over a bright photo behind the glass at the slider's low end, so it
+/// keeps a floor of its own, lower than light's because light text holds up
+/// better.
+pub const DARK_MIN_TINT: f32 = 0.75;
+
 /// Variant A "Pane" colors (M6 visual direction, `docs/screenshots/m6-variant-a/`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
@@ -328,14 +334,18 @@ impl Palette {
     /// The alpha of the window's own colors over `backdrop`.
     pub fn tint_alpha(&self, backdrop: Backdrop) -> f32 {
         match backdrop {
-            Backdrop::Blurred { tint_alpha } if self.dark => tint_alpha,
             Backdrop::Blurred { tint_alpha } => {
+                let floor = if self.dark {
+                    DARK_MIN_TINT
+                } else {
+                    LIGHT_MIN_TINT
+                };
                 let (lo, hi) = (
                     *TRANSPARENCY_INTENSITY.start(),
                     *TRANSPARENCY_INTENSITY.end(),
                 );
                 let t = ((tint_alpha - lo) / (hi - lo)).clamp(0., 1.);
-                LIGHT_MIN_TINT + t * (1. - LIGHT_MIN_TINT)
+                floor + t * (1. - floor)
             }
             Backdrop::Solid => 1.0,
         }
@@ -439,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn light_mode_keeps_a_readable_tint() {
+    fn both_themes_keep_a_readable_tint() {
         let blur = |a| Backdrop::Blurred { tint_alpha: a };
         let (light, dark) = (Palette::new(false), Palette::new(true));
         let (lo, hi) = (
@@ -453,10 +463,12 @@ mod tests {
             LIGHT_MIN_TINT < a && a < b,
             "every slider step shows in light mode"
         );
-        assert_eq!(
-            dark.tint_alpha(blur(0.5)),
-            0.5,
-            "dark text on glass holds up"
+        assert_eq!(dark.tint_alpha(blur(lo)), DARK_MIN_TINT);
+        assert_eq!(dark.tint_alpha(blur(hi)), 1.0);
+        let (a, b) = (dark.tint_alpha(blur(0.5)), dark.tint_alpha(blur(0.6)));
+        assert!(
+            DARK_MIN_TINT < a && a < b,
+            "every slider step shows in dark mode"
         );
         assert_eq!(light.tint_alpha(Backdrop::Solid), 1.0);
     }
