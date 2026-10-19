@@ -27,14 +27,21 @@ pub fn explain_sources(sources: &[MatchSource], s: &Strings, sep: &str) -> Strin
         .join(sep)
 }
 
-/// Why a file matched when the row does not show it: the first source whose
-/// reason is not visible (no highlighted word, no file name match), for the
-/// footer. `None` for a match the row already explains.
+/// Why a file matched when the row does not show it, for the footer: the most
+/// specific source whose reason is not visible (no highlighted word, no file
+/// name match). "Related" is the least specific, nearly every row has it, so
+/// it speaks only when nothing else does. `None` for a match the row already
+/// explains.
 pub fn hidden_reason(sources: &[MatchSource], s: &Strings) -> Option<&'static str> {
-    sources
-        .iter()
-        .find(|m| !matches!(m, MatchSource::Keyword | MatchSource::Filename))
-        .map(|&m| s.source_tip(m))
+    [
+        MatchSource::Ocr,
+        MatchSource::Qr,
+        MatchSource::Visual,
+        MatchSource::Semantic,
+    ]
+    .into_iter()
+    .find(|m| sources.contains(m))
+    .map(|m| s.source_tip(m))
 }
 
 /// The status the footer shows: a paused index with nothing waiting to be
@@ -267,6 +274,14 @@ mod tests {
         assert_eq!(
             hidden_reason(&[MatchSource::Keyword, MatchSource::Semantic], s),
             Some("Says something close to your search")
+        );
+        assert_eq!(
+            hidden_reason(&[MatchSource::Semantic, MatchSource::Visual], s),
+            Some("Looks like what you described")
+        );
+        assert_eq!(
+            hidden_reason(&[MatchSource::Semantic, MatchSource::Ocr], s),
+            Some("Has your words inside the image")
         );
         assert_eq!(hidden_reason(&[], s), None);
     }
