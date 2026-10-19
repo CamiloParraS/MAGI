@@ -61,7 +61,9 @@ doesn't exist on disk, and `ui.transparency_intensity` outside 0.40–0.95.
 M6 adds `[features] meaning = true, image_text = true, image_visual = false`
 (desired state only) and `ui.language` (`system|en|es`),
 `ui.transparency_mode` (`match_system|always|never`) and
-`ui.transparency_intensity` (default 0.75), and `ui.onboarding`
+`ui.transparency_intensity` (default 0.75; the window's tint over a blurred
+backdrop is that range squeezed into 0.85..1 in light mode and 0.75..1 in
+dark, `theme::{LIGHT,DARK}_MIN_TINT`, so muted text stays readable), and `ui.onboarding`
 (`folders|features|background|done`, default `folders`): whether onboarding
 is finished. The setup screen (folders, features, launch at login) saves
 `done` when confirmed; `features` and `background` are left from the earlier
@@ -124,14 +126,18 @@ a metadata query per fused result. They also share
 `search::chunk_fetch_limit` (over-fetch factor before dedup) and
 `search::first_hit_per_file` (per-file dedup). When `image_embedder` is
 given, a third list joins the fusion: `search::vector::search_vector_image` (a
-`vec_image` KNN, top 50, weight 0.8) using the SigLIP text tower, reported as
+`vec_image` KNN, top 50, weight 1.1) using the SigLIP text tower, reported as
 match source `"visual"`. It only keeps images whose query-image cosine is at
 least `search::IMAGE_MIN_COSINE` (0.10): a KNN always returns its nearest rows,
 so without a floor every text query pulled the whole photo library into the
 ranking and collapsed text recall to keyword-only (docs/eval.md). The floor is
 calibrated to SigLIP 2 on the fixture set, so recalibrate it with the model. A
 missing or broken visual model degrades to text-only search rather than
-failing the query. `magi-cli search --mode hybrid` and `index`
+failing the query. A hit's `match_sources` are `keyword` (the FTS list found
+it), `semantic` (the text-vector list), `visual`, and the winning chunk's kind
+(`ocr`, `qr`); `filename` only when the keyword list found the name chunk too,
+since a name found by the vector list alone is merely similar and `semantic`
+already says so. `magi-cli search --mode hybrid` and `index`
 (which needs an embedder — set `MAGI_FAKE_EMBEDDER=1` to skip the model)
 exercise this path from the CLI.
 
@@ -646,4 +652,4 @@ subscriber wired up yet. Deferred to Plan 5.
 
 ### Desktop app (M6 Plan 3)
 
-`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. A plain launch (first or forwarded) opens onboarding until `ui.onboarding` is `done` (FR-10), resuming at the saved step, else the search window; the search window's gear and the tray open settings. A search window opened any way but the hotkey (a launch, the tray) shows the registered hotkey under its input until dismissed for the session; the tray shows it in its tooltip and beside Open search, and on Windows a left click on the tray icon opens search (`platform::TRAY_CLICK_OPENS_APP`). `magi --background` is the launch at login's command line (`auto-launch`, registered per user while `ui.launch_at_login` is true; the shell applies a change of it): it starts in the tray and opens no window, and exits at once if magi is already running. The settings hotkey recorder sends `AppEvent::Hotkey`; the shell registers the new `ui.hotkey` in place of the old one and replies, and only a registered shortcut is saved (a refused one stays in `Live::hotkey_conflict`, as does one that fails at startup). Logs go to the file set up in `logging.rs`.
+`apps/desktop` (binary `magi`) is one process. Every outside signal becomes an `AppEvent` on one `async_channel`: the `Host` callback, the tray menu handler, the hotkey handler and the single-instance socket thread. One foreground GPUI task drains it into `Shell::handle` on the main thread. The search window is closed and recreated rather than hidden (GPUI cannot hide a window on Windows). `magi --toggle` connects to the local socket (`magi-<user>.sock`; named pipe on Windows, never TCP) of the running instance and sends `toggle`; a plain second launch sends `show`. A plain launch (first or forwarded) opens onboarding until `ui.onboarding` is `done` (FR-10), resuming at the saved step, else the search window; the search window's gear and the tray open settings. The search window's footer shows the index status; for a selected result whose match the row cannot show (`semantic`, `visual`, `ocr`, `qr`) it shows that source's one-line reason instead, but only while results are complete (idle), never over a scanning, indexing or paused status. A row with a snippet shows its folder after the name (an icon on the selected row, the full path in a tooltip); one without shows its last two folders. A search window opened any way but the hotkey (a launch, the tray) shows the registered hotkey under its input until dismissed for the session; the tray shows it in its tooltip and beside Open search, and on Windows a left click on the tray icon opens search (`platform::TRAY_CLICK_OPENS_APP`). `magi --background` is the launch at login's command line (`auto-launch`, registered per user while `ui.launch_at_login` is true; the shell applies a change of it): it starts in the tray and opens no window, and exits at once if magi is already running. The settings hotkey recorder sends `AppEvent::Hotkey`; the shell registers the new `ui.hotkey` in place of the old one and replies, and only a registered shortcut is saved (a refused one stays in `Live::hotkey_conflict`, as does one that fails at startup). Logs go to the file set up in `logging.rs`.

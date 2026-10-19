@@ -465,7 +465,7 @@ fn folder_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The last two folders of the path, `...\Documents\Contratos`: enough to
+/// The last two folders of the path, `…\Documents\Contratos`: enough to
 /// tell two files of one name apart; the tooltip has the rest.
 fn short_folder(path: &str) -> String {
     let Some(parent) = Path::new(path).parent() else {
