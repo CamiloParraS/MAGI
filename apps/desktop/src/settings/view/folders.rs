@@ -100,8 +100,7 @@ impl SettingsView {
             ),
         };
         div()
-            .child(subheading(s.searched_folders, p))
-            .child(note(p).mt(px(2.)).mb(px(8.)).child(s.folders_note))
+            .child(div().mb(px(8.)).child(subheading(s.searched_folders, p)))
             .children(scan_row(live, p).map(|row| div().mb(px(8.)).child(row)))
             // Folders dropped from the file manager, as in onboarding.
             .child(
@@ -122,7 +121,7 @@ impl SettingsView {
             .child(
                 div()
                     .mt(px(16.))
-                    .mb(px(8.))
+                    .mb(px(2.))
                     .child(subheading(s.what_to_index, p)),
             )
             .child(self.what_to_index(s, p, cx))

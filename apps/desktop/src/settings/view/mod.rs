@@ -4,12 +4,11 @@
 //! Folders (FR-1, FR-11): roots come from the latest status in [`Live`], or from the database until
 //! the first one (the engine sends none during its startup walk); every
 //! change goes through the engine, and the next status shows it. Below them,
-//! the exclusions.
+//! what to index (file types and largest file) and the exclusions.
 //!
 //! What's searched: the search features (ADR-0010), each one's switch,
-//! download and backfill from [`Live::features`]; then what to index, file
-//! types and largest file. Side by side, as the image features need image
-//! files.
+//! download and backfill from [`Live::features`]. The image features need
+//! image files, so their note points at the Image file type in Folders.
 //!
 //! Exclusions, file types, largest file and pause on battery are
 //! `indexing` settings: each save restarts the engine, which re-walks every
@@ -20,8 +19,11 @@
 //! General. A saved `ui` change goes to the shell as [`AppEvent::Ui`], which
 //! applies it live.
 //!
-//! Index: counts from the status, the files that could not be read, and
-//! clearing the index.
+//! Index: counts from the status, pause and rescan, the files that could
+//! not be read, and clearing the index.
+//!
+//! The rail's top button opens the search window, so a change can be tried
+//! without the hotkey or the tray.
 
 mod appearance;
 mod choices;

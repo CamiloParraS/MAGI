@@ -70,14 +70,34 @@ impl SettingsView {
             let on = types.contains(&kind);
             let name = kind_label(kind, s);
             self.row(Field::FileTypes, p)
-                .py(px(10.))
+                .py(px(8.))
                 .child(div().flex_none().child(theme::kind_glyph(kind, px(26.))))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(div().font_weight(FontWeight::MEDIUM).child(name))
-                        .children(kind_examples(kind).map(|e| note(p).child(e)))
+                        // The extensions share the name's line: seven rows
+                        // of two lines pushed Advanced below the fold.
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(name),
+                                )
+                                .children(kind_examples(kind).map(|e| {
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(p.mute)
+                                        .child(e)
+                                })),
+                        )
                         // Why it reads nothing yet, in the muted tone: a state, not an alarm.
                         .children(
                             (kind == Kind::Image && images_needed)
