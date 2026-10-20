@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-18T00:00:00Z",
+  "title": "Design System: Magi",
+  "extensions": {
+    "colorMeta": {
+      "accent-dark": {"role": "primary", "displayName": "Azure Signal (dark)", "canonical": "#4cc2ff"},
+      "accent-light": {"role": "primary", "displayName": "Azure Signal (light)", "canonical": "#0a64d8"},
+      "panel-dark": {"role": "neutral", "displayName": "Graphite Panel", "canonical": "#202024"},
+      "panel-light": {"role": "neutral", "displayName": "Pearl Panel", "canonical": "#f6f6f8"},
+      "card-dark": {"role": "neutral", "displayName": "Card Charcoal", "canonical": "#2b2b2b"},
+      "card-light": {"role": "neutral", "displayName": "Card White", "canonical": "#ffffff"}
+    },
+    "typographyMeta": {
+      "heading": {"displayName": "Heading", "purpose": "Settings and onboarding page titles."},
+      "body": {"displayName": "Body", "purpose": "Query, file names, labels."},
+      "snippet": {"displayName": "Snippet", "purpose": "Result excerpts with highlighted matches."},
+      "label": {"displayName": "Label", "purpose": "Group sub-headings."}
+    },
+    "shadows": [
+      {"name": "card-lift", "value": "shadow-xs (light mode only)", "purpose": "Lift a white card off a near-white window."}
+    ],
+    "motion": [
+      {"name": "fade", "value": "150ms ease-out-quint, opacity 0 to 1", "purpose": "Anything new arriving; leaving is instant."},
+      {"name": "press", "value": "nudge down a few px", "purpose": "Pressed feedback on clickable elements."}
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Result Row (selected)",
+      "kind": "custom",
+      "refersTo": "result-row",
+      "description": "Search result with glyph, name, snippet, date and match source.",
+      "html": "<div class=\"ds-row\"><span class=\"ds-bar\"></span><span class=\"ds-glyph\">PDF</span><div class=\"ds-text\"><div>Lease agreement.pdf</div><div class=\"ds-snip\">…the <mark>deposit</mark> is returned within 30 days…</div></div><div class=\"ds-meta\"><span>Mar 4</span><span class=\"ds-src\">Text</span></div></div>",
+      "css": ".ds-row{position:relative;display:flex;align-items:center;gap:12px;padding:7px 10px 7px 13px;border-radius:4px;background:rgba(10,100,216,.12);color:#1b1b1f;font:14px system-ui}.ds-bar{position:absolute;left:0;top:37.5%;height:35%;width:3px;border-radius:99px;background:#0a64d8}.ds-glyph{flex:none;width:32px;height:32px;border-radius:3px;background:#c4314b;color:#fff;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center}.ds-text{flex:1;min-width:0}.ds-snip{margin-top:2px;font-size:12.5px;line-height:1.45;color:#636366}.ds-snip mark{background:rgba(255,214,0,.45);color:#1b1b1f}.ds-meta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:#636366}.ds-src{color:#0a64d8}"
+    },
+    {
+      "name": "Grouped Settings Box",
+      "kind": "card",
+      "refersTo": "settings-card",
+      "description": "Rounded hairline box with inset dividers.",
+      "html": "<div class=\"ds-group\"><div class=\"ds-grow\">Start with your computer</div><div class=\"ds-div\"></div><div class=\"ds-grow\">Theme</div></div>",
+      "css": ".ds-group{border-radius:10px;border:1px solid rgba(0,0,0,.08);background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.05);overflow:hidden;font:14px system-ui;color:#1b1b1f}.ds-grow{min-height:44px;padding:6px 12px;display:flex;align-items:center}.ds-div{height:1px;margin-left:42px;background:rgba(0,0,0,.08)}"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status",
+      "description": "Tone pill at 12% fill.",
+      "html": "<span class=\"ds-badge\">Indexing</span>",
+      "css": ".ds-badge{display:inline-block;padding:1px 8px;border-radius:999px;font:12px system-ui;color:#0a64d8;background:rgba(10,100,216,.12)}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "accent-light",
+      "description": "Accent fill, white label; hover 90% opacity.",
+      "html": "<button class=\"ds-btn\">Add folder</button>",
+      "css": ".ds-btn{background:#0a64d8;color:#fff;border:0;border-radius:6px;padding:6px 14px;font:14px system-ui}.ds-btn:hover{opacity:.9}.ds-btn:active{opacity:.8}.ds-btn:focus-visible{outline:2px solid #0a64d8;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Pane",
+    "overview": "Magi is a sheet of the operating system that happens to know where your files are. System type, native window materials, one cool accent, tonal layers and a 150 ms fade; the user's files are the most colorful thing on screen.",
+    "keyCharacteristics": ["System type, no bundled typeface", "Tonal layering with hairline borders", "One accent, used sparingly", "File types as saturated glyph squares", "Light and dark first-class"],
+    "rules": [
+      {"name": "The One Accent Rule", "body": "Azure Signal marks what the user is acting on or what the system is doing; it never decorates.", "section": "colors"},
+      {"name": "The Tint Floor Rule", "body": "Over a blurred backdrop, light mode never drops below 85% panel opacity and dark mode never below 75%.", "section": "colors"},
+      {"name": "The Native Voice Rule", "body": "Never bundle or specify a typeface; weight and size carry hierarchy.", "section": "typography"},
+      {"name": "The Flat-At-Rest Rule", "body": "Surfaces are flat; state is a background tint and press nudges down.", "section": "elevation"}
+    ],
+    "dos": ["Do let the OS draw its materials", "Do keep every border a 1 px hairline", "Do show why a result matched on every row", "Do animate arrival with the 150 ms ease-out fade only", "Do use file-type glyph colors only on the 32 px glyph squares"],
+    "donts": ["Don't add a bundled typeface, gradient text, or decorative illustration", "Don't use the accent as a fill for large surfaces or as a second status color", "Don't add drop shadows in dark mode", "Don't use bright status colors for the word beside a dot unless it is a problem", "Don't let the logo mark appear in more than one color"]
+  }
+}
