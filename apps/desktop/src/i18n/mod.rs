@@ -163,6 +163,8 @@ pub struct Strings {
     pub excludes: &'static str,
     pub excludes_note: &'static str,
     pub save: &'static str,
+    /// Briefly in place of a text field's note or the Save button, once saved.
+    pub saved: &'static str,
     /// The settings sidebar's way back to the search window.
     pub search_files: &'static str,
     pub rescan_now: &'static str,

@@ -54,7 +54,7 @@ use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
 use crate::tray::TrayAction;
 use crate::ui::keycaps::shortcut_text;
-use crate::ui::{heading, note, row, row_icon, warn_note};
+use crate::ui::{heading, note, row, row_icon, saved_note, warn_note};
 use choices::{
     Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
 };
@@ -74,6 +74,8 @@ const NAV_GAP: f32 = 2.;
 const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(240);
 /// How long another section takes to fade in.
 const SECTION_FADE: std::time::Duration = std::time::Duration::from_millis(220);
+/// How long "Saved" stands in for a text field's note or Save button.
+const SAVED_FOR: std::time::Duration = std::time::Duration::from_millis(2000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -198,6 +200,9 @@ pub struct SettingsView {
     /// The last change that failed and where, until the next change or a
     /// section switch.
     error: Option<(Field, ErrorCode)>,
+    /// The text field whose change just saved, for a moment: those save on
+    /// Enter, blur or Save and show nothing else.
+    saved: Option<Field>,
     /// Roots being removed: dimmed, their controls off, until the list no
     /// longer has them.
     removing: Vec<i64>,
@@ -394,6 +399,7 @@ impl SettingsView {
             unreadable: None,
             errors_listed: None,
             error: None,
+            saved: None,
             removing: Vec::new(),
             busy: Vec::new(),
             _subscriptions: subscriptions,
@@ -582,6 +588,9 @@ impl SettingsView {
                 match saved {
                     Ok(config) => {
                         view.error = None;
+                        if matches!(field, Field::MaxSize | Field::Excludes) {
+                            view.flash_saved(field, cx);
+                        }
                         view.indexing = config.indexing;
                         view.ui = config.ui.clone();
                         let _ = view.events.try_send(AppEvent::Ui(config.ui));
@@ -595,6 +604,21 @@ impl SettingsView {
                 // old values when the save failed.
                 view.sync_controls(window, cx);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Shows `field` as saved for a moment.
+    fn flash_saved(&mut self, field: Field, cx: &mut Context<Self>) {
+        self.saved = Some(field);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVED_FOR).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.saved == Some(field) {
+                    view.saved = None;
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -651,7 +675,13 @@ impl SettingsView {
             .flex_1()
             .min_w_0()
             .child(label)
-            .children(note_text.map(|text| note(p).child(text)))
+            .children(note_text.map(|text| {
+                if self.saved == Some(field) {
+                    saved_note(s, p)
+                } else {
+                    note(p).child(text)
+                }
+            }))
             .children(self.problem(field, s, p))
     }
 

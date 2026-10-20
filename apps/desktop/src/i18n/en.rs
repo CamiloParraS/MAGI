@@ -129,6 +129,7 @@ pub const STRINGS: Strings = Strings {
     excludes: "Skip these paths",
     excludes_note: "One pattern per line, like **/node_modules/**.",
     save: "Save",
+    saved: "Saved",
     search_files: "Search files",
     rescan_now: "Rescan now",
     invalid_glob: "“{glob}” isn't a valid pattern.",

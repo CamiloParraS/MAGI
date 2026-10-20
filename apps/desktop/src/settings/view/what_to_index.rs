@@ -173,7 +173,11 @@ impl SettingsView {
                     Button::new("save-excludes")
                         .when(excludes_edited, |b| b.cursor_pointer())
                         .primary()
-                        .label(s.save)
+                        .label(if self.saved == Some(Field::Excludes) && !excludes_edited {
+                            s.saved
+                        } else {
+                            s.save
+                        })
                         .disabled(!excludes_edited)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.save_excludes(window, cx)),
