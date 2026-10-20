@@ -171,6 +171,7 @@ pub(crate) fn suggested_folders<V: 'static>(
                     .flex_wrap()
                     .gap_2()
                     .children(offered.into_iter().enumerate().map(|(ix, dir)| {
+                        let group = SharedString::from(format!("suggest-folder-{ix}"));
                         pressable(
                             Button::new(("suggest-folder", ix))
                                 .cursor_pointer()
@@ -180,8 +181,46 @@ pub(crate) fn suggested_folders<V: 'static>(
                                 // xsmall keeps all four on one row under onboarding's
                                 // folder list.
                                 .xsmall()
-                                .icon(IconName::Plus)
-                                .label(folder_name(&dir))
+                                .group(group.clone())
+                                // A folder at rest; the plus takes its place
+                                // under the pointer, saying what a click does.
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .child(
+                                            div()
+                                                .relative()
+                                                .size(px(12.))
+                                                .child(
+                                                    div()
+                                                        .group_hover(group.clone(), |s| {
+                                                            s.opacity(0.)
+                                                        })
+                                                        .child(
+                                                            Icon::new(IconName::Folder)
+                                                                .size(px(12.)),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .absolute()
+                                                        .top_0()
+                                                        .left_0()
+                                                        .opacity(0.)
+                                                        .group_hover(group.clone(), |s| {
+                                                            s.opacity(1.)
+                                                        })
+                                                        .child(
+                                                            Icon::new(IconName::Plus)
+                                                                .size(px(12.))
+                                                                .text_color(p.accent),
+                                                        ),
+                                                ),
+                                        )
+                                        .child(folder_name(&dir)),
+                                )
                                 .tooltip(dir.display().to_string())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     add(this, vec![dir.clone()], cx)
