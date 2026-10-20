@@ -163,6 +163,9 @@ pub struct Strings {
     pub excludes: &'static str,
     pub excludes_note: &'static str,
     pub save: &'static str,
+    /// The settings sidebar's way back to the search window.
+    pub search_files: &'static str,
+    pub rescan_now: &'static str,
     /// `{glob}` is the pattern.
     pub invalid_glob: &'static str,
     pub invalid_size: &'static str,

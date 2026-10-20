@@ -44,7 +44,7 @@ use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
 use magi_core::dto::{ErrorCode, FileError, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
-use magi_core::platform::BackdropSupport;
+use magi_core::platform::{BackdropSupport, SYMBOL_MODIFIERS};
 use serde_json::json;
 
 use super::{Roll, error_text, slider_from_intensity};
@@ -52,6 +52,8 @@ use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
+use crate::tray::TrayAction;
+use crate::ui::keycaps::shortcut_text;
 use crate::ui::{heading, note, row, row_icon, warn_note};
 use choices::{
     Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
@@ -140,6 +142,7 @@ pub enum Field {
     Background,
     SeeThrough,
     Unreadable,
+    Rescan,
     Clear,
     Quit,
 }
@@ -205,16 +208,6 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(
-        host: Host,
-        live: Entity<Live>,
-        events: Events,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        // ponytail: this and `list_roots` below are small reads on the main
-        // thread; move them to the background executor if they ever show up
-        // in a frame trace.
     /// Switches the pane, the way a click on its nav item does.
     fn show(&mut self, section: Section, cx: &mut Context<Self>) {
         self.recording = false;
@@ -228,6 +221,16 @@ impl SettingsView {
         cx.notify();
     }
 
+    pub fn new(
+        host: Host,
+        live: Entity<Live>,
+        events: Events,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // ponytail: this and `list_roots` below are small reads on the main
+        // thread; move them to the background executor if they ever show up
+        // in a frame trace.
         let config = host
             .settings()
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
@@ -271,6 +274,11 @@ impl SettingsView {
                 if let Some(status) = &live.read(cx).status {
                     this.roll_stats(status);
                 }
+                // The search footer's "see which files".
+                if live.read(cx).show_unreadable {
+                    live.update(cx, |live, _| live.show_unreadable = false);
+                    this.show(Section::Index, cx);
+                }
                 // A file failed or a retry worked: the list follows.
                 let errors = live.read(cx).status.as_ref().map(|st| st.errors);
                 if this.section == Section::Index && errors != this.errors_listed {
@@ -280,11 +288,6 @@ impl SettingsView {
                 if let Some(status) = &live.read(cx).status {
                     this.removing
                         .retain(|id| status.roots.iter().any(|root| root.id == *id));
-                }
-                // The search footer's "see which files".
-                if live.read(cx).show_unreadable {
-                    live.update(cx, |live, _| live.show_unreadable = false);
-                    this.show(Section::Index, cx);
                 }
                 cx.notify();
             }),
@@ -400,7 +403,46 @@ impl SettingsView {
         if let Some(status) = view.live.read(cx).status.clone() {
             view.roll_stats(&status);
         }
+        // Opened by the search footer's "see which files".
+        if view.live.read(cx).show_unreadable {
+            view.live
+                .clone()
+                .update(cx, |live, _| live.show_unreadable = false);
+            view.show(Section::Index, cx);
+        }
         view
+    }
+
+    /// The rail's way back to the product: a quiet item at its foot, like the
+    /// sections above it, opening the search window (or bringing it forward).
+    /// The shortcut is in its tooltip: beside the label it would overflow.
+    fn search_button(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> impl IntoElement {
+        let hotkey = Keystroke::parse(&crate::settings::hotkey_keystroke(&self.ui.hotkey))
+            .ok()
+            .map(|k| shortcut_text(&k, s, SYMBOL_MODIFIERS));
+        Button::new("open-search")
+            .cursor_pointer()
+            .ghost()
+            .w_full()
+            .h(px(NAV_ITEM_H))
+            .px_0()
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .accessibility_label(s.search_files)
+            .when_some(hotkey, |b, text| b.tooltip(text))
+            .on_click(cx.listener(|this, _, _, _| {
+                let _ = this.events.try_send(AppEvent::Tray(TrayAction::OpenSearch));
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .px_3()
+                    .child(Icon::new(IconName::Search).size(px(15.)).text_color(p.mute))
+                    .child(s.search_files),
+            )
     }
 
     /// Saves `patch(choice)` when a dropdown confirms a choice.
@@ -411,13 +453,6 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription
-        // Opened by the search footer's "see which files".
-        if view.live.read(cx).show_unreadable {
-            view.live
-                .clone()
-                .update(cx, |live, _| live.show_unreadable = false);
-            view.show(Section::Index, cx);
-        }
     where
         T: Clone + PartialEq + 'static,
     {
@@ -721,11 +756,17 @@ impl Render for SettingsView {
                     .child(s.settings),
             )
             .child(sections)
+            // A hairline marks it as an action, not a sixth section.
             .child(
                 div()
                     .mt_auto()
+                    .child(div().h(px(1.)).mx_3().mb(px(6.)).bg(p.line))
+                    .child(self.search_button(s, &p, cx)),
+            )
+            .child(
+                div()
                     .px_3()
-                    .pb_1()
+                    .py_1()
                     .text_xs()
                     .text_color(p.mute)
                     .child(concat!("Magi ", env!("CARGO_PKG_VERSION"))),

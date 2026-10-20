@@ -11,10 +11,12 @@ use gpui_kit::*;
 use super::{Field, SettingsView};
 use std::time::Instant;
 
-use magi_core::dto::{IndexState, IndexStatus};
+use magi_core::dto::{IndexState, IndexStatus, PauseReason};
 
+use crate::app::AppEvent;
 use crate::settings::{ROLL, Roll, file_error_label, still_reading};
 use crate::theme::{Palette, Tone};
+use crate::tray::TrayAction;
 use crate::ui::{card, group, grouped, note, row, row_icon, status_row, subheading};
 
 /// How many unreadable files the Index section lists.
@@ -193,9 +195,66 @@ impl SettingsView {
             .as_ref()
             .filter(|st| matches!(st.state, IndexState::Scanning | IndexState::Paused))
             .map(|st| div().mb(px(8.)).child(status_row(st, lang, p)));
+        // What the status row can't change: the user's pause, and a fresh walk.
+        let user_paused = live
+            .status
+            .as_ref()
+            .is_some_and(|st| st.paused_for == Some(PauseReason::User));
+        let controls = live.status.is_some().then(|| {
+            div()
+                .mt(px(8.))
+                .flex()
+                .gap(px(8.))
+                .child(
+                    Button::new("pause-indexing")
+                        .cursor_pointer()
+                        .ghost()
+                        .small()
+                        .icon(if user_paused {
+                            IconName::Play
+                        } else {
+                            IconName::Pause
+                        })
+                        .label(if user_paused {
+                            s.tray_resume
+                        } else {
+                            s.tray_pause
+                        })
+                        .on_click(cx.listener(|this, _, _, _| {
+                            let _ = this
+                                .events
+                                .try_send(AppEvent::Tray(TrayAction::TogglePause));
+                        })),
+                )
+                .child(
+                    Button::new("rescan")
+                        .cursor_pointer()
+                        .ghost()
+                        .small()
+                        .icon(IconName::RefreshCw)
+                        .label(s.rescan_now)
+                        .loading(self.is_busy(Field::Rescan))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.run(
+                                Field::Rescan,
+                                |host| {
+                                    host.engine()?
+                                        .rescan()
+                                        .recv()
+                                        .map_err(|_| {
+                                            magi_core::Error::Engine("the engine is stopped".into())
+                                        })?
+                                        .map(drop)
+                                },
+                                cx,
+                            );
+                        })),
+                )
+        });
         div()
             .children(busy)
             .children(stats)
+            .children(controls)
             .child(
                 div()
                     .mt(px(16.))

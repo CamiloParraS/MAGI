@@ -129,6 +129,8 @@ pub const STRINGS: Strings = Strings {
     excludes: "Omitir estas rutas",
     excludes_note: "Un patrón por línea, como **/node_modules/**.",
     save: "Guardar",
+    search_files: "Buscar archivos",
+    rescan_now: "Volver a explorar",
     invalid_glob: "“{glob}” no es un patrón válido.",
     invalid_size: "Escribe un número entero de megabytes, 1 o más.",
     appearance: "Apariencia",
