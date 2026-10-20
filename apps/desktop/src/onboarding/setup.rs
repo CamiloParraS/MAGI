@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
@@ -237,6 +236,30 @@ impl OnboardingView {
         grouped(p, rows)
     }
 
+    /// "Start with your computer" (FR-10), on by default: a switch, as in
+    /// Settings.
+    fn launch_row(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        group(p).child(
+            row(
+                IconName::Power,
+                s.launch_at_login,
+                Some(s.launch_at_login_note),
+                p,
+            )
+            .child(
+                Switch::new("start-at-login")
+                    .cursor_pointer()
+                    .checked(self.launch_at_login)
+                    .color(p.accent)
+                    .accessibility_label(s.launch_at_login)
+                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                        this.launch_at_login = on;
+                        cx.notify();
+                    })),
+            ),
+        )
+    }
+
     /// The one setup screen: the welcome over two columns, folders on the
     /// left, features and startup on the right.
     pub(super) fn setup(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -283,18 +306,7 @@ impl OnboardingView {
                                 self.features(s, p, cx),
                                 p,
                             ))
-                            // Start with the computer: on by default, a quiet
-                            // line under the features rather than a card.
-                            .child(
-                                Checkbox::new("start-at-login")
-                                    .label(s.launch_at_login)
-                                    .tooltip(s.launch_at_login_note)
-                                    .checked(self.launch_at_login)
-                                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                                        this.launch_at_login = on;
-                                        cx.notify();
-                                    })),
-                            ),
+                            .child(self.launch_row(s, p, cx)),
                     ),
             )
     }
