@@ -5,7 +5,6 @@ pub mod keycaps;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::features::Feature;
 
@@ -51,7 +50,7 @@ pub(crate) fn card(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
-        .when(!p.dark, |d| d.shadow_xs())
+        .shadow_sm()
 }
 
 /// A setting's second line.
@@ -112,7 +111,7 @@ pub(crate) fn group(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
-        .when(!p.dark, |d| d.shadow_xs())
+        .shadow_sm()
         .overflow_hidden()
 }
 

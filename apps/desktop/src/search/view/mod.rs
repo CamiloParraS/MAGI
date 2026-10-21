@@ -396,9 +396,11 @@ impl Render for SearchView {
             .on_children_prepainted(fit)
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_col()
                     .w_full()
+                    .child(p.wash(px(120.)))
                     .child(
                         div()
                             .flex()

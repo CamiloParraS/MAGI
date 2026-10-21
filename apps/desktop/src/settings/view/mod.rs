@@ -749,7 +749,7 @@ impl Render for SettingsView {
                     .h(px(NAV_ITEM_H))
                     .px_0()
                     .rounded(px(6.))
-                    .when(selected, |b| b.bg(p.chip))
+                    .when(selected, |b| b.bg(p.selected_fill(2.)))
                     // The content row centers a label; a filling child sits
                     // left. The padding is the label's, so the content row
                     // starts at the button's edge.
@@ -820,6 +820,7 @@ impl Render for SettingsView {
             .child(
                 div()
                     .id("pane")
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .overflow_y_scroll()
@@ -827,6 +828,7 @@ impl Render for SettingsView {
                     .px(px(32.))
                     .pt(px(22.))
                     .pb(px(28.))
+                    .child(p.wash(px(220.)))
                     // Another section fades in, its heading with it.
                     .child(theme::fade_in_over(
                         div()
