@@ -62,8 +62,10 @@ jobs:
 
       - name: Copy a file to the clipboard and read it back
         run: |
-          xvfb-run -a bash -c '
-            cargo test -p magi-core --lib copied_files -- --ignored || exit 1
-            got=$(xclip -selection clipboard -o -t text/uri-list | tr -d "")
-            [ "$got" = "file://${TMPDIR:-/tmp}/magi-copy-as-file.txt" ] || { echo "uri list was $got"; exit 1; }
-          '
+          cat > check.sh <<'SCRIPT'
+          cargo test -p magi-core --lib copied_files -- --ignored || exit 1
+          got=$(xclip -selection clipboard -o -t text/uri-list | tr -d '')
+          want="file://${TMPDIR:-/tmp}/magi-copy-as-file.txt"
+          [ "$got" = "$want" ] || { echo "uri list was $got, expected $want"; exit 1; }
+          SCRIPT
+          xvfb-run -a bash check.sh
