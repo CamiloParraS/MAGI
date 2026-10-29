@@ -130,7 +130,7 @@ pub fn display_under_cursor() -> Option<u64> {
 // writeObjects would take several.
 pub fn copy_files(paths: &[std::path::PathBuf], text: &str) -> bool {
     let [path] = paths else { return false };
-    let quote = |s: &str| s.replace('\', "\\\\").replace('"', "\\\"");
+    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         "set the clipboard to {{«class furl»:(POSIX file \"{}\"), string:\"{}\"}}",
         quote(&path.to_string_lossy()),
