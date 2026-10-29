@@ -218,6 +218,8 @@ pub struct Strings {
     pub shortcut_taken_note: &'static str,
     pub results_shown: &'static str,
     pub results_shown_note: &'static str,
+    pub copy_as_file: &'static str,
+    pub copy_as_file_note: &'static str,
     pub theme: &'static str,
     pub theme_light: &'static str,
     pub theme_dark: &'static str,

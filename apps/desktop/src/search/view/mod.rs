@@ -73,6 +73,9 @@ pub struct SearchView {
     /// The copied result's `file_id`, set while the footer says the path was
     /// copied; its task clears it.
     copied: Option<(i64, Task<()>)>,
+    /// The whole input is selected only because the last query was restored
+    /// into it, so copying still means the result.
+    restored: bool,
     /// Copies so far; keys the row flash so each copy replays it.
     copies: u64,
     /// `ui.hotkey`, when this window was opened some other way than by it.
@@ -136,6 +139,7 @@ impl SearchView {
             slow_timer: None,
             copied: None,
             copies: 0,
+            restored: false,
             teach: opening.teach,
             _subscriptions: subscriptions,
         };
@@ -155,6 +159,7 @@ impl SearchView {
             input.set_value(text.clone(), window, cx);
             input.select_all(window, cx);
         });
+        self.restored = true;
         if let Some(query) = self.state.set_query(&text) {
             self.run(query, Duration::ZERO, cx);
         }
@@ -180,6 +185,7 @@ impl SearchView {
     ) {
         match event {
             InputEvent::Change => {
+                self.restored = false;
                 let text = input.read(cx).value().to_string();
                 self.live
                     .update(cx, |live, _| live.last_query.clone_from(&text));
@@ -324,13 +330,24 @@ impl SearchView {
         }
     }
 
-    /// `Ctrl/Cmd+C` copies the selected result's path, unless the input has
-    /// text selected: then the input copies it.
+    /// `Ctrl/Cmd+C` copies the selected result (the file, or its path when
+    /// `ui.copy_as_file` is off or this OS can't), unless the input has text
+    /// selected: then the input copies it.
     fn copy_path(&mut self, _: &CopyText, _: &mut Window, cx: &mut Context<Self>) {
-        let text_selected = !self.input.read(cx).selected_range().is_empty();
+        let input = self.input.read(cx);
+        let range = input.selected_range();
+        let text_selected =
+            !range.is_empty() && !(self.restored && range == (0..input.value().len()));
         match self.state.selected() {
             Some(result) if !text_selected => {
-                cx.write_to_clipboard(ClipboardItem::new_string(result.path.clone()));
+                let as_file = self.host.settings().is_ok_and(|c| c.ui.copy_as_file)
+                    && self
+                        .host
+                        .file_path(result.file_id)
+                        .is_ok_and(|file| magi_core::platform::copy_files(&[file], &result.path));
+                if !as_file {
+                    cx.write_to_clipboard(ClipboardItem::new_string(result.path.clone()));
+                }
                 self.copies += 1;
                 let file_id = result.file_id;
                 self.copied = Some((

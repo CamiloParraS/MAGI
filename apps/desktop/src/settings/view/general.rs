@@ -141,6 +141,27 @@ impl SettingsView {
             s,
             p,
         );
+        let copy_as_file = self.setting(
+            Field::CopyAsFile,
+            IconName::Copy,
+            s.copy_as_file,
+            Some(s.copy_as_file_note),
+            Switch::new("copy-as-file")
+                .cursor_pointer()
+                .checked(self.ui.copy_as_file)
+                .color(p.accent)
+                .accessibility_label(s.copy_as_file)
+                .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                    this.save(
+                        Field::CopyAsFile,
+                        json!({ "ui": { "copy_as_file": on } }),
+                        window,
+                        cx,
+                    );
+                })),
+            s,
+            p,
+        );
         let language = self.setting(
             Field::Language,
             IconName::Globe,
@@ -197,7 +218,7 @@ impl SettingsView {
             .child(titled(
                 s.search_window,
                 stack()
-                    .child(grouped(p, [hotkey, results]))
+                    .child(grouped(p, [hotkey, results, copy_as_file]))
                     .children(conflict),
             ))
             .child(titled(

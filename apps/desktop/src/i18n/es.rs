@@ -176,6 +176,8 @@ pub const STRINGS: Strings = Strings {
     shortcut_taken_note: "Elige otra combinación.",
     results_shown: "Resultados mostrados",
     results_shown_note: "El máximo de resultados que muestra una búsqueda.",
+    copy_as_file: "Copiar resultados como archivos",
+    copy_as_file_note: "Al copiar un resultado puedes pegar el archivo. Desactivado copia su ruta.",
     theme: "Tema",
     theme_light: "Claro",
     theme_dark: "Oscuro",

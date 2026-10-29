@@ -183,8 +183,75 @@ pub fn display_under_cursor() -> Option<u64> {
     (!monitor.is_null()).then_some(monitor as usize as u64)
 }
 
+/// Sets `CF_HDROP` (so Explorer pastes the files) and `CF_UNICODETEXT` (so a
+/// text field pastes the path). Whether the OS took both.
+pub fn copy_files(paths: &[std::path::PathBuf], text: &str) -> bool {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    const CF_UNICODETEXT: u32 = 13;
+    const CF_HDROP: u32 = 15;
+    let files = super::dropfiles_bytes(paths);
+    let wide: Vec<u8> = text
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    // SAFETY: the clipboard is opened before and closed after the calls that
+    // need it; on success it owns each handle `global` returns.
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+        let set = |format, bytes: &[u8]| {
+            global(bytes).is_some_and(|handle| !SetClipboardData(format, handle).is_null())
+        };
+        let ok = set(CF_HDROP, &files) & set(CF_UNICODETEXT, &wide);
+        CloseClipboard();
+        ok
+    }
+}
+
+/// A movable global block holding `bytes`, which the clipboard takes over once
+/// set. Freed here if it can't be filled.
+fn global(bytes: &[u8]) -> Option<windows_sys::Win32::Foundation::HANDLE> {
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::Memory::{
+        GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
+    };
+    // SAFETY: the block is `bytes.len()` long and locked while it is written.
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+        if handle.is_null() {
+            return None;
+        }
+        let ptr = GlobalLock(handle);
+        if ptr.is_null() {
+            GlobalFree(handle);
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast(), bytes.len());
+        GlobalUnlock(handle);
+        Some(handle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// Touches the real clipboard, so it only runs on request (the
+    /// `clipboard` workflow): `cargo test -p magi-core copied_files -- --ignored`.
+    #[test]
+    #[ignore = "overwrites the clipboard"]
+    fn copied_files_reach_the_clipboard() {
+        let file = std::env::temp_dir().join("magi-copy-as-file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(copy_files(
+            std::slice::from_ref(&file),
+            &file.to_string_lossy()
+        ));
+    }
+
     use super::*;
     use crate::platform::{CloudPlaceholder, Os};
 

@@ -1,0 +1,29 @@
+name: Clipboard
+
+# Manual only: the tests overwrite the runner's real clipboard. Add the macOS
+# and Linux jobs as `platform::copy_files` gains those implementations.
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Copy a file to the clipboard
+        run: cargo test -p magi-core --lib copied_files -- --ignored
+
+      - name: Read it back as a file and as text
+        shell: pwsh
+        run: |
+          $file = Join-Path $env:TEMP 'magi-copy-as-file.txt'
+          $files = (Get-Clipboard -Format FileDropList).FullName
+          $text = Get-Clipboard
+          if ($files -ne $file) { throw "file list was '$files', expected '$file'" }
+          if ($text -ne $file) { throw "text was '$text', expected '$file'" }

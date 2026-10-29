@@ -217,6 +217,40 @@ pub fn hide_dock_icon() {
     macos::hide_dock_icon();
 }
 
+/// Puts `paths` on the clipboard as files, plus `text` for pasting into a
+/// text field. `false` when this OS has no implementation yet or the clipboard
+/// refused: the caller then copies `text` alone.
+pub fn copy_files(paths: &[std::path::PathBuf], text: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::copy_files(paths, text)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // ponytail: macOS (NSPasteboard file URLs) and Linux (text/uri-list)
+        // fall back to the path text until someone can test them.
+        let _ = (paths, text);
+        false
+    }
+}
+
+/// A Windows `CF_HDROP` payload: a `DROPFILES` header (offset 20, no point,
+/// wide chars) then each path as NUL-terminated UTF-16, and one more NUL.
+/// Pure, so it is tested on every OS.
+pub fn dropfiles_bytes(paths: &[std::path::PathBuf]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&20u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 12]);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    for path in paths {
+        for unit in path.to_string_lossy().encode_utf16().chain([0]) {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+    bytes.extend_from_slice(&[0, 0]);
+    bytes
+}
+
 /// Which OS's guidance to give. A value, so every OS's choice is tested on
 /// any OS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -525,6 +559,18 @@ pub fn display_under_cursor() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drop_list_is_a_header_then_nul_separated_wide_paths() {
+        let bytes = dropfiles_bytes(&[Path::new("a").into(), Path::new("bc").into()]);
+        let units: Vec<u16> = bytes[20..]
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(&bytes[..4], &20u32.to_le_bytes());
+        assert_eq!(&bytes[16..20], &1u32.to_le_bytes());
+        assert_eq!(units, [97, 0, 98, 99, 0, 0]);
+    }
 
     #[test]
     fn a_denied_macos_folder_points_at_the_right_privacy_page() {

@@ -140,6 +140,7 @@ pub enum Field {
     Excludes,
     Feature(Feature),
     LaunchAtLogin,
+    CopyAsFile,
     Language,
     Results,
     Theme,

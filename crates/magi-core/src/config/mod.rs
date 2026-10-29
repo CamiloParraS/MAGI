@@ -165,6 +165,9 @@ pub struct UiConfig {
     pub theme: String,
     pub max_results: u32,
     pub launch_at_login: bool,
+    /// Copying a result puts the file on the clipboard (paste it in a file
+    /// manager); off copies its path as text.
+    pub copy_as_file: bool,
     pub language: Language,
     pub transparency_mode: TransparencyMode,
     /// Alpha of the tint drawn over the native effect.
@@ -179,6 +182,7 @@ impl Default for UiConfig {
             theme: "system".into(),
             max_results: 30,
             launch_at_login: false,
+            copy_as_file: true,
             language: Language::System,
             transparency_mode: TransparencyMode::MatchSystem,
             transparency_intensity: 0.75,
@@ -342,6 +346,13 @@ pub(crate) fn save_to(path: &Path, config: &Config) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copying_a_result_copies_the_file_unless_turned_off() {
+        assert!(UiConfig::default().copy_as_file);
+        let old: UiConfig = toml::from_str("launch_at_login = true").unwrap();
+        assert!(old.copy_as_file);
+    }
 
     #[test]
     fn round_trip() {
