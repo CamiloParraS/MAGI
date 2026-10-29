@@ -157,12 +157,16 @@ pub struct Strings {
     pub kind_image: &'static str,
     pub max_size: &'static str,
     pub max_size_note: &'static str,
-    pub folders_note: &'static str,
     pub advanced: &'static str,
     pub advanced_note: &'static str,
     pub excludes: &'static str,
     pub excludes_note: &'static str,
     pub save: &'static str,
+    /// Briefly in place of a text field's note or the Save button, once saved.
+    pub saved: &'static str,
+    /// The settings sidebar's way back to the search window.
+    pub search_files: &'static str,
+    pub rescan_now: &'static str,
     /// `{glob}` is the pattern.
     pub invalid_glob: &'static str,
     pub invalid_size: &'static str,

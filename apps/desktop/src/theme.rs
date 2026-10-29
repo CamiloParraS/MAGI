@@ -6,9 +6,10 @@ use gpui_kit::component::{Icon, Theme, ThemeMode};
 use std::time::Duration;
 
 use gpui_kit::{
-    Animation, AnimationElement, AnimationExt as _, App, Div, ElementId, FontWeight, Hsla,
-    IntoElement, ParentElement as _, Pixels, Rgba, Styled, Window, WindowAppearance,
-    WindowBackgroundAppearance, div, ease_out_quint, px, relative, rgb, rgba,
+    Animation, AnimationElement, AnimationExt as _, App, Background, Div, ElementId, FontWeight,
+    Hsla, IntoElement, ParentElement as _, Pixels, Rgba, Styled, Window, WindowAppearance,
+    WindowBackgroundAppearance, div, ease_out_quint, linear_color_stop, linear_gradient, px,
+    relative, rgb, rgba,
 };
 use gpui_kit::{black, white};
 use magi_core::config::{TRANSPARENCY_INTENSITY, TransparencyMode};
@@ -370,6 +371,32 @@ impl Palette {
             a: self.tint_alpha(backdrop),
             ..self.panel
         }
+    }
+
+    /// A soft wash of the accent behind the top of a window, fading out over
+    /// `height`: depth from the one accent, no new hue. Paint it first.
+    pub fn wash(&self, height: Pixels) -> Div {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w_full()
+            .h(height)
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(self.accent.opacity(if self.dark { 0.18 } else { 0.09 }), 0.),
+                linear_color_stop(self.accent.opacity(0.), 1.),
+            ))
+    }
+
+    /// The fill of a selected row or nav item: the selection color at full
+    /// strength under the accent bar, thinning to a trace on the far side.
+    pub fn selected_fill(&self, strength: f32) -> Background {
+        linear_gradient(
+            90.,
+            linear_color_stop(self.accent.opacity(self.selection.a * strength), 0.),
+            linear_color_stop(self.accent.opacity(self.selection.a * 0.3), 1.),
+        )
     }
 
     /// Marks the selected row: a quarter of its height, centered on its left

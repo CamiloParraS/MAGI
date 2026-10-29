@@ -5,7 +5,6 @@ pub mod keycaps;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::features::Feature;
 
@@ -14,7 +13,7 @@ use magi_core::dto::{IndexState, IndexStatus};
 use std::f32::consts::TAU;
 use std::time::Duration;
 
-use crate::i18n::Lang;
+use crate::i18n::{Lang, Strings};
 use crate::live::Live;
 use crate::theme::{self, Palette};
 use crate::tray::status_line;
@@ -51,7 +50,7 @@ pub(crate) fn card(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
-        .when(!p.dark, |d| d.shadow_xs())
+        .shadow_sm()
 }
 
 /// A setting's second line.
@@ -74,6 +73,16 @@ pub(crate) fn warn_note(p: &Palette, text: impl IntoElement) -> Div {
                 .child(Icon::new(IconName::TriangleAlert).size(px(12.))),
         )
         .child(div().min_w_0().child(text))
+}
+
+/// "Saved", with a check, in a note's place.
+pub(crate) fn saved_note(s: &Strings, p: &Palette) -> Div {
+    note(p)
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(Icon::new(IconName::Check).size(px(12.)).text_color(p.mute))
+        .child(s.saved)
 }
 
 pub(crate) fn heading(text: &'static str) -> Div {
@@ -102,7 +111,7 @@ pub(crate) fn group(p: &Palette) -> Div {
         .border_1()
         .border_color(p.line)
         .bg(p.card)
-        .when(!p.dark, |d| d.shadow_xs())
+        .shadow_sm()
         .overflow_hidden()
 }
 

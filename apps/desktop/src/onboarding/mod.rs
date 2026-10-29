@@ -503,17 +503,7 @@ impl Render for OnboardingView {
         };
         // A soft wash of the accent behind the top of the window: light mode
         // otherwise has no color but the button.
-        let wash = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .w_full()
-            .h(px(260.))
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(p.accent.opacity(if self.dark { 0.30 } else { 0.20 }), 0.),
-                linear_color_stop(p.accent.opacity(0.), 1.),
-            ));
+        let wash = p.wash(px(260.));
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)

@@ -388,7 +388,9 @@ fn row(
         .pr(px(10.))
         .py(px(7.))
         .rounded(px(4.))
-        .when(selected, |d| d.bg(p.selection).child(p.accent_bar()))
+        .when(selected, |d| {
+            d.bg(p.selected_fill(1.4)).child(p.accent_bar())
+        })
         .active(move |s| s.bg(pressed))
         .child(icon(r))
         .child(

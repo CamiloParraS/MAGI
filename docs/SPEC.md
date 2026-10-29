@@ -15,7 +15,7 @@
 
 ## 0. How to use this document (rules for AI coding agents)
 
-Read this entire file before writing code. It is the source of truth; if code and spec disagree, the spec wins until the spec is updated.
+Read this section (§0) before writing code, then only the sections your task touches (CLAUDE.md "Where to look" maps tasks to sections). It is the source of truth; if code and spec disagree, the spec wins until the spec is updated.
 
 **Workflow rules**
 

@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14, windows-latest]
+        os: [ubuntu-22.04, macos-14, macos-26, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +41,41 @@ jobs:
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+        env:
+          MAGI_FAKE_EMBEDDER: "1"
+
+  # Debian is the supported Linux (release.yml's deb-check runs on bookworm):
+  # build and test inside a clean container, not only on Ubuntu.
+  debian:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:bookworm, debian:trixie]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates jq             build-essential curl wget file pkg-config libssl-dev             clang cmake libasound2-dev libfontconfig-dev libglib2.0-dev libva-dev libvulkan1             libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch PDFium binaries
+        run: cargo run -p xtask -- fetch-pdfium
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings

@@ -4,12 +4,11 @@
 //! Folders (FR-1, FR-11): roots come from the latest status in [`Live`], or from the database until
 //! the first one (the engine sends none during its startup walk); every
 //! change goes through the engine, and the next status shows it. Below them,
-//! the exclusions.
+//! what to index (file types and largest file) and the exclusions.
 //!
 //! What's searched: the search features (ADR-0010), each one's switch,
-//! download and backfill from [`Live::features`]; then what to index, file
-//! types and largest file. Side by side, as the image features need image
-//! files.
+//! download and backfill from [`Live::features`]. The image features need
+//! image files, so their note points at the Image file type in Folders.
 //!
 //! Exclusions, file types, largest file and pause on battery are
 //! `indexing` settings: each save restarts the engine, which re-walks every
@@ -20,8 +19,11 @@
 //! General. A saved `ui` change goes to the shell as [`AppEvent::Ui`], which
 //! applies it live.
 //!
-//! Index: counts from the status, the files that could not be read, and
-//! clearing the index.
+//! Index: counts from the status, pause and rescan, the files that could
+//! not be read, and clearing the index.
+//!
+//! The rail's top button opens the search window, so a change can be tried
+//! without the hotkey or the tray.
 
 mod appearance;
 mod choices;
@@ -44,7 +46,7 @@ use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
 use magi_core::dto::{ErrorCode, FileError, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
-use magi_core::platform::BackdropSupport;
+use magi_core::platform::{BackdropSupport, SYMBOL_MODIFIERS};
 use serde_json::json;
 
 use super::{Roll, error_text, slider_from_intensity};
@@ -52,7 +54,9 @@ use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
-use crate::ui::{heading, note, row, row_icon, warn_note};
+use crate::tray::TrayAction;
+use crate::ui::keycaps::shortcut_text;
+use crate::ui::{heading, note, row, row_icon, saved_note, warn_note};
 use choices::{
     Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
 };
@@ -72,6 +76,8 @@ const NAV_GAP: f32 = 2.;
 const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(240);
 /// How long another section takes to fade in.
 const SECTION_FADE: std::time::Duration = std::time::Duration::from_millis(220);
+/// How long "Saved" stands in for a text field's note or Save button.
+const SAVED_FOR: std::time::Duration = std::time::Duration::from_millis(2000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -140,6 +146,7 @@ pub enum Field {
     Background,
     SeeThrough,
     Unreadable,
+    Rescan,
     Clear,
     Quit,
 }
@@ -195,6 +202,9 @@ pub struct SettingsView {
     /// The last change that failed and where, until the next change or a
     /// section switch.
     error: Option<(Field, ErrorCode)>,
+    /// The text field whose change just saved, for a moment: those save on
+    /// Enter, blur or Save and show nothing else.
+    saved: Option<Field>,
     /// Roots being removed: dimmed, their controls off, until the list no
     /// longer has them.
     removing: Vec<i64>,
@@ -205,16 +215,6 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(
-        host: Host,
-        live: Entity<Live>,
-        events: Events,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        // ponytail: this and `list_roots` below are small reads on the main
-        // thread; move them to the background executor if they ever show up
-        // in a frame trace.
     /// Switches the pane, the way a click on its nav item does.
     fn show(&mut self, section: Section, cx: &mut Context<Self>) {
         self.recording = false;
@@ -228,6 +228,16 @@ impl SettingsView {
         cx.notify();
     }
 
+    pub fn new(
+        host: Host,
+        live: Entity<Live>,
+        events: Events,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // ponytail: this and `list_roots` below are small reads on the main
+        // thread; move them to the background executor if they ever show up
+        // in a frame trace.
         let config = host
             .settings()
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
@@ -271,6 +281,11 @@ impl SettingsView {
                 if let Some(status) = &live.read(cx).status {
                     this.roll_stats(status);
                 }
+                // The search footer's "see which files".
+                if live.read(cx).show_unreadable {
+                    live.update(cx, |live, _| live.show_unreadable = false);
+                    this.show(Section::Index, cx);
+                }
                 // A file failed or a retry worked: the list follows.
                 let errors = live.read(cx).status.as_ref().map(|st| st.errors);
                 if this.section == Section::Index && errors != this.errors_listed {
@@ -280,11 +295,6 @@ impl SettingsView {
                 if let Some(status) = &live.read(cx).status {
                     this.removing
                         .retain(|id| status.roots.iter().any(|root| root.id == *id));
-                }
-                // The search footer's "see which files".
-                if live.read(cx).show_unreadable {
-                    live.update(cx, |live, _| live.show_unreadable = false);
-                    this.show(Section::Index, cx);
                 }
                 cx.notify();
             }),
@@ -391,6 +401,7 @@ impl SettingsView {
             unreadable: None,
             errors_listed: None,
             error: None,
+            saved: None,
             removing: Vec::new(),
             busy: Vec::new(),
             _subscriptions: subscriptions,
@@ -400,7 +411,46 @@ impl SettingsView {
         if let Some(status) = view.live.read(cx).status.clone() {
             view.roll_stats(&status);
         }
+        // Opened by the search footer's "see which files".
+        if view.live.read(cx).show_unreadable {
+            view.live
+                .clone()
+                .update(cx, |live, _| live.show_unreadable = false);
+            view.show(Section::Index, cx);
+        }
         view
+    }
+
+    /// The rail's way back to the product: a quiet item at its foot, like the
+    /// sections above it, opening the search window (or bringing it forward).
+    /// The shortcut is in its tooltip: beside the label it would overflow.
+    fn search_button(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> impl IntoElement {
+        let hotkey = Keystroke::parse(&crate::settings::hotkey_keystroke(&self.ui.hotkey))
+            .ok()
+            .map(|k| shortcut_text(&k, s, SYMBOL_MODIFIERS));
+        Button::new("open-search")
+            .cursor_pointer()
+            .ghost()
+            .w_full()
+            .h(px(NAV_ITEM_H))
+            .px_0()
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .accessibility_label(s.search_files)
+            .when_some(hotkey, |b, text| b.tooltip(text))
+            .on_click(cx.listener(|this, _, _, _| {
+                let _ = this.events.try_send(AppEvent::Tray(TrayAction::OpenSearch));
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .px_3()
+                    .child(Icon::new(IconName::Search).size(px(15.)).text_color(p.mute))
+                    .child(s.search_files),
+            )
     }
 
     /// Saves `patch(choice)` when a dropdown confirms a choice.
@@ -411,13 +461,6 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription
-        // Opened by the search footer's "see which files".
-        if view.live.read(cx).show_unreadable {
-            view.live
-                .clone()
-                .update(cx, |live, _| live.show_unreadable = false);
-            view.show(Section::Index, cx);
-        }
     where
         T: Clone + PartialEq + 'static,
     {
@@ -547,6 +590,9 @@ impl SettingsView {
                 match saved {
                     Ok(config) => {
                         view.error = None;
+                        if matches!(field, Field::MaxSize | Field::Excludes) {
+                            view.flash_saved(field, cx);
+                        }
                         view.indexing = config.indexing;
                         view.ui = config.ui.clone();
                         let _ = view.events.try_send(AppEvent::Ui(config.ui));
@@ -560,6 +606,21 @@ impl SettingsView {
                 // old values when the save failed.
                 view.sync_controls(window, cx);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Shows `field` as saved for a moment.
+    fn flash_saved(&mut self, field: Field, cx: &mut Context<Self>) {
+        self.saved = Some(field);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVED_FOR).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.saved == Some(field) {
+                    view.saved = None;
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -616,7 +677,13 @@ impl SettingsView {
             .flex_1()
             .min_w_0()
             .child(label)
-            .children(note_text.map(|text| note(p).child(text)))
+            .children(note_text.map(|text| {
+                if self.saved == Some(field) {
+                    saved_note(s, p)
+                } else {
+                    note(p).child(text)
+                }
+            }))
             .children(self.problem(field, s, p))
     }
 
@@ -682,7 +749,7 @@ impl Render for SettingsView {
                     .h(px(NAV_ITEM_H))
                     .px_0()
                     .rounded(px(6.))
-                    .when(selected, |b| b.bg(p.chip))
+                    .when(selected, |b| b.bg(p.selected_fill(2.)))
                     // The content row centers a label; a filling child sits
                     // left. The padding is the label's, so the content row
                     // starts at the button's edge.
@@ -721,11 +788,17 @@ impl Render for SettingsView {
                     .child(s.settings),
             )
             .child(sections)
+            // A hairline marks it as an action, not a sixth section.
             .child(
                 div()
                     .mt_auto()
+                    .child(div().h(px(1.)).mx_3().mb(px(6.)).bg(p.line))
+                    .child(self.search_button(s, &p, cx)),
+            )
+            .child(
+                div()
                     .px_3()
-                    .pb_1()
+                    .py_1()
                     .text_xs()
                     .text_color(p.mute)
                     .child(concat!("Magi ", env!("CARGO_PKG_VERSION"))),
@@ -747,6 +820,7 @@ impl Render for SettingsView {
             .child(
                 div()
                     .id("pane")
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .overflow_y_scroll()
@@ -754,6 +828,7 @@ impl Render for SettingsView {
                     .px(px(32.))
                     .pt(px(22.))
                     .pb(px(28.))
+                    .child(p.wash(px(220.)))
                     // Another section fades in, its heading with it.
                     .child(theme::fade_in_over(
                         div()
