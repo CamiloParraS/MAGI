@@ -1,7 +1,7 @@
 name: Clipboard
 
-# Manual only: the tests overwrite the runner's real clipboard. Add the macOS
-# and Linux jobs as `platform::copy_files` gains those implementations.
+# Manual only: the tests overwrite the runner's real clipboard. Linux sets only
+# text/uri-list (xclip owns one target), so its check reads that back.
 on:
   workflow_dispatch:
 
@@ -27,3 +27,43 @@ jobs:
           $text = Get-Clipboard
           if ($files -ne $file) { throw "file list was '$files', expected '$file'" }
           if ($text -ne $file) { throw "text was '$text', expected '$file'" }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Copy a file to the clipboard
+        run: cargo test -p magi-core --lib copied_files -- --ignored
+
+      - name: Read it back as a file and as text
+        run: |
+          file="${TMPDIR%/}/magi-copy-as-file.txt"
+          [ "$(osascript -e 'POSIX path of (the clipboard as «class furl»)')" = "$file" ] || { echo "file was not on the clipboard"; exit 1; }
+          [ "$(pbpaste)" = "$file" ] || { echo "text was '$(pbpaste)', expected '$file'"; exit 1; }
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install xclip and a virtual display
+        run: sudo apt-get update && sudo apt-get install -y xclip xvfb
+
+      - name: Copy a file to the clipboard and read it back
+        run: |
+          xvfb-run -a bash -c '
+            cargo test -p magi-core --lib copied_files -- --ignored || exit 1
+            got=$(xclip -selection clipboard -o -t text/uri-list | tr -d "")
+            [ "$got" = "file://${TMPDIR:-/tmp}/magi-copy-as-file.txt" ] || { echo "uri list was $got"; exit 1; }
+          '

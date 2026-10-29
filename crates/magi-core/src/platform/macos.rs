@@ -123,3 +123,37 @@ pub fn display_under_cursor() -> Option<u64> {
             .then_some(u64::from(display))
     }
 }
+
+/// Puts one file and its path text on the pasteboard through AppleScript: a
+/// record sets `furl` (Finder pastes the file) and `utf8` text together.
+// ponytail: one file only (a list of furl is awkward in AppleScript); NSPasteboard
+// writeObjects would take several.
+pub fn copy_files(paths: &[std::path::PathBuf], text: &str) -> bool {
+    let [path] = paths else { return false };
+    let quote = |s: &str| s.replace('\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "set the clipboard to {{«class furl»:(POSIX file \"{}\"), string:\"{}\"}}",
+        quote(&path.to_string_lossy()),
+        quote(text)
+    );
+    std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod copy_tests {
+    /// Touches the real pasteboard, so it only runs on request (the
+    /// `clipboard` workflow): `cargo test -p magi-core copied_files -- --ignored`.
+    #[test]
+    #[ignore = "overwrites the clipboard"]
+    fn copied_files_reach_the_clipboard() {
+        let file = std::env::temp_dir().join("magi-copy-as-file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(super::copy_files(
+            std::slice::from_ref(&file),
+            &file.to_string_lossy()
+        ));
+    }
+}

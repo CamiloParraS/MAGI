@@ -218,19 +218,22 @@ pub fn hide_dock_icon() {
 }
 
 /// Puts `paths` on the clipboard as files, plus `text` for pasting into a
-/// text field. `false` when this OS has no implementation yet or the clipboard
-/// refused: the caller then copies `text` alone.
+/// text field. `false` when the clipboard refused (on Linux, also when `wl-copy`/`xclip`
+/// is missing): the caller then copies `text` alone.
 pub fn copy_files(paths: &[std::path::PathBuf], text: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         windows::copy_files(paths, text)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        // ponytail: macOS (NSPasteboard file URLs) and Linux (text/uri-list)
-        // fall back to the path text until someone can test them.
-        let _ = (paths, text);
-        false
+        macos::copy_files(paths, text)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // The text is not set: the clipboard tools own one target each.
+        let _ = text;
+        linux::copy_files(paths)
     }
 }
 

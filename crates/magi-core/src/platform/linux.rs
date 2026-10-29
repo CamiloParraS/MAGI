@@ -42,3 +42,75 @@ pub fn lower_current_thread() {
         tracing::debug!(error = %std::io::Error::last_os_error(), "could not lower thread priority");
     }
 }
+
+/// `text/uri-list` body for `paths`: one `file://` URI per CRLF-terminated
+/// line, bytes outside the unreserved set and `/` percent-encoded. Pure, so
+/// it is tested on every OS.
+pub fn uri_list(paths: &[std::path::PathBuf]) -> String {
+    let mut out = String::new();
+    for path in paths {
+        out.push_str("file://");
+        for b in path.to_string_lossy().bytes() {
+            if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+                out.push(b as char);
+            } else {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// Puts `paths` on the clipboard as `text/uri-list` (`wl-copy` on Wayland,
+/// `xclip` otherwise). The tools own one target, so the path text is not set
+/// with it: that is what `ui.copy_as_file = false` is for. Whether it took.
+pub fn copy_files(paths: &[std::path::PathBuf]) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut cmd = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        let mut c = Command::new("wl-copy");
+        c.args(["--type", "text/uri-list"]);
+        c
+    } else {
+        let mut c = Command::new("xclip");
+        c.args(["-selection", "clipboard", "-t", "text/uri-list"]);
+        c
+    };
+    // The tool forks to keep owning the selection; null output so it cannot
+    // hold our pipes open.
+    let Ok(mut child) = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let wrote = child
+        .stdin
+        .take()
+        .is_some_and(|mut stdin| stdin.write_all(uri_list(paths).as_bytes()).is_ok());
+    wrote && child.wait().is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uris_are_percent_encoded() {
+        let list = uri_list(&["/home/a b/é.txt".into()]);
+        assert_eq!(list, "file:///home/a%20b/%C3%A9.txt\r\n");
+    }
+
+    /// Touches the real clipboard (needs `xclip` and a display), so it only
+    /// runs on request (the `clipboard` workflow).
+    #[test]
+    #[ignore = "overwrites the clipboard"]
+    fn copied_files_reach_the_clipboard() {
+        let file = std::env::temp_dir().join("magi-copy-as-file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(copy_files(std::slice::from_ref(&file)));
+    }
+}
