@@ -64,7 +64,7 @@ jobs:
         run: |
           cat > check.sh <<'SCRIPT'
           cargo test -p magi-core --lib copied_files -- --ignored || exit 1
-          got=$(xclip -selection clipboard -o -t text/uri-list | tr -d '')
+          got=$(xclip -selection clipboard -o -t text/uri-list | tr -d '\015')
           want="file://${TMPDIR:-/tmp}/magi-copy-as-file.txt"
           [ "$got" = "$want" ] || { echo "uri list was $got, expected $want"; exit 1; }
           SCRIPT
