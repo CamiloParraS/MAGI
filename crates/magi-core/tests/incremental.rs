@@ -645,8 +645,9 @@ fn changing_an_exclusion_purges_and_restores_files() {
 }
 
 /// Denies the current user read access to `path`: mode 000 on Unix, a deny ACE
-/// for reading data on Windows.
-fn make_unreadable(path: &Path) {
+/// for reading data on Windows. Returns false when the denial did not take
+/// effect, which is the case for root on Unix.
+fn make_unreadable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -662,7 +663,7 @@ fn make_unreadable(path: &Path) {
             .unwrap();
         assert!(denied.status.success(), "{denied:?}");
     }
-    assert!(std::fs::read(path).is_err(), "the file is still readable");
+    std::fs::read(path).is_err()
 }
 
 /// Undoes [`make_unreadable`].
@@ -702,7 +703,10 @@ fn a_file_without_read_permission_becomes_error_and_the_others_continue() {
     let env = Env::new();
     env.write("secret.txt", "classified words");
     env.write("open.txt", "public words");
-    make_unreadable(&env.root().join("secret.txt"));
+    if !make_unreadable(&env.root().join("secret.txt")) {
+        eprintln!("skipped: the current user reads files regardless of permissions (root)");
+        return;
+    }
     let engine = env.start();
 
     wait_until(Duration::from_secs(60), "secret.txt to give up", || {
