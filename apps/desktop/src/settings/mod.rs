@@ -358,11 +358,65 @@ pub fn turn_on(host: &Host, feature: Feature) -> magi_core::Result<()> {
     }
 }
 
+/// Taps on the version label that bring the onboarding back (a way to try
+/// it again without the command line).
+pub const VERSION_TAPS: usize = 10;
+
+/// The longest pause between two taps that still counts as one run.
+pub const VERSION_TAP_GAP: Duration = Duration::from_millis(1500);
+
+/// Counts a tap at `now` against the run in `taps`; true on the
+/// [`VERSION_TAPS`]th tap of a run, which then starts over.
+pub fn version_tap(taps: &mut (usize, Option<Instant>), now: Instant) -> bool {
+    let (count, last) = taps;
+    if last.is_none_or(|t| now.saturating_duration_since(t) > VERSION_TAP_GAP) {
+        *count = 0;
+    }
+    *last = Some(now);
+    *count += 1;
+    if *count >= VERSION_TAPS {
+        *count = 0;
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::i18n::Lang;
     use magi_core::dto::IndexState;
+
+    #[test]
+    fn ten_quick_taps_on_the_version_open_the_onboarding() {
+        let t0 = Instant::now();
+        let mut taps = (0, None);
+        let step = Duration::from_millis(200);
+        for i in 0..VERSION_TAPS - 1 {
+            assert!(!version_tap(&mut taps, t0 + step * i as u32));
+        }
+        assert!(version_tap(
+            &mut taps,
+            t0 + step * (VERSION_TAPS as u32 - 1)
+        ));
+        // The run starts over.
+        assert!(!version_tap(&mut taps, t0 + step * VERSION_TAPS as u32));
+    }
+
+    #[test]
+    fn a_pause_between_taps_starts_the_count_again() {
+        let t0 = Instant::now();
+        let mut taps = (0, None);
+        for i in 0..VERSION_TAPS - 1 {
+            assert!(!version_tap(
+                &mut taps,
+                t0 + Duration::from_millis(100 * i as u64)
+            ));
+        }
+        let later = t0 + VERSION_TAP_GAP * 3;
+        assert!(!version_tap(&mut taps, later));
+        assert_eq!(taps.0, 1);
+    }
 
     #[test]
     fn a_count_rolls_from_where_it_shows_to_the_new_value() {

@@ -16,6 +16,12 @@ setup:
 dev:
     cargo run -p magi-desktop
 
+# Rebuild and relaunch the desktop app on every save (needs `cargo install cargo-watch --locked`).
+# Only the changed crate recompiles, so a UI edit is ~10s; keep rust-analyzer on its own
+# target dir (`rust-analyzer.cargo.targetDir: true`) so it never invalidates this build.
+watch:
+    cargo watch -w apps/desktop/src -w crates/magi-core/src -x "run -p magi-desktop"
+
 # Run the desktop app with onboarding reset to its first step (folders and features stay)
 onboarding:
     cargo run -p magi-desktop -- --onboarding

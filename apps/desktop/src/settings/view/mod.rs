@@ -49,7 +49,9 @@ use magi_core::host::Host;
 use magi_core::platform::{BackdropSupport, SYMBOL_MODIFIERS};
 use serde_json::json;
 
-use super::{Roll, error_text, slider_from_intensity};
+use std::time::Instant;
+
+use super::{Roll, error_text, slider_from_intensity, version_tap};
 use crate::app::{AppEvent, Events};
 use crate::i18n::{Lang, Strings};
 use crate::live::Live;
@@ -212,6 +214,9 @@ pub struct SettingsView {
     /// Changes still running, one entry per run: their buttons spin and
     /// take no clicks until the change ends.
     busy: Vec<Field>,
+    /// Quick taps on the version label so far, and the last one's time:
+    /// [`version_tap`] brings the onboarding back on the tenth.
+    version_taps: (usize, Option<Instant>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -405,6 +410,7 @@ impl SettingsView {
             saved: None,
             removing: Vec::new(),
             busy: Vec::new(),
+            version_taps: (0, None),
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -798,10 +804,18 @@ impl Render for SettingsView {
             )
             .child(
                 div()
+                    .id("version")
                     .px_3()
                     .py_1()
                     .text_xs()
                     .text_color(p.mute)
+                    // A testing aid, not a control: ten quick taps run the
+                    // onboarding again, as `magi --onboarding` does.
+                    .on_click(cx.listener(|this, _, _, _| {
+                        if version_tap(&mut this.version_taps, Instant::now()) {
+                            let _ = this.events.try_send(AppEvent::Onboarding);
+                        }
+                    }))
                     .child(concat!("Magi ", env!("CARGO_PKG_VERSION"))),
             );
         let body = match self.section {
