@@ -829,6 +829,41 @@ three sets: "a Hot Wheels package", and "una moto" / "a hiking trail along a
 grassy ridge" on the name-obfuscated ones; those are the visual model, not
 fusion. SPEC §5.6 step 4 updated.
 
+## 2026-11-04: EmbeddingGemma 2 evaluated, not adopted
+
+`google/embeddinggemma-2` (onnx-community ONNX export, revision
+`daa72c51243991dfcaf9f9137d2c573d8f7790c0`, Apache-2.0) was tried as the
+text embedder and as a SigLIP replacement. Full write-up, file hashes and
+the experimental code: local branch `exp/embeddinggemma-2` (commits
+`d590dfa`..`1143092`, `docs/eval.md`). Everything was measured on the
+reference machine; timings on AC with the system kept awake.
+
+**Quality: clearly better.** Text at 256 d (Matryoshka, zero-padded into
+the shipped `float[384]` table, so no schema change):
+
+| hybrid r@5 / MRR | e5 + SigLIP | Gemma text + SigLIP | Gemma text + vision (70 tokens) |
+| --- | --: | --: | --: |
+| named | 0.982 / 0.904 | 1.000 / 0.938 | 1.000 / 0.946 |
+| realistic | 0.939 / 0.876 | 0.988 / 0.929 | 0.994 / 0.940 |
+| realistic `cross` MRR | 0.443 | 0.875 | 1.000 |
+
+**Cost: too high on CPU.**
+
+| | e5 + SigLIP | Gemma (q4) |
+| --- | --: | --: |
+| text-only indexing (`crates/` + `docs/`) | 231-234 s, ~12.6 chunks/s | 1,039-1,231 s, ~2.2 chunks/s (int8: worse) |
+| NFR-11 daemon peak, `fixtures/corpus` | 1,305-1,336 MB | 1,501-1,506 MB (on the 1.5 GB line) |
+| NFR-12 search peak | 842 MB | 841 MB (372 MB with Gemma vision) |
+| per image, vision | ~300 ms (SigLIP) | 1,065 ms at 70 tokens, 4,829 ms at 280 |
+
+Also: Gemma's image cosines need a floor near 0.66-0.68 instead of 0.10,
+and it is fragile (+-0.02 moves MRR up to 0.06); and text containing its
+media placeholders (`<|image|>` etc.) crashes inference unless sanitized.
+
+**Decision:** keep e5 and SigLIP. The cross-lingual gap is real and a
+stronger model closes it; look for a cheaper way there (query-time
+reranker, a small multilingual embedder in e5's size class).
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
