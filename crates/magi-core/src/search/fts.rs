@@ -1,6 +1,7 @@
 //! Query sanitization, BM25, `snippet()`: the keyword list hybrid search
 //! fuses (SPEC.md §5.6), and the FTS5-only path of `magi-cli search --mode fts`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use rusqlite::{Connection, params};
@@ -69,6 +70,33 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(first_hit_per_file(rows, limit))
+}
+
+/// The searchable files with `term` in any chunk, as a prefix when `prefix`.
+/// The term is quoted like [`sanitize_query`]'s, so it cannot inject syntax.
+/// Word coverage for `search::zfusion`.
+pub fn files_with_term(conn: &Connection, term: &str, prefix: bool) -> Result<HashSet<i64>> {
+    if term.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let pattern = format!(
+        "\"{}\"{}",
+        term.replace('"', "\"\""),
+        if prefix { "*" } else { "" }
+    );
+    let mut stmt = conn.prepare(concat!(
+        "SELECT DISTINCT f.id
+             FROM chunks_fts
+             JOIN chunks c ON c.id = chunks_fts.rowid
+             JOIN files f ON f.id = c.file_id
+             JOIN roots r ON r.id = f.root_id
+             WHERE chunks_fts MATCH ?1 AND ",
+        searchable_sql!()
+    ))?;
+    let ids = stmt
+        .query_map(params![pattern], |row| row.get(0))?
+        .collect::<std::result::Result<HashSet<i64>, _>>()?;
+    Ok(ids)
 }
 
 #[cfg(test)]

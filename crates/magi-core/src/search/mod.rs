@@ -4,6 +4,7 @@
 pub mod fts;
 pub mod fuse;
 pub mod vector;
+pub mod zfusion;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -135,8 +136,26 @@ pub fn rank_and_boost(
         },
     ]);
 
+    boost_and_assemble(query, fused, fts_hits, vector_hits, image_hits, &[], limit)
+}
+
+/// SPEC.md §5.6 step 5 and the hit assembly, after any fusion: applies the
+/// filename/recency boosts to each `(file_id, score)` in `fused`, builds its
+/// [`SearchHit`] from the list(s) it came from, and returns the top `limit`.
+/// `fallback` supplies the file row for a fused id in none of the three
+/// lists (it adds no match source); `fused` ids found nowhere are dropped.
+pub(crate) fn boost_and_assemble(
+    query: &str,
+    fused: Vec<(i64, f64)>,
+    fts_hits: &[FileHit],
+    vector_hits: &[FileHit],
+    image_hits: &[FileHit],
+    fallback: &[FileHit],
+    limit: u32,
+) -> Vec<SearchHit> {
     let query_tokens = match_words(query);
     let now = now_unix();
+    let fallback: HashMap<i64, &FileHit> = fallback.iter().map(|h| (h.file_id, h)).collect();
 
     let mut by_id: HashMap<i64, [Option<&FileHit>; 3]> = HashMap::new();
     for hit in fts_hits {
@@ -149,15 +168,18 @@ pub fn rank_and_boost(
         by_id.entry(hit.file_id).or_default()[2] = Some(hit);
     }
 
-    // `fused`'s ids are the union of the lists, so every lookup here
-    // resolves. Preferring the FTS side keeps the snippet that carries the
-    // match highlights, and the visual side (a bare file name) is the last
-    // resort.
+    // Under RRF `fused`'s ids are the union of the lists, so every lookup
+    // here resolves. Preferring the FTS side keeps the snippet that carries
+    // the match highlights, and the visual side (a bare file name) is the
+    // last resort before `fallback`.
     let mut hits: Vec<SearchHit> = fused
         .into_iter()
         .filter_map(|(file_id, base_score)| {
-            let [fts, vector, image] = *by_id.get(&file_id)?;
-            let hit = fts.or(vector).or(image)?;
+            let [fts, vector, image] = by_id.get(&file_id).copied().unwrap_or_default();
+            let hit = fts
+                .or(vector)
+                .or(image)
+                .or_else(|| fallback.get(&file_id).copied())?;
             let boost = filename_boost(&query_tokens, &hit.file_name)
                 * recency_boost(hit.mtime_ns / 1_000_000_000, now);
             let mut match_sources = Vec::new();

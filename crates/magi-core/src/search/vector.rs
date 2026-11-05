@@ -26,6 +26,47 @@ pub fn search_vector_text(
     if query_embedding.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
+    let rows = text_rows(conn, query_embedding, chunk_fetch_limit(limit))?;
+    Ok(first_hit_per_file(
+        rows.into_iter().map(|(hit, _)| hit),
+        limit,
+    ))
+}
+
+/// The `k` chunks closest to the query, closest first, each with its cosine
+/// similarity, not deduplicated per file: the experimental z-score fusion
+/// (`search::zfusion`) scores every vector, not just each file's best.
+/// sqlite-vec caps `k` at 4096 ([`MAX_KNN_K`]).
+pub fn text_cosines(
+    conn: &Connection,
+    query_embedding: &[f32],
+    k: u32,
+) -> Result<Vec<(FileHit, f64)>> {
+    if query_embedding.is_empty() || k == 0 {
+        return Ok(Vec::new());
+    }
+    let rows = text_rows(conn, query_embedding, i64::from(k.min(MAX_KNN_K)))?;
+    Ok(rows
+        .into_iter()
+        .map(|(hit, distance)| (hit, unit_l2_to_cosine(distance)))
+        .collect())
+}
+
+/// sqlite-vec's `SQLITE_VEC_VEC0_K_MAX`: a larger `k` is an error.
+pub const MAX_KNN_K: u32 = 4096;
+
+/// Both vector tables use L2 distance on unit vectors: `cos = 1 - d^2 / 2`.
+fn unit_l2_to_cosine(distance: f64) -> f64 {
+    1.0 - distance * distance / 2.0
+}
+
+/// `vec_text`'s `chunk_k` nearest chunks joined to their files, sorted by
+/// distance then chunk id, with each row's distance.
+fn text_rows(
+    conn: &Connection,
+    query_embedding: &[f32],
+    chunk_k: i64,
+) -> Result<Vec<(FileHit, f64)>> {
     let mut stmt = conn.prepare(concat!(
         "WITH knn_matches AS (
             SELECT chunk_id, distance
@@ -51,7 +92,7 @@ pub fn search_vector_text(
     // purely as sort keys and don't outlive this function.
     let mut rows = stmt
         .query_map(
-            params![embedding_to_blob(query_embedding), chunk_fetch_limit(limit)],
+            params![embedding_to_blob(query_embedding), chunk_k],
             |row| {
                 Ok((
                     FileHit {
@@ -76,11 +117,10 @@ pub fn search_vector_text(
             .total_cmp(b_distance)
             .then_with(|| a_chunk_id.cmp(b_chunk_id))
     });
-
-    Ok(first_hit_per_file(
-        rows.into_iter().map(|(hit, _, _)| hit),
-        limit,
-    ))
+    Ok(rows
+        .into_iter()
+        .map(|(hit, distance, _)| (hit, distance))
+        .collect())
 }
 
 /// Runs a `vec_image` KNN search (SPEC.md §5.6 step 2c) and keeps only images
@@ -97,9 +137,22 @@ pub fn search_vector_image(
     limit: u32,
     min_cosine: f32,
 ) -> Result<Vec<FileHit>> {
-    if query_embedding.is_empty() || limit == 0 {
+    let mut rows = image_cosines(conn, query_embedding, limit)?;
+    rows.retain(|(_, cosine)| *cosine >= f64::from(min_cosine));
+    Ok(rows.into_iter().map(|(hit, _)| hit).collect())
+}
+
+/// The `k` images closest to the query, closest first, each with its cosine
+/// similarity and no floor (see [`text_cosines`]).
+pub fn image_cosines(
+    conn: &Connection,
+    query_embedding: &[f32],
+    k: u32,
+) -> Result<Vec<(FileHit, f64)>> {
+    if query_embedding.is_empty() || k == 0 {
         return Ok(Vec::new());
     }
+    let limit = k.min(MAX_KNN_K);
     let mut stmt = conn.prepare(concat!(
         "WITH knn_matches AS (
             SELECT file_id, distance
@@ -135,14 +188,16 @@ pub fn search_vector_image(
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    rows.retain(|(_, distance)| 1.0 - distance * distance / 2.0 >= f64::from(min_cosine));
     // Ties broken by file id, in Rust, for the same reason as the text search.
     rows.sort_by(|(a, a_distance), (b, b_distance)| {
         a_distance
             .total_cmp(b_distance)
             .then_with(|| a.file_id.cmp(&b.file_id))
     });
-    Ok(rows.into_iter().map(|(hit, _)| hit).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(hit, distance)| (hit, unit_l2_to_cosine(distance)))
+        .collect())
 }
 
 #[cfg(test)]
