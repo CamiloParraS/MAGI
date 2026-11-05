@@ -59,7 +59,10 @@ fn a_missing_root_keeps_its_index_and_resumes_without_re_embedding() {
     let away = env.root().with_extension("away");
     std::fs::rename(env.root(), &away).unwrap();
     let _engine = env.start();
-    assert_eq!(status(), "missing");
+    // The startup reconcile probes it on the writer, after `start` returns.
+    wait_until(Duration::from_secs(30), "the root to be missing", || {
+        status() == "missing"
+    });
     assert_eq!(env.count("SELECT COUNT(*) FROM files"), 1, "index kept");
     assert_eq!(env.hits("durable"), 0, "hidden while missing");
 
