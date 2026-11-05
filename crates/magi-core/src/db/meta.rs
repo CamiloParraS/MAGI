@@ -1,5 +1,5 @@
 //! Key-value metadata table (`meta`): pipeline version and model IDs
-//! (SPEC.md §5.5). Implemented starting M3.
+//! (SPEC.md §5.5).
 
 use rusqlite::{Connection, OptionalExtension, params};
 

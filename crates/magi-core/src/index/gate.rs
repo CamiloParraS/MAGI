@@ -1,6 +1,5 @@
 //! Bounds concurrent image decodes: a large image is the memory peak of
-//! indexing, so at most 2 decode at once and at most 1 of those is large
-//! (docs/m5-plan.md Slice 3).
+//! indexing, so at most 2 decode at once and at most 1 of those is large.
 
 use std::sync::{Condvar, Mutex, PoisonError};
 

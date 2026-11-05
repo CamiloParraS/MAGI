@@ -1,5 +1,4 @@
-//! Indexing: scheduler, pipeline, and DB writer. Implemented starting M2
-//! (see SPEC.md §5.3 threads, §7).
+//! Indexing: scheduler, pipeline, and DB writer (SPEC.md §5.3 threads).
 
 pub(crate) mod change;
 pub mod gate;
