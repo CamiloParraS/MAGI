@@ -67,5 +67,9 @@ makes the recall numbers meaningless — it has no real semantic signal) and
 reports recall@5, recall@10, and MRR for `fts`/`vector`/`hybrid` search,
 overall and broken down by `lang` bucket. All three modes run through
 `search::rank_and_boost`, so the two baselines are hybrid's own ranking
-function with one input list emptied, not a different one. See
-`docs/eval.md` for recorded baselines.
+function with one input list emptied, not a different one. Hybrid then
+runs a second time on the same index with the experimental z-score +
+word-coverage fusion (`search::zfusion`) in five variants; the RRF and
+z-score sections also print result counts and how many results would fold
+under "weaker matches", and the run ends with result counts for a few
+nonsense queries. See `docs/eval.md` for recorded baselines.
