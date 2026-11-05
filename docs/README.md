@@ -24,7 +24,9 @@
 **Open work**
 
 - [`issues/`](issues/): plans and tickets written up as files
-  (`m7-plan.md`, `0001-cross-lingual-ranker.md`). GitHub issues track the rest.
+  (`m7-plan.md`; `0001` cross-lingual ranker, `0002` negative queries and
+  precision in the eval, `0003` "nothing closely related" label). GitHub
+  issues track the rest (#11: the z-score reranker).
 
 **History**
 
