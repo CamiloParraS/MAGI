@@ -7,7 +7,7 @@
 >
 > - 1.2.2 (2026-10-07): After onboarding, a **plain launch opens the search window**, not settings, so someone who forgot the hotkey gets back by opening the app. Search opened any way but the hotkey shows the hotkey under the input; the tray shows it in its tooltip and beside "Open search", and a left click on the Windows tray icon opens search.
 > - 1.2.1 (2026-09-29): Windows 11 search window uses GPUI's **Blurred** background instead of Mica (ADR-0011 amendment): Mica was indistinguishable from solid in testing.
-> - 1.2 (2026-09-29): **Desktop shell moved from Tauri + React to GPUI** (ADR-0011). No webview, no TypeScript: the UI is Rust and calls `host::Host` directly (§5.7 is now the Host API, `ts-rs` removed). GPU row added to the reference machine. Tray, hotkey, single-instance and autostart via dedicated crates. Windows 10 search window is solid (no Acrylic). Localization via ICU4X. Packaging tool is open (Q9). M0–M5 text is historical and still mentions Tauri where it described what was built then. The v1.1 text is frozen in `docs/SPEC-v1.1-tauri.md`.
+> - 1.2 (2026-09-29): **Desktop shell moved from Tauri + React to GPUI** (ADR-0011). No webview, no TypeScript: the UI is Rust and calls `host::Host` directly (§5.7 is now the Host API, `ts-rs` removed). GPU row added to the reference machine. Tray, hotkey, single-instance and autostart via dedicated crates. Windows 10 search window is solid (no Acrylic). Localization via ICU4X. Packaging tool is open (Q9). M0–M5 text is historical and still mentions Tauri where it described what was built then. The v1.1 text is frozen in `docs/archive/SPEC-v1.1-tauri.md`.
 > - 1.1 (2026-09-10): Frontend confirmed as React + TypeScript. **HEIC/HEIF support moved into v1** (M4). **Reference machine set to an 8 GB RAM laptop**: memory budgets, quantized models, and memory-aware concurrency added.
 > - 1.0: Initial spec.
 
@@ -726,7 +726,7 @@ The `platform/` module implements these traits for each OS:
 
 ### 6.4 Cross-platform background policy
 
-- Indexing threads run at low OS priority. ONNX `intra_op_num_threads` for the indexing models is capped at 4 on AC power and 2 on battery (or when power status is unknown), chosen when a model loads (docs/perf-investigation.md), and uses all cores for foreground searches.
+- Indexing threads run at low OS priority. ONNX `intra_op_num_threads` for the indexing models is capped at 4 on AC power and 2 on battery (or when power status is unknown), chosen when a model loads (docs/archive/perf-investigation.md), and uses all cores for foreground searches.
 - **Pause on battery** (configurable). If battery status can't be determined on a platform, the feature is disabled there and documented.
 - **Model lifecycle:**
   - Load when the queue is non-empty or the search window opens. Pre-warm the query encoders on hotkey press.
@@ -1023,7 +1023,7 @@ Each milestone lists **Objective**, **Deliverables**, and **Verification**. A mi
   - macOS: "System Settings → Privacy & Security → Open Anyway"
   - Linux: `chmod +x` for the AppImage
 - README "Privacy" section and "Uninstall / remove data" section (exact data/config/cache paths per OS).
-- `CHANGELOG.md`, semantic versioning. The auto-updater stays **disabled** in v1.
+- `docs/CHANGELOG.md`, semantic versioning. The auto-updater stays **disabled** in v1.
 
 **Verification**
 

@@ -1532,7 +1532,7 @@ does not yet follow SPEC.md §3's load-on-demand and unload-when-idle rule.
 
 ### M5 Slice 1 - file state machine, hash-skip, re-embed trigger
 
-Plan: docs/m5-plan.md. Synchronous only: no threads or watcher yet. A real-model
+Plan: docs/archive/m5-plan.md. Synchronous only: no threads or watcher yet. A real-model
 eval afterwards is identical to the last recorded run (hybrid recall@5 0.982, same
 three misses), so the refactor of the per-file path changed no retrieval result.
 
@@ -1590,7 +1590,7 @@ globs, which Slice 2 reads anyway.
 
 ### M5 Slice 2 - reconciliation, move detection, root lifecycle
 
-Plan: docs/m5-plan.md. Still synchronous. `index_root` is now
+Plan: docs/archive/m5-plan.md. Still synchronous. `index_root` is now
 reconcile -> resolve moves -> drain the `pending` queue, so it notices deletions,
 renames and moves, and `magi-cli index` is incremental against a changing folder.
 
@@ -1646,7 +1646,7 @@ renames and moves, and `magi-cli index` is incremental against a changing folder
 
 ### M5 Slice 3 - runtime, scheduler, writer, workers, `Engine` skeleton
 
-Plan: docs/m5-plan.md. Threads, no watcher yet. Done in three checked steps:
+Plan: docs/archive/m5-plan.md. Threads, no watcher yet. Done in three checked steps:
 `IndexContext` owns `Arc<dyn TextEmbedder>`; `index_file` split into
 extract -> embed -> store functions (tests unchanged and green); then the
 threads.
@@ -1709,7 +1709,7 @@ threads.
 
 ### M5 Slice 4 - watchers, polling fallback, periodic safety nets
 
-Plan: docs/m5-plan.md. The engine now notices changes itself; `rescan()` is no
+Plan: docs/archive/m5-plan.md. The engine now notices changes itself; `rescan()` is no
 longer the only way.
 
 - [x] **`watch/watcher.rs`**: one `notify` watcher per root, debounced 2 s, started
@@ -1799,7 +1799,7 @@ consecutive isolated runs and three full runs pass.
 
 ### M5 Slice 5 - platform behaviour
 
-Plan: docs/m5-plan.md. `platform::Os` implements the SPEC §6 traits; OS code
+Plan: docs/archive/m5-plan.md. `platform::Os` implements the SPEC §6 traits; OS code
 stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
 `platform/mod.rs` so every OS tests them.
 
@@ -1860,7 +1860,7 @@ stays in `platform/{windows,macos,linux}.rs`, and the pure decoders live in
 
 ### M5 Slice 6 - resource policy
 
-Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
+Plan: docs/archive/m5-plan.md. Policy is `index::resources` (pure functions plus the
 `magi-monitor` thread); see docs/architecture.md, "Resource policy".
 
 - [x] **Memory pressure** (item 17, NFR-13): every 10 s the monitor reads
@@ -1909,7 +1909,7 @@ Plan: docs/m5-plan.md. Policy is `index::resources` (pure functions plus the
 
 ### M5 Slice 7 - control surface and daemon
 
-Plan: docs/m5-plan.md. See docs/architecture.md, "Control surface".
+Plan: docs/archive/m5-plan.md. See docs/architecture.md, "Control surface".
 
 - [x] **`EngineHandle`**: `status()` (`IndexStatus`), `subscribe()` (status
       events), `pause()` / `resume()` persisted in `meta.paused`, `add_root`
@@ -2194,7 +2194,7 @@ grouped rows.
 evaluated on `feat/gpui-shell` with a Windows spike measured against a Tauri
 baseline. Decisions, go/no-go criteria and next steps:
 `docs/superpowers/specs/2026-09-28-gpui-shell-evaluation-design.md`. The
-pre-evaluation spec is frozen at `docs/SPEC-v1.1-tauri.md`; the Tauri work stays
+pre-evaluation spec is frozen at `docs/archive/SPEC-v1.1-tauri.md`; the Tauri work stays
 on `feat/User_Interface`.
 
 **2026-09-29: committed to GPUI** without a spike (ADR-0011, SPEC v1.2). The
@@ -2545,7 +2545,7 @@ Signed off by: ______ Date: ______
 
 ## M7 prep: macOS fixes made without a Mac (2026-10-11)
 
-Plan: `docs/m7-plan.md`. Nothing here was run on macOS; the new macOS functions
+Plan: `docs/issues/m7-plan.md`. Nothing here was run on macOS; the new macOS functions
 type-check against `aarch64-apple-darwin` in an isolated crate with the same
 dependencies, everything else was built and tested on Windows.
 
@@ -2553,7 +2553,7 @@ dependencies, everything else was built and tested on Windows.
 - `platform::hide_dock_icon` (Accessory activation policy, after GPUI's own `Regular`), called at startup; settings and onboarding call `cx.activate(true)`. New macOS-only deps `objc2` and `objc2-app-kit`, both already in the tree through GPUI.
 - `instance::claim` replaces a socket file nobody answers on (the macOS CI log shows `Address already in use` on a first launch). Test is macOS-only.
 - `platform::is_network_drive` on macOS (`statfs` type name: smbfs, nfs, afpfs, webdav), so those roots are polled like on Windows. `is_network_fs_type` tested.
-- Open for a Mac: everything in `docs/m7-plan.md` "Known risks".
+- Open for a Mac: everything in `docs/issues/m7-plan.md` "Known risks".
 
 ## M6 carry-overs worked without another device (2026-10-11)
 
@@ -2566,7 +2566,7 @@ dependencies, everything else was built and tested on Windows.
 
 ## M7: permissions and background-behavior hardening (started 2026-10-11)
 
-The owner chose to start M7 while M6's macOS and Linux QA columns are still open. Plan: `docs/m7-plan.md`.
+The owner chose to start M7 while M6's macOS and Linux QA columns are still open. Plan: `docs/issues/m7-plan.md`.
 
 - **Permission report (core).** `Host::permissions_report` and `HostEvent::Permissions` (the complete list, pushed only when it changes): one `PermissionIssue { root_id, path, status, guidance }` per enabled root that is not `ok`. `Guidance` codes: `missing`, `mac_files_and_folders`, `mac_full_disk_access`, `access_denied`, `watch_limit { limit }`, `polled`. `settings_url` gives the two macOS System Settings links from SPEC §6.1 (unverified on a Mac). Tests: `tests/host.rs::a_lost_folder_is_reported_until_it_comes_back` (a renamed-away root is reported and pushed, then cleared and pushed again), and `platform` unit tests for each OS's choice (macOS Files and Folders vs Full Disk Access by location, Linux watch limit, Windows/Linux access denied, network polling). The desktop keeps the pushed list in `Live::permissions`; nothing shows it yet.
 - **Guidance in Settings › Folders and onboarding's folder list.** A reported root's line says which permission (macOS Files and Folders, or Full Disk Access then a restart) or which Linux setting (`fs.inotify.max_user_watches`, with the current limit); macOS rows get an "Open System Settings" button (`cx.open_url` with the report's link). Before the first report arrives the status alone still explains, as before. en and es strings. Test: `settings::tests::a_reported_root_says_what_to_do_about_it`. Not seen on screen: on Windows only the unchanged "not found" / "no access" lines can appear; the button needs a Mac. Closes the M6 carry-over "fix actions for missing / permission_denied roots" pending that check.
@@ -2579,7 +2579,7 @@ The owner chose to start M8 now so testers can download builds for the open M6/M
 - **Q9 decided: cargo-packager 0.11.8** (ADR-0012), configured in `packager.json`. ONNX Runtime and PDFium stay dynamically loaded. `cargo xtask stage-libs` copies them to `target/bundle-libs/`, they ship as package resources, and `paths::installed_library` finds them next to the exe, in `Contents/Resources`, `$APPDIR/usr/lib/magi` or `/usr/lib/magi` (test: `paths::tests::a_bundled_library_is_found_where_each_package_puts_it`).
 - **Windows NSIS built locally:** `just package nsis` → `target/packages/magi_0.1.0_x64-setup.exe`, 18.7 MB. Its contents (7-Zip) put `magi.exe`, `onnxruntime.dll` and `pdfium.dll` side by side. Not installed or run yet.
 - **`release.yml`:** on a `v*` tag or by hand, builds NSIS (Windows), `.app` → ad-hoc signed → `.dmg` (macOS 14 runner), and `.deb` + AppImage (Ubuntu 22.04). It then makes a draft pre-release with `SHA256SUMS`, and a tag must match `packager.json`'s version. Not run yet.
-- README "Install", "Privacy" and "Uninstall and remove data" sections; `CHANGELOG.md`.
+- README "Install", "Privacy" and "Uninstall and remove data" sections; `CHANGELOG.md` (now `docs/CHANGELOG.md`).
 - Not done: `THIRD_PARTY_LICENSES.md` (cargo-about), the clean-machine verification, installer sizes against NFR-6, and the network check.
 - **Release review fixes.** Launch at login registers `$APPIMAGE` instead of the `/tmp/.mount_*` executable inside an AppImage (`paths::installed_exe`; test: `paths::tests::an_appimage_launches_from_its_own_file_not_the_mount`; not run on Linux). `release.yml` also fails when `packager.json`'s version differs from `Cargo.toml`'s. SPEC M8 now describes where the libraries are loaded from instead of `@rpath`, and ADR-0012 notes that a notarized build moves them to `Contents/Frameworks`. The `.deb` depends list was checked against `Cargo.lock`: no ALSA, and `libgtk-3-0` pulls in fontconfig, Wayland and X11.
 - **macOS blur on by default.** gpui-pre 0.3.7's `Blurred` on macOS is an `NSVisualEffectView` (real vibrancy, not Liquid Glass), so `platform::backdrop_support` now says yes on macOS and reads "Reduce transparency" (`defaults read com.apple.universalaccess reduceTransparency`, the same way as reduce motion). `BackdropSupport::mica` is renamed `blur`. ADR-0011 and SPEC M6 updated. Not seen on a real Mac yet: the open ⚠️ macOS blur item above still needs that check (search and settings over a wallpaper, light and dark, the see-through slider).

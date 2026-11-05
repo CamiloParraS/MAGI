@@ -201,4 +201,4 @@ Now that batches are bounded, the arena is on again for the e5 session only,
 with the batch lowered 16 -> 8 to keep the pool small, and 4 intra-op threads
 on AC. Fixture-corpus eval run (indexing + 164 queries, all models): 285 s ->
 ~190-230 s, peak working set 1,359 -> 1,448 MB (NFR-11 limit 1.5 GB). Details
-and the one borderline eval query this moves in docs/perf-investigation.md.
+and the one borderline eval query this moves in docs/archive/perf-investigation.md.

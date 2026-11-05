@@ -332,7 +332,7 @@ optional (OCR has no embedding width).
 
 ## Change detection (M5)
 
-Slice 1 of M5 (docs/m5-plan.md) made indexing incremental. These are the
+Slice 1 of M5 (docs/archive/m5-plan.md) made indexing incremental. These are the
 contracts the rest of M5 builds on.
 
 **File states** (`files.state`): `pending -> indexing -> indexed | skipped |

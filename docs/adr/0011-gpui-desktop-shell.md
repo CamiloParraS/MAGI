@@ -113,4 +113,4 @@ All windows (search, settings, onboarding) are GPUI; there is no webview.
   its headless tests on all three OSes; macOS and Linux behaviour (tray,
   vibrancy, Wayland) is an explicit M6 risk until verified there.
 - The Tauri implementation is preserved on `feat/User_Interface` and the
-  pre-change spec in `docs/SPEC-v1.1-tauri.md`.
+  pre-change spec in `docs/archive/SPEC-v1.1-tauri.md`.
