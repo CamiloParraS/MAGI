@@ -17,16 +17,18 @@ Open only the row matching your task. Do not read `docs/SPEC.md` or `docs/progre
 | Host API, DTOs                 | `crates/magi-core/src/host.rs`, `dto.rs`, `engine.rs`       | architecture.md "Host API", "Control surface"; SPEC §5.7            |
 | Config, paths, roots           | `crates/magi-core/src/config/`, `paths.rs`, `db/roots.rs`   | architecture.md "Config", "Roots"; SPEC §4.5                        |
 | OS-specific behaviour          | `crates/magi-core/src/platform/`                            | architecture.md "Platform behaviour"; `docs/permissions.md`; SPEC §6 |
-| Desktop UI (search, settings, onboarding) | `apps/desktop/src/{search,settings,onboarding,ui}/`, `theme.rs`, `i18n/` | `DESIGN.md`, `PRODUCT.md`; architecture.md "Desktop host", "Desktop app"; ADR-0011 |
+| Desktop UI (search, settings, onboarding) | `apps/desktop/src/{search,settings,onboarding,ui}/`, `theme.rs`, `i18n/` | `docs/DESIGN.md`, `docs/PRODUCT.md`; architecture.md "Desktop host", "Desktop app"; ADR-0011 |
 | Tray, hotkey, single-instance  | `apps/desktop/src/{tray,hotkey,instance}.rs`                | ADR-0011                                                            |
-| Packaging, release             | `packager.json`, `.github/workflows/`, `xtask/`             | ADR-0012                                                            |
-| Performance, memory            | n/a                                                         | `docs/benchmarks.md`, `docs/perf-investigation.md`                  |
+| Packaging, release             | `packager.json`, `.github/workflows/`, `xtask/`             | ADR-0012; `docs/CHANGELOG.md`                                       |
+| Performance, memory            | n/a                                                         | `docs/benchmarks.md`, `docs/archive/perf-investigation.md`          |
 | Search quality                 | `eval/` (`queries.jsonl`), `crates/magi-cli`                | `docs/eval.md`                                                      |
 | Manual QA per OS               | n/a                                                         | `docs/qa-checklist.md`                                              |
 
 Current milestone status: the last `##` sections of `docs/progress.md` (`grep -n '^## ' docs/progress.md`, then read the tail). SPEC §7 (milestone roadmap) is only for starting a new milestone.
 
-Ignore: `docs/SPEC-v1.1-tauri.md` (frozen, superseded), screenshot folders under `docs/`, `target/`, `vendor/`, `graphify-out/` (generated). Whole-repo structure questions: `graphify-out/GRAPH_REPORT.md`.
+Open work written up as files (plans, tickets): `docs/issues/`; GitHub issues track the rest.
+
+Ignore: `docs/archive/` (finished plans and superseded docs, including the frozen Tauri-era spec), the root `DESIGN.md`/`PRODUCT.md` stubs (kept for design tooling; the real files are in `docs/`), screenshot folders under `docs/`, `target/`, `vendor/`, `graphify-out/` (generated). Whole-repo structure questions: `graphify-out/GRAPH_REPORT.md`.
 
 ## Commands
 

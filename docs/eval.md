@@ -796,7 +796,7 @@ over the top 30 would reach six of the seven. Prefixes (`query: ` /
 `passage: `), mean pooling, L2 normalisation and best-chunk-per-file in
 `embed/e5.rs` and `search/vector.rs` were checked and are correct, so the
 limit is `multilingual-e5-small` int8 itself. Ticket:
-`docs/tickets/0001-cross-lingual-ranker.md`.
+`docs/issues/0001-cross-lingual-ranker.md`.
 
 **Image matches were buried: `IMAGE_WEIGHT` 0.8 -> 1.1.** Five image misses
 had the right file at rank 1-2 of the visual list. The visual list already
@@ -938,7 +938,7 @@ The gain on the other buckets is real (z ranks a clear single-list winner
 first where RRF credits files for appearing in two lists), so a hybrid of
 the two (z-score for the order, RRF's deep list for candidates) is the
 version worth trying next, after a stronger cross-lingual embedder
-(`docs/tickets/0001-cross-lingual-ranker.md`), which would lift exactly the
+(`docs/issues/0001-cross-lingual-ranker.md`), which would lift exactly the
 cosines the gate cuts.
 
 **Nonsense queries.** Five made-up queries (`zxqv blorft`, `qwpoeiruty`,

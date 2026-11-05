@@ -53,7 +53,7 @@ pub(crate) fn init() -> Result<()> {
 
 /// Intra-op threads for the models (e5, both SigLIP towers, OCR): 4 on
 /// AC power, 2 on battery or when the platform cannot tell (NFR-8).
-/// Measured in docs/perf-investigation.md: e5 7-8 -> ~12 chunks/s at 4.
+/// Measured in docs/archive/perf-investigation.md: e5 7-8 -> ~12 chunks/s at 4.
 ///
 /// ponytail: read once per session load, so plugging in or unplugging
 /// mid-index takes effect only after the next idle unload. Re-check per
@@ -72,7 +72,7 @@ fn threads_for(on_battery: Option<bool>) -> usize {
 /// unload). e5 wants it: without it every layer allocates and page-faults its
 /// tensors afresh, which held e5 at ~7 chunks/s whatever the thread count.
 /// SigLIP and OCR scale without it, so they skip the memory
-/// (docs/perf-investigation.md, ADR-0005).
+/// (docs/archive/perf-investigation.md, ADR-0005).
 pub(crate) fn session(path: &Path, threads: usize, arena: bool) -> Result<Session> {
     let model = |what: &str, e: &dyn std::fmt::Display| Error::Model(format!("{what}: {e}"));
     Session::builder()

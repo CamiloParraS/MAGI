@@ -23,7 +23,7 @@ const PASSAGE_PREFIX: &str = "passage: ";
 /// few MB regardless of file size (SPEC.md §5.3: "small batches"). 8, not
 /// 16: the session's memory arena keeps a pool sized for the largest batch
 /// (~12 heads x 512^2 f32 attention scores per chunk), and 16 put all-models
-/// indexing 30 MB over NFR-11 (docs/perf-investigation.md).
+/// indexing 30 MB over NFR-11 (docs/archive/perf-investigation.md).
 const BATCH_CHUNKS: usize = 8;
 
 /// Real `intfloat/multilingual-e5-small` embedder: `tokenizers` for
