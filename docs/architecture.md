@@ -478,7 +478,9 @@ scheduler ──► extract workers (N) ──► embed worker (1) ──► wri
 `EngineHandle` (clone) offers `stats()`, `rescan()`, `search_pending()` and
 `shutdown()`. Shutdown drops queued pipeline work (rows stay `indexing`; the
 next start resets them) and applies everything already handed to the writer.
-Thread and channel details: `engine.rs`.
+Thread and channel details: `engine.rs` and `engine/` (`workers.rs` for the
+pipeline threads, `status.rs` for the status thread, `root_ops.rs` for root
+management).
 
 ## Watching (M5 Slice 4)
 
@@ -518,7 +520,10 @@ this check).
 `platform::Os` implements SPEC §6's `CloudPlaceholder`, `PowerStatus` and
 `ThreadPriority`; the OS code lives in `platform/{windows,macos,linux}.rs`, the
 pure decoders (attribute bits, `pmset` output, `power_supply` entries) in
-`platform/mod.rs` so every OS tests them.
+`platform/mod.rs` so every OS tests them. Desktop integration (clipboard,
+backdrop, reduce motion, windowing) is in `platform/desktop.rs`, a root's
+guidance in `platform/guidance.rs`, vendored-library paths in
+`platform/vendor.rs`.
 
 - **Cloud placeholders.** `WalkEntry::cloud_only` comes from metadata the walk
   already has: Windows attributes `RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN |

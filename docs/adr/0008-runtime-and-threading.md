@@ -1,6 +1,6 @@
 # ADR-0008: Indexing runtime — plain threads, bounded channels, one writer
 
-- **Status:** Accepted; implemented in `engine.rs`, `index/{scheduler,writer,gate,resources}.rs`
+- **Status:** Accepted; implemented in `engine.rs` and `engine/`, `index/{scheduler,writer,gate,resources}.rs`
 - **Milestone:** M5
 
 ## Context
