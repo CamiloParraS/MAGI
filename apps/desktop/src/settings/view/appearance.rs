@@ -8,6 +8,7 @@ use gpui_kit::component::slider::Slider;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::json;
+use std::time::Duration;
 
 use super::{Field, SettingsView};
 use crate::i18n::Strings;
@@ -182,7 +183,12 @@ impl SettingsView {
 }
 
 /// A layout picture's height; its width is the row's share.
-const SKETCH_H: Pixels = px(150.);
+const SKETCH_H: Pixels = px(164.);
+/// How long the chosen picture's selection rests on a result before it
+/// steps to the next.
+const SKETCH_STEP: Duration = Duration::from_millis(1600);
+/// The results in a picture; the selection walks them and starts over.
+const SKETCH_ROWS: usize = 5;
 
 /// One layout to pick: its picture, framed in the accent when chosen, and
 /// its name under it. The two share the row's width.
@@ -213,7 +219,7 @@ fn layout_choice(split: bool, label: &'static str, chosen: bool, p: &Palette) ->
                 .border_2()
                 .border_color(if chosen { p.accent } else { p.line })
                 .hover(|d| d.border_color(if chosen { p.accent } else { p.mute }))
-                .child(sketch(split, p)),
+                .child(sketch(split, chosen, p)),
         )
         .child(
             div()
@@ -233,22 +239,29 @@ fn layout_choice(split: bool, label: &'static str, chosen: bool, p: &Palette) ->
         )
 }
 
-/// A search window in miniature: the input, a few results (the first one
-/// selected), and with `split` the detail pane beside them. Widths are
-/// shares of the picture, so it fills whatever room the row gives it. As
-/// in the window, only a line between the list and the pane.
-fn sketch(split: bool, p: &Palette) -> Div {
+/// A search window in miniature: the input, a few results (one selected),
+/// and with `split` the detail pane beside them: its preview, name, a
+/// snippet, then the tags with the actions under them, right-aligned, as in
+/// the window. Widths are shares of the picture, so it fills whatever room
+/// the row gives it. As in the window, only a line between the list and
+/// the pane.
+///
+/// The chosen picture is the live one: the selection walks down the list
+/// and the pane's contents settle in again at each step, as a real
+/// selection does. The other stays still (and so does everything, with
+/// reduced motion), which also says which is on.
+fn sketch(split: bool, chosen: bool, p: &Palette) -> Div {
     let bar = |w: f32, color: Hsla| div().h(px(4.)).w(relative(w)).rounded_full().bg(color);
     let strong = p.mute.opacity(0.45);
-    let result = |selected: bool| {
-        div()
+    let selection = p.selection;
+    let result = |ix: usize| {
+        let row = div()
             .flex()
             .items_center()
             .gap(px(6.))
             .px(px(6.))
             .py(px(4.))
             .rounded(px(3.))
-            .when(selected, |d| d.bg(p.selection))
             .child(div().flex_none().size(px(12.)).rounded(px(2.)).bg(p.chip))
             .child(
                 div()
@@ -258,7 +271,27 @@ fn sketch(split: bool, p: &Palette) -> Div {
                     .flex_1()
                     .child(bar(0.55, strong))
                     .child(bar(0.85, p.line)),
+            );
+        if chosen {
+            // Each row lights while the walk is on it: a quick rise and a
+            // slower fade, so the selection seems to travel.
+            row.with_animation(
+                (if split { "sk-split-row" } else { "sk-list-row" }, ix),
+                Animation::new(SKETCH_STEP * SKETCH_ROWS as u32).repeat(),
+                move |el, t| {
+                    let d = (t * SKETCH_ROWS as f32 - ix as f32).rem_euclid(SKETCH_ROWS as f32);
+                    let on = if d < 1. {
+                        (d / 0.18).min(1.) * ((1. - d) / 0.3).min(1.)
+                    } else {
+                        0.
+                    };
+                    el.bg(selection.opacity(on))
+                },
             )
+            .into_any_element()
+        } else {
+            row.when(ix == 0, |d| d.bg(selection)).into_any_element()
+        }
     };
     let list = div()
         .flex()
@@ -267,29 +300,90 @@ fn sketch(split: bool, p: &Palette) -> Div {
         .p(px(4.))
         .when(split, |d| d.w(relative(0.42)).flex_none())
         .when(!split, |d| d.flex_1())
-        .child(result(true))
-        .children((0..4).map(|_| result(false)));
+        .children((0..SKETCH_ROWS).map(result));
     let pane = split.then(|| {
-        div()
+        let tag = |w: f32| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .h(px(8.))
+                .w(px(w))
+                .px(px(2.))
+                .rounded_full()
+                .bg(p.chip)
+                .child(div().size(px(3.)).rounded_full().bg(p.accent))
+        };
+        let content = div()
             .flex()
             .flex_col()
             .gap(px(5.))
-            .flex_1()
-            .p(px(8.))
-            .border_l_1()
-            .border_color(p.line)
-            .child(div().h(px(44.)).w_full().rounded(px(3.)).bg(p.chip))
+            .size_full()
+            .child(div().h(px(34.)).w_full().rounded(px(3.)).bg(p.chip))
             .child(bar(0.6, strong))
-            .child(bar(0.8, p.line))
-            .child(bar(0.7, p.line))
+            .child(bar(0.4, p.line))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .p(px(4.))
+                    .rounded(px(3.))
+                    .bg(p.card)
+                    .child(bar(0.9, p.line))
+                    .child(bar(0.7, p.line)),
+            )
+            // Why it matched, then the actions at the far end.
             .child(
                 div()
                     .mt_auto()
                     .flex()
+                    .flex_col()
                     .gap(px(4.))
-                    .child(div().h(px(8.)).w(px(24.)).rounded(px(2.)).bg(p.accent))
-                    .child(div().h(px(8.)).w(px(36.)).rounded(px(2.)).bg(p.chip)),
-            )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(3.))
+                            .child(tag(20.))
+                            .child(tag(26.))
+                            .child(tag(16.)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .h(px(8.))
+                                    .w(px(26.))
+                                    .rounded(px(2.))
+                                    .border_1()
+                                    .border_color(p.line),
+                            )
+                            .child(div().h(px(8.)).w(px(18.)).rounded(px(2.)).bg(p.accent)),
+                    ),
+            );
+        let content = if chosen {
+            content
+                .with_animation(
+                    "sk-pane",
+                    Animation::new(SKETCH_STEP)
+                        .repeat()
+                        .with_easing(ease_out_quint()),
+                    // The new result's pane rises into place a few pixels.
+                    |el, t| el.opacity(0.3 + 0.7 * t).pt(px(4. * (1. - t))),
+                )
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
+        div()
+            .flex_1()
+            .p(px(8.))
+            .border_l_1()
+            .border_color(p.line)
+            .child(content)
     });
     div()
         .flex()

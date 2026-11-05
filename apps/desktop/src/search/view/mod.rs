@@ -31,7 +31,7 @@ pub const DEBOUNCE: Duration = Duration::from_millis(150);
 const SLOW: Duration = Duration::from_millis(150);
 /// How long the first failed search waits before trying again by itself.
 const AUTO_RETRY: Duration = Duration::from_millis(1500);
-/// How long "Path copied" replaces "Copy path".
+/// How long "Path copied" replaces "Copy".
 const COPIED: Duration = Duration::from_millis(1200);
 /// The footer's copy hint, whose label becomes "Path copied".
 const COPY_KEY: &str = "secondary-c";

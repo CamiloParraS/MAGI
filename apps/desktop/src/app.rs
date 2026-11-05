@@ -465,6 +465,8 @@ gpui_kit::assets::icon_assets!(
         TextSearch,
         ScanText,
         ScanEye,
+        // The detail pane's tag for a QR match.
+        ScanQrCode,
         // Keycaps (onboarding).
         ArrowBigUp,
         ChevronUp,

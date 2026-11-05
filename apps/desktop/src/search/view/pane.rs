@@ -4,14 +4,16 @@
 
 use std::path::PathBuf;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::*;
-use magi_core::dto::SearchResult;
+use magi_core::dto::{MatchSource, SearchResult};
 
 use super::SearchView;
 use super::results::{folder_of, local_date, short_folder};
+use crate::search::state::shown_sources;
 use crate::search::{detail, highlight};
 use crate::theme::{self, Palette};
 
@@ -50,7 +52,8 @@ impl SearchView {
                     .line_clamp(2)
                     .child(r.file_name.clone()),
             )
-            // Where it is; a click shows it there, like Ctrl+Enter.
+            // Where it is; the full path in the tooltip. Showing it there is
+            // the button's job (and Ctrl+Enter's), not a second control's.
             .child(
                 div()
                     .id("pane-folder")
@@ -58,12 +61,9 @@ impl SearchView {
                     .items_center()
                     .gap_1()
                     .min_w_0()
-                    .cursor_pointer()
                     .text_xs()
                     .text_color(p.mute)
-                    .hover(|d| d.text_color(p.ink))
                     .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
-                    .on_click(cx.listener(|this, _, window, cx| this.act(true, window, cx)))
                     .child(Icon::new(IconName::Folder).size(px(12.)).flex_none())
                     .child(div().truncate().child(short_folder(&r.path))),
             )
@@ -95,11 +95,14 @@ impl SearchView {
             )
             .into_any_element()
         });
-        let chips = detail::reasons(&r.match_sources, s)
+        // `reasons` follows `shown_sources` one for one, so each chip gets
+        // the picture of its own kind of match.
+        let chips = shown_sources(&r.match_sources)
             .into_iter()
+            .zip(detail::reasons(&r.match_sources, s))
             .enumerate()
-            .map(|(ix, (label, tip))| {
-                chip(p, IconName::Check, label.into())
+            .map(|(ix, (source, (label, tip)))| {
+                chip(p, source_icon(source), label.into())
                     .id(("reason", ix))
                     .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
                     .into_any_element()
@@ -157,50 +160,69 @@ impl SearchView {
                     .child(head)
                     .children(snippet),
             )
-            // Always in view, whatever the body holds: the actions, and why
-            // it matched at the other end.
+            // Always in view, whatever the body holds: why it matched, and
+            // the actions at the end, the primary one last under the cursor's
+            // natural resting corner.
             .child(
                 div()
                     .flex()
+                    .flex_col()
                     .flex_none()
-                    .items_center()
                     .gap_2()
                     .px(px(16.))
                     .pt(px(4.))
                     .pb(px(12.))
                     .child(
-                        Button::new("pane-open")
-                            .cursor_pointer()
-                            .primary()
-                            .small()
-                            .label(s.open)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.act(false, window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("pane-reveal")
-                            .cursor_pointer()
-                            .ghost()
-                            .small()
-                            .icon(IconName::FolderOpen)
-                            .label(s.reveal)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.act(true, window, cx)),
-                            ),
-                    )
-                    .child(
                         div()
                             .flex()
-                            .flex_1()
                             .flex_wrap()
-                            .justify_end()
                             .gap(px(6.))
                             .min_w_0()
                             .children(chips)
                             .children(page),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("pane-reveal")
+                                    .cursor_pointer()
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::FolderOpen)
+                                    .label(s.reveal)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.act(true, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("pane-open")
+                                    .cursor_pointer()
+                                    .primary()
+                                    .small()
+                                    .label(s.open)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.act(false, window, cx)
+                                    })),
+                            ),
                     ),
             )
+    }
+}
+
+/// The picture of a kind of match, the same ones the onboarding features
+/// use for meaning, text in images and what an image looks like.
+fn source_icon(source: MatchSource) -> IconName {
+    match source {
+        MatchSource::Keyword => IconName::Search,
+        MatchSource::Semantic => IconName::TextSearch,
+        MatchSource::Ocr => IconName::ScanText,
+        MatchSource::Visual => IconName::ScanEye,
+        MatchSource::Qr => IconName::ScanQrCode,
+        MatchSource::Filename => IconName::Tag,
     }
 }
 

@@ -28,7 +28,7 @@ pub const STRINGS: Strings = Strings {
     },
     open: "Open",
     reveal: "Show in folder",
-    copy_path: "Copy path",
+    copy_path: "Copy",
     copied: "Path copied",
     row_copied: "Copied",
     move_selection: "Move",
