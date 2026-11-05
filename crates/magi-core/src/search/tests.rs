@@ -5,7 +5,7 @@ use crate::embed::FakeEmbedder;
 use crate::extract::RawChunk;
 use std::path::{Path, PathBuf};
 
-fn open_test_db() -> (tempfile::TempDir, Connection) {
+pub(crate) fn open_test_db() -> (tempfile::TempDir, Connection) {
     let dir = tempfile::tempdir().unwrap();
     let conn = db::open(&dir.path().join("magi.db")).unwrap();
     let root_dir = tempfile::tempdir().unwrap();
@@ -13,7 +13,7 @@ fn open_test_db() -> (tempfile::TempDir, Connection) {
     (dir, conn)
 }
 
-fn index_text(conn: &mut Connection, path: &str, body: &str, mtime_ns: i64) {
+pub(crate) fn index_text(conn: &mut Connection, path: &str, body: &str, mtime_ns: i64) {
     let path_buf = PathBuf::from(path);
     let rel = PathBuf::from(Path::new(path).file_name().unwrap());
     let record = FileRecord {

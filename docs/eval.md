@@ -864,6 +864,169 @@ media placeholders (`<|image|>` etc.) crashes inference unless sanitized.
 stronger model closes it; look for a cheaper way there (query-time
 reranker, a small multilingual embedder in e5's size class).
 
+## 2026-11-05: z-score + word-coverage fusion (DigUp) evaluated, rejected
+
+GitHub issue #9. DigUp (`Sources/DigUpKit/Searcher.swift`) replaced RRF with
+a per-query z-score on cosines plus word coverage and reports better top-1.
+Ported behind a switch (`search::zfusion`, used only by `magi-cli eval`;
+`hybrid_search` still runs RRF) and run on the same index as RRF in every
+`just eval` / `just eval-random` run:
+
+- **z:** every `vec_text` chunk and `vec_image` row is scored (up to
+  sqlite-vec's KNN cap of 4,096 per table; the corpora have far fewer). Each
+  cosine minus its modality's mean (text / visual; a group under 20 vectors
+  takes the overall mean), over one shared deviation (floor 0.02). A file
+  takes its best z.
+- **Coverage:** share of the query's words found in any chunk of the file
+  (FTS5, last word as prefix), English and Spanish function words left out.
+- **Score** `1.0 * max(z, 0) + 2.0 * coverage^1.5`; candidate if
+  z >= gate or coverage >= 0.5. A query whose every word has a digit halves
+  the z weight and doubles the word weight.
+- Filename and recency boosts applied unchanged, so only fusion differs.
+
+Release build, real models, fresh DB. Hybrid r@5 / r@10 / MRR:
+
+| Corpus (n)          | RRF (shipped)         | z-score, gate 2.0     |
+| ------------------- | --------------------: | --------------------: |
+| named (164)         | 0.982 / 0.988 / 0.904 | 0.976 / 0.982 / **0.927** |
+| random names (163)  | 0.920 / 0.933 / 0.865 | 0.902 / 0.902 / **0.890** |
+| realistic (163)     | 0.939 / 0.939 / 0.876 | 0.914 / 0.920 / **0.900** |
+
+By bucket, MRR, RRF -> z-score gate 2.0:
+
+| bucket | named         | random names  | realistic     |
+| ------ | ------------: | ------------: | ------------: |
+| en     | 0.925 -> 1.000 | 0.900 -> 1.000 | 0.950 -> 1.000 |
+| es     | 0.925 -> 0.975 | 0.950 -> 0.975 | 0.950 -> 0.975 |
+| kw     | 0.950 -> 1.000 | 1.000 -> 1.000 | 0.950 -> 1.000 |
+| **cross** | **0.667 -> 0.575** | **0.403 -> 0.275** | **0.443 -> 0.307** |
+| img    | 0.957 -> 1.000 | 0.937 -> 1.000 | 0.931 -> 1.000 |
+| img2   | 0.935 -> 0.944 | 0.914 -> 0.944 | 0.926 -> 0.963 |
+| ocr    | 1.000 -> 1.000 | 1.000 -> 1.000 | 1.000 -> 1.000 |
+| qr     | 0.733 -> 1.000 | 0.833 -> 1.000 | 0.833 -> 1.000 |
+
+`cross` recall@5, RRF -> z-score: named 0.900 -> 0.850, random 0.500 ->
+0.300, realistic 0.650 -> 0.350.
+
+**Gate sweep** (hybrid r@5 / MRR; `cross` r@5 in brackets):
+
+| gate | named                 | random names          | realistic             |
+| ---- | --------------------: | --------------------: | --------------------: |
+| 1.0  | 0.976 / 0.927 (0.850) | 0.914 / 0.897 (0.350) | 0.926 / 0.905 (0.450) |
+| 1.5  | 0.976 / 0.927 (0.850) | 0.914 / 0.895 (0.350) | 0.926 / 0.905 (0.450) |
+| 2.0  | 0.976 / 0.927 (0.850) | 0.902 / 0.890 (0.300) | 0.914 / 0.900 (0.350) |
+| 2.5  | 0.945 / 0.913 (0.600) | 0.883 / 0.871 (0.200) | 0.896 / 0.887 (0.250) |
+| 3.0  | 0.909 / 0.890 (0.400) | 0.840 / 0.840 (0.050) | 0.871 / 0.868 (0.150) |
+
+**Decision: rejected.** The rule was "adopt only if overall MRR improves and
+no bucket regresses, especially `kw` and `cross`". Overall MRR improves on
+all three corpora (+0.023 to +0.025) and `en`, `es`, `kw`, `img`, `qr` all
+rise, but `cross` regresses on every corpus at every gate, and overall
+recall@5 drops at every gate. RRF stays; SPEC §5.6 and architecture.md are
+unchanged.
+
+**Why `cross` falls.** Almost every z-score `cross` miss is rank `None`, not
+a low rank: the other-language document is not a candidate at all. Its
+cosine is a weak cross-lingual match that does not stand out from the
+query's distribution, and it shares no words with the query, so neither gate
+admits it (realistic names: 12 of 13 misses). RRF keeps the whole 100-deep
+text-vector list, where those files sit at ranks 14-74 (2026-10-18 above)
+and still reach the top 5-10. Lowering the gate does not fix it: at gate 1.0
+almost every file is a candidate (10.1 results per query), yet `cross` stays
+below RRF, because the twin and same-language near misses outscore it on z.
+The gain on the other buckets is real (z ranks a clear single-list winner
+first where RRF credits files for appearing in two lists), so a hybrid of
+the two (z-score for the order, RRF's deep list for candidates) is the
+version worth trying next, after a stronger cross-lingual embedder
+(`docs/tickets/0001-cross-lingual-ranker.md`), which would lift exactly the
+cosines the gate cuts.
+
+**Nonsense queries.** Five made-up queries (`zxqv blorft`, `qwpoeiruty`,
+...), results of a 100-result request, RRF / z-score gate 2.0:
+
+| corpus       | RRF | z-score |
+| ------------ | --: | ------: |
+| named        | 100 each | 1, 3, 3, 1, 3 |
+| random names | 100 each | 0, 0, 1, 1, 0 |
+| realistic    | 100 each | 1, 3, 6, 1, 1 |
+
+The gate gives an empty list for 3 of 15, not for all. What still gets
+through is nearly always a photo: SigLIP's text tower puts a few images
+above z = 2 for any input (`walls-io-whiteboard.jpg` tops four of five on the
+named corpus). That is still a large UX difference (1-6 results instead of
+100), and the visual list's z would need its own, higher gate to get to
+"nothing found".
+
+**Folding weaker matches** (top 10, results under 0.5x the top score):
+
+| corpus       | RRF results / folded / answer folded | z-score 2.0 results / folded / answer folded |
+| ------------ | -----------------------------------: | -------------------------------------------: |
+| named        | 10.1 / 6.8 / 5                       | 5.1 / 2.8 / 6                                |
+| random names | 10.1 / 4.6 / 3                       | 3.7 / 1.3 / 0                                |
+| realistic    | 10.1 / 4.4 / 4                       | 4.7 / 2.1 / 2                                |
+
+("answer folded" = queries whose expected file was found but would sit
+under the fold.) Under either fusion, folding would hide some right answers.
+DigUp's "never folded an expected answer" does not hold here, so folding is
+not adopted either.
+
+### What can be salvaged: z-score as a reranker
+
+At gate 1.0 almost every file is a candidate, and within text z is monotonic
+in cosine, so the text order is vector-only's. Yet `cross` stayed below
+vector-only. Two things pushed in above the right file, and each is now a
+switch in `ZFusionParams`:
+
+- **`image_min_cosine`:** images enter on their z, with none of the RRF
+  path's `IMAGE_MIN_COSINE` (0.10) floor, so weak photos ranked as meaning
+  matches. The switch applies the same floor (images below it still count
+  toward the scale).
+- **`words_need_gate`:** coverage is added to any candidate, so a
+  same-language near miss holding one word in three gets a bonus. The switch
+  adds coverage only at >= 0.5.
+
+Same build and method, hybrid r@5 / r@10 / MRR (`cross` r@5 / MRR):
+
+| Variant                          | named                                   | random names                            | realistic                               |
+| -------------------------------- | --------------------------------------: | --------------------------------------: | --------------------------------------: |
+| RRF (shipped)                    | 0.982 / 0.988 / 0.904 (0.900 / 0.667)   | 0.920 / 0.933 / 0.865 (0.500 / 0.403)   | 0.939 / 0.939 / 0.876 (0.650 / 0.443)   |
+| gate 2.0 (DigUp)                 | 0.976 / 0.982 / 0.927 (0.850 / 0.575)   | 0.902 / 0.902 / 0.890 (0.300 / 0.275)   | 0.914 / 0.920 / 0.900 (0.350 / 0.307)   |
+| gate 2.0 + floor                 | 0.976 / 0.976 / 0.934 (0.900 / 0.681)   | 0.890 / 0.890 / 0.883 (0.300 / 0.300)   | 0.908 / 0.908 / 0.893 (0.400 / 0.375)   |
+| gate 2.0 + floor + words gated   | 0.976 / 0.976 / 0.933 (0.900 / 0.677)   | 0.890 / 0.890 / 0.883 (0.300 / 0.300)   | 0.908 / 0.908 / 0.893 (0.400 / 0.375)   |
+| gate 1.0 + floor                 | 0.976 / 0.988 / 0.936 (0.850 / 0.684)   | 0.920 / 0.933 / 0.899 (0.500 / 0.391)   | 0.945 / 0.945 / 0.901 (0.700 / 0.445)   |
+| **gate 1.0 + floor + words gated** | **0.982 / 0.988 / 0.935 (0.900 / 0.682)** | **0.920 / 0.933 / 0.900 (0.500 / 0.403)** | **0.939 / 0.939 / 0.901 (0.650 / 0.443)** |
+
+**The last row meets the issue's adoption rule on all three corpora.**
+Overall recall@5 and recall@10 equal RRF's, overall MRR is +0.031 / +0.035
+/ +0.025, and no bucket regresses on any of r@5, r@10 or MRR: `cross`
+ties or beats RRF on all three (its text order is vector-only's, as for
+RRF), and `en`, `es`, `kw`, `img`, `img2` and `qr` MRR all rise (e.g. `qr`
+0.733 -> 1.000, `en` 0.925 -> 1.000 named). `ocr` and `skip` are 1.000 under
+both.
+
+**Not adopted yet.** Three things to settle first:
+
+1. **Tuned on the test set.** Both switches and the gate were chosen after
+   seeing these numbers, and the three corpora share one query set. The
+   margin (+0.025 to +0.035 MRR, i.e. a few queries moving to rank 1) needs
+   confirming on queries written after this decision.
+2. **Cost.** It scores every vector of both tables per query (up to
+   sqlite-vec's 4,096 KNN cap here) instead of 100 + 50 nearest; the 100k
+   chunk NFR-2/NFR-3 benchmark (`just bench`) has not been run on it, and
+   past 4,096 chunks the scale would need a full scan.
+3. **It is a reranker, not a gate.** At gate 1.0 a query still gets a full
+   list (10.1 results per query); the "nothing found" win needs gate 2.0,
+   which is the variant that loses `cross`. The image floor did not change
+   the nonsense counts at gate 2.0 (the photos that leak score above 0.10).
+
+Adopting it would be a ranking change: an ADR, SPEC §5.6 and
+architecture.md "Embeddings and hybrid search", and the latency benchmark.
+
+`just eval` now prints RRF, the five z-score variants above, fold stats and
+the nonsense queries (RRF / gate 2.0 / gate 2.0 + floor). The z-score code is
+kept for that comparison and for the follow-up; it is not reachable from the
+app.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
