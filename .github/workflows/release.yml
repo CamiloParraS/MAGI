@@ -19,7 +19,7 @@ jobs:
         include:
           - os: windows-latest
             formats: nsis
-          - os: macos-14
+          - os: macos-15
             formats: app
           - os: ubuntu-22.04
             formats: deb,appimage
