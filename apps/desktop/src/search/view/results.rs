@@ -1,6 +1,6 @@
 //! The search window's body: the intro, no match, or the results.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::NaiveDate;
@@ -11,12 +11,17 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{IndexState, SearchResult};
 
-use super::{COPY_FLASH, LIST_MAX_HEIGHT, SearchView};
+use super::{COPY_FLASH, LIST_MAX_HEIGHT, SPLIT_LIST_WIDTH, SearchView};
 use crate::i18n::Lang;
 use crate::search::highlight;
 use crate::search::hint::hint;
 use crate::search::state::{cause, explain_sources, shown_sources};
 use crate::theme::{self, Palette};
+
+mod labels;
+
+use labels::{folder_name, row_label};
+pub(super) use labels::{folder_of, local_date, short_folder};
 
 impl SearchView {
     pub(super) fn body(&self, p: &Palette, cx: &Context<Self>) -> Option<AnyElement> {
@@ -194,6 +199,7 @@ impl SearchView {
         let selected = state.selected_index();
         let dimmed = self.dimmed();
         let reduce_motion = self.copied.is_some() && magi_core::platform::reduce_motion();
+        let split = self.detail_pane;
         let rows = results.iter().enumerate().map(|(ix, r)| {
             // The row that was copied, not the selection: it may have moved on.
             let flash = self
@@ -208,7 +214,7 @@ impl SearchView {
                 true => p.selection,
                 false => p.selection.opacity(0.),
             };
-            row(ix, r, selected == Some(ix), flash, p, lang, today)
+            row(ix, r, selected == Some(ix), flash, split, p, lang, today)
                 // Mouse move, not hover: keyboard scrolling slides rows under a
                 // still cursor and must not steal the selection.
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -238,35 +244,49 @@ impl SearchView {
                     None => row.into_any_element(),
                 })
         });
+        let list = div()
+            .id("results")
+            .role(Role::ListBox)
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .px(px(6.))
+            .pt(px(4.))
+            .pb(px(6.))
+            .map(|list| match split {
+                // A fixed height, so the window does not resize as the
+                // selection moves through results of different detail.
+                true => list.w(SPLIT_LIST_WIDTH).flex_none().h_full(),
+                false => list.max_h(LIST_MAX_HEIGHT),
+            })
+            .children(rows)
+            .map(|list| match dimmed {
+                true => list
+                    .with_animation(
+                        "dim",
+                        Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                        |list, t| list.opacity(1. - 0.55 * t),
+                    )
+                    .into_any_element(),
+                false => list.into_any_element(),
+            });
+        let pane = split
+            .then(|| state.selected().map(|r| self.pane(r, p, cx)))
+            .flatten();
         Some(
             div()
                 .flex()
                 .flex_col()
                 .child(
                     div()
-                        .id("results")
-                        .role(Role::ListBox)
                         .flex()
-                        .flex_col()
-                        .max_h(LIST_MAX_HEIGHT)
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .px(px(6.))
-                        .pt(px(4.))
-                        .pb(px(6.))
-                        .border_t_1()
-                        .border_color(p.line)
-                        .children(rows)
-                        .map(|list| match dimmed {
-                            true => list
-                                .with_animation(
-                                    "dim",
-                                    Animation::new(theme::FADE).with_easing(ease_out_quint()),
-                                    |list, t| list.opacity(1. - 0.55 * t),
-                                )
-                                .into_any_element(),
-                            false => list.into_any_element(),
-                        }),
+                        // Beside the pane the two sides read as one surface,
+                        // with no line under the input or between them.
+                        .when(!split, |d| d.border_t_1().border_color(p.line))
+                        .when(split, |d| d.h(LIST_MAX_HEIGHT))
+                        .child(list)
+                        .children(pane),
                 )
                 .children(hint.map(|h| div().px(px(12.)).pb(px(10.)).child(h)))
                 .into_any_element(),
@@ -284,12 +304,16 @@ fn copy_tint(base: Hsla, accent: Hsla, k: f32) -> Hsla {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn row(
     ix: usize,
     r: &SearchResult,
     selected: bool,
     // `Some(copies)` while "Copied" shows in place of the match sources.
     copied: Option<u64>,
+    // Beside the detail pane, which shows the folder, date and sources: the
+    // row keeps its name, page and snippet.
+    compact: bool,
     p: &Palette,
     lang: Lang,
     today: NaiveDate,
@@ -305,7 +329,7 @@ fn row(
     // height as the selection moves. A snippet leaves no room for the path,
     // so the folder's name follows the file's instead, behind a folder icon
     // so it reads as where the file is, not as more of its name.
-    let folder = r.snippet.is_some().then(|| {
+    let folder = (r.snippet.is_some() && !compact).then(|| {
         let full: SharedString = folder_of(&r.path).into();
         div()
             .id(("folder", ix))
@@ -417,7 +441,7 @@ fn row(
                 .flex_none()
                 .text_xs()
                 .text_color(p.mute)
-                .child(date)
+                .when(!compact, |d| d.child(date))
                 .map(|d| match copied {
                     // Where the eyes are when copying; replays per copy.
                     Some(n) => d.child(theme::fade_in(
@@ -432,7 +456,7 @@ fn row(
                     )),
                     // On every row: why it matched is the product, not a
                     // detail of the selection.
-                    None if !sources.is_empty() => d.child(
+                    None if !sources.is_empty() && !compact => d.child(
                         div()
                             .id(("match-sources", ix))
                             .text_color(if selected { p.accent } else { p.mute })
@@ -456,82 +480,5 @@ fn icon(r: &SearchResult) -> AnyElement {
             .with_fallback(move || theme::file_glyph(kind, &name, px(32.)).into_any_element())
             .into_any_element(),
         None => theme::file_glyph(kind, &name, px(32.)).into_any_element(),
-    }
-}
-
-fn folder_of(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
-}
-
-/// What a screen reader says for a row: the name, where it is, when, and why
-/// it matched (the footer's reason for the mouse-less is the same fact).
-fn row_label(name: &str, folder: &str, date: &str, sources: &str) -> String {
-    [name, folder, date, sources]
-        .iter()
-        .filter(|part| !part.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The last two folders of the path, `…\Documents\Contratos`: enough to
-/// tell two files of one name apart; the tooltip has the rest.
-fn short_folder(path: &str) -> String {
-    let Some(parent) = Path::new(path).parent() else {
-        return String::new();
-    };
-    let names: Vec<_> = parent
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect();
-    if names.len() <= 2 {
-        return parent.display().to_string();
-    }
-    let sep = std::path::MAIN_SEPARATOR.to_string();
-    format!("\u{2026}{sep}{}", names[names.len() - 2..].join(&sep))
-}
-
-/// The name of the folder a file is in.
-fn folder_name(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
-fn local_date(unix_ms: i64) -> Option<NaiveDate> {
-    chrono::DateTime::from_timestamp_millis(unix_ms)
-        .map(|t| t.with_timezone(&chrono::Local).date_naive())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{row_label, short_folder};
-
-    #[test]
-    fn a_row_is_read_as_name_place_date_and_reason() {
-        assert_eq!(
-            row_label("a.pdf", "Contratos", "18 sept", "Related"),
-            "a.pdf, Contratos, 18 sept, Related"
-        );
-        assert_eq!(row_label("a.pdf", "", "", ""), "a.pdf");
-    }
-
-    #[test]
-    fn a_deep_path_keeps_its_last_two_folders() {
-        let sep = std::path::MAIN_SEPARATOR;
-        let path = ["", "home", "ana", "Documents", "Contratos", "a.pdf"].join(&sep.to_string());
-        assert_eq!(
-            short_folder(&path),
-            format!("\u{2026}{sep}Documents{sep}Contratos")
-        );
-        assert_eq!(short_folder("a.pdf"), "");
     }
 }

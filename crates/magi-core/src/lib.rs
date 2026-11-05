@@ -1,4 +1,4 @@
-//! magi-core: all business logic for magi. No Tauri dependency — see SPEC.md §5.1.
+//! magi-core: all business logic for magi. No UI dependency — see SPEC.md §5.1.
 
 pub mod chunk;
 pub mod config;
@@ -23,18 +23,3 @@ pub mod watch;
 
 pub use engine::{Engine, EngineHandle};
 pub use error::{Error, Result};
-
-/// Health check used by the M0 "Hello" Tauri command.
-pub fn ping() -> &'static str {
-    "pong"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ping_returns_pong() {
-        assert_eq!(ping(), "pong");
-    }
-}

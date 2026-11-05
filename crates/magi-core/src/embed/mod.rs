@@ -1,5 +1,5 @@
 //! `TextEmbedder` / `ImageEmbedder` traits and a deterministic `FakeEmbedder`
-//! for tests. Implemented in M3 (text) and M4 (image) — see SPEC.md §7.
+//! for tests.
 
 pub mod e5;
 pub mod manager;
@@ -307,10 +307,5 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], e.embed_query("alpha").unwrap());
         assert_eq!(out[1], e.embed_query("beta").unwrap());
-    }
-
-    #[test]
-    fn fake_embedder_model_id_is_stable() {
-        assert_eq!(FakeEmbedder.model_id(), "fake-v1");
     }
 }

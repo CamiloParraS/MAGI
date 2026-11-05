@@ -1,5 +1,4 @@
-//! Reciprocal Rank Fusion plus filename/recency boosts. Implemented in M3
-//! (see SPEC.md §5.6).
+//! Reciprocal Rank Fusion plus filename/recency boosts (SPEC.md §5.6).
 
 use std::collections::{HashMap, HashSet};
 

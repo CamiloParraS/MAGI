@@ -59,6 +59,8 @@ pub struct Strings {
     pub still_indexing: Plural,
     /// `{n}` is the page number.
     pub page: &'static str,
+    /// The detail pane's page count.
+    pub pages: Plural,
     pub open: &'static str,
     pub reveal: &'static str,
     pub copy_path: &'static str,
@@ -220,6 +222,12 @@ pub struct Strings {
     pub results_shown_note: &'static str,
     pub copy_as_file: &'static str,
     pub copy_as_file_note: &'static str,
+    /// Settings › Appearance: the search window with or without the
+    /// detail pane, each drawn as a small picture.
+    pub search_layout: &'static str,
+    pub search_layout_note: &'static str,
+    pub layout_list: &'static str,
+    pub layout_preview: &'static str,
     pub theme: &'static str,
     pub theme_light: &'static str,
     pub theme_dark: &'static str,
@@ -463,6 +471,27 @@ impl Lang {
         shown.unwrap_or_else(|_| date.to_string())
     }
 
+    /// A file's size: "900 B", "59 KB", "2.4 MB", "23 MB", "1.2 GB"
+    /// (decimal units, like the OS; one decimal only below ten).
+    pub fn file_size(self, bytes: u64) -> String {
+        // Rounded to `unit`, with one decimal while below ten of them.
+        let scaled = |unit: u64, name: &str| {
+            if bytes < 10 * unit {
+                let mut tenths = Decimal::from((bytes + unit / 20) / (unit / 10));
+                tenths.multiply_pow10(-1);
+                format!("{} {name}", self.decimal(tenths))
+            } else {
+                format!("{} {name}", self.number((bytes + unit / 2) / unit))
+            }
+        };
+        match bytes {
+            0..1_000 => format!("{} B", self.number(bytes)),
+            1_000..1_000_000 => format!("{} KB", self.number((bytes + 500) / 1_000)),
+            1_000_000..1_000_000_000 => scaled(1_000_000, "MB"),
+            _ => scaled(1_000_000_000, "GB"),
+        }
+    }
+
     /// Download sizes: "812 MB", "1.2 GB" (decimal units, like the OS).
     pub fn size(self, bytes: u64) -> String {
         if bytes >= 1_000_000_000 {
@@ -476,64 +505,4 @@ impl Lang {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap()
-    }
-
-    #[test]
-    fn system_resolves_any_spanish_locale_to_spanish() {
-        use Language::*;
-        for tag in ["es", "es-CO", "es-419", "es_ES.UTF-8"] {
-            assert_eq!(Lang::resolve(System, Some(tag)), Lang::Es, "{tag}");
-        }
-        for tag in [Some("en-US"), Some("pt-BR"), Some("estonian"), None] {
-            assert_eq!(Lang::resolve(System, tag), Lang::En, "{tag:?}");
-        }
-        assert_eq!(Lang::resolve(En, Some("es-CO")), Lang::En);
-        assert_eq!(Lang::resolve(Es, Some("en-US")), Lang::Es);
-    }
-
-    #[test]
-    fn numbers_and_plurals_follow_the_language() {
-        let s = Lang::En.strings();
-        assert_eq!(
-            Lang::En.plural(&s.status_indexing, 1),
-            "Indexing, 1 file to go"
-        );
-        assert_eq!(
-            Lang::En.plural(&s.status_indexing, 1284),
-            "Indexing, 1,284 files to go"
-        );
-        let s = Lang::Es.strings();
-        assert_eq!(
-            Lang::Es.plural(&s.status_indexing, 1),
-            "Indexando, falta 1 archivo"
-        );
-        assert_eq!(Lang::Es.number(12345), "12.345");
-    }
-
-    #[test]
-    fn dates_are_today_or_yesterday_then_absolute_with_the_year_only_when_not_this_year() {
-        let today = day(2026, 9, 29);
-        assert_eq!(Lang::En.date(today, today), "today");
-        assert_eq!(Lang::En.date(day(2026, 9, 28), today), "yesterday");
-        assert_eq!(Lang::En.date(day(2026, 9, 17), today), "Sep 17");
-        assert_eq!(Lang::En.date(day(2026, 8, 18), today), "Aug 18");
-        assert_eq!(Lang::En.date(day(2025, 8, 18), today), "Aug 18, 2025");
-        assert_eq!(Lang::Es.date(day(2026, 9, 26), today), "26 sept");
-        assert_eq!(Lang::Es.date(day(2026, 8, 18), today), "18 ago");
-        assert_eq!(Lang::Es.date(day(2025, 8, 18), today), "18 ago 2025");
-        // A file dated in the future (clock skew) shows its date.
-        assert_eq!(Lang::En.date(day(2026, 10, 2), today), "Oct 2");
-    }
-
-    #[test]
-    fn sizes_are_megabytes_or_tenths_of_gigabytes() {
-        assert_eq!(Lang::En.size(812_300_000), "812 MB");
-        assert_eq!(Lang::En.size(1_240_000_000), "1.2 GB");
-        assert_eq!(Lang::Es.size(1_240_000_000), "1,2 GB");
-    }
-}
+mod tests;

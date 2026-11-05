@@ -31,36 +31,34 @@ mod features;
 mod folders;
 mod general;
 mod index;
+mod nav;
+mod rows;
+mod save;
 mod what_to_index;
 
-use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
-use gpui_kit::component::Selectable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use nav::Section;
+
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
-use gpui_kit::component::select::{SelectEvent, SelectState};
+use gpui_kit::component::select::SelectState;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
 use magi_core::dto::{ErrorCode, FileError, RootStatus};
 use magi_core::features::Feature;
 use magi_core::host::Host;
-use magi_core::platform::{BackdropSupport, SYMBOL_MODIFIERS};
+use magi_core::platform::BackdropSupport;
 use serde_json::json;
 
 use std::time::Instant;
 
-use super::{Roll, error_text, slider_from_intensity, version_tap};
-use crate::app::{AppEvent, Events};
-use crate::i18n::{Lang, Strings};
+use super::{Roll, slider_from_intensity};
+use crate::app::Events;
+use crate::i18n::Lang;
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
-use crate::tray::TrayAction;
-use crate::ui::keycaps::shortcut_text;
-use crate::ui::{heading, note, row, row_icon, saved_note, warn_note};
+use crate::ui::heading;
 use choices::{
-    Choice, Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
+    Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
 };
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
@@ -70,65 +68,10 @@ pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 /// height.
 pub const MIN_SIZE: Size<Pixels> = size(px(860.), px(480.));
 
-/// A section button's height, and the space between two: the accent bar
-/// moves by their sum per section.
-const NAV_ITEM_H: f32 = 32.;
-const NAV_GAP: f32 = 2.;
-/// How long the accent bar takes to reach another section.
-const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(240);
 /// How long another section takes to fade in.
 const SECTION_FADE: std::time::Duration = std::time::Duration::from_millis(220);
 /// How long "Saved" stands in for a text field's note or Save button.
 const SAVED_FOR: std::time::Duration = std::time::Duration::from_millis(2000);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Section {
-    Folders,
-    Searched,
-    General,
-    Appearance,
-    Index,
-}
-
-const SECTIONS: [Section; 5] = [
-    Section::Folders,
-    Section::Searched,
-    Section::General,
-    Section::Appearance,
-    Section::Index,
-];
-
-impl Section {
-    fn title(self, s: &Strings) -> &'static str {
-        match self {
-            Self::Folders => s.folders,
-            Self::Searched => s.whats_searched,
-            Self::General => s.general,
-            Self::Appearance => s.appearance,
-            Self::Index => s.index,
-        }
-    }
-
-    fn blurb(self, s: &Strings) -> &'static str {
-        match self {
-            Self::Folders => s.blurb_folders,
-            Self::Searched => s.blurb_searched,
-            Self::General => s.blurb_general,
-            Self::Appearance => s.blurb_appearance,
-            Self::Index => s.blurb_index,
-        }
-    }
-
-    fn icon(self) -> IconName {
-        match self {
-            Self::Folders => IconName::Folder,
-            Self::Searched => IconName::Sparkles,
-            Self::General => IconName::Settings,
-            Self::Appearance => IconName::Palette,
-            Self::Index => IconName::ChartColumn,
-        }
-    }
-}
 
 /// Where a failed change is shown: in the row it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +86,7 @@ pub enum Field {
     Feature(Feature),
     LaunchAtLogin,
     CopyAsFile,
+    DetailPane,
     Language,
     Results,
     Theme,
@@ -428,60 +372,6 @@ impl SettingsView {
         view
     }
 
-    /// The rail's way back to the product: a quiet item at its foot, like the
-    /// sections above it, opening the search window (or bringing it forward).
-    /// The shortcut is in its tooltip: beside the label it would overflow.
-    fn search_button(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> impl IntoElement {
-        let hotkey = Keystroke::parse(&crate::settings::hotkey_keystroke(&self.ui.hotkey))
-            .ok()
-            .map(|k| shortcut_text(&k, s, SYMBOL_MODIFIERS));
-        Button::new("open-search")
-            .cursor_pointer()
-            .ghost()
-            .w_full()
-            .h(px(NAV_ITEM_H))
-            .px_0()
-            .rounded(px(6.))
-            .text_size(px(13.))
-            .accessibility_label(s.search_files)
-            .when_some(hotkey, |b, text| b.tooltip(text))
-            .on_click(cx.listener(|this, _, _, _| {
-                let _ = this.events.try_send(AppEvent::Tray(TrayAction::OpenSearch));
-            }))
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .px_3()
-                    .child(Icon::new(IconName::Search).size(px(15.)).text_color(p.mute))
-                    .child(s.search_files),
-            )
-    }
-
-    /// Saves `patch(choice)` when a dropdown confirms a choice.
-    fn save_on_confirm<T>(
-        dropdown: &Dropdown<T>,
-        field: Field,
-        patch: fn(&T) -> serde_json::Value,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Subscription
-    where
-        T: Clone + PartialEq + 'static,
-    {
-        cx.subscribe_in(
-            dropdown,
-            window,
-            move |this, _, event: &SelectEvent<Vec<Choice<T>>>, window, cx| {
-                if let SelectEvent::Confirm(Some(value)) = event {
-                    this.save(field, patch(value), window, cx);
-                }
-            },
-        )
-    }
-
     /// The window's background, from the saved settings (like the search
     /// window's).
     fn backdrop(&self) -> Backdrop {
@@ -541,98 +431,6 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Runs a change on the background executor, `field` busy meanwhile,
-    /// and keeps its error. Public for the headless tests.
-    pub fn run(
-        &mut self,
-        field: Field,
-        job: impl FnOnce(&Host) -> magi_core::Result<()> + Send + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.busy.push(field);
-        cx.notify();
-        let host = self.host.clone();
-        cx.spawn(async move |this, cx| {
-            let done = cx
-                .background_executor()
-                .spawn(async move { job(&host) })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if let Some(ix) = view.busy.iter().position(|&f| f == field) {
-                    view.busy.remove(ix);
-                }
-                // A failed removal leaves its row working again.
-                if let (Field::Root(id), Err(_)) = (field, &done) {
-                    view.removing.retain(|&r| r != id);
-                }
-                view.error = done.err().map(|error| {
-                    tracing::warn!(%error, ?field, "a change failed");
-                    (field, ErrorCode::from(&error))
-                });
-                if view.section == Section::Index {
-                    view.load_unreadable(cx);
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Saves a settings patch; on success the shell applies the new `ui`, on
-    /// failure `field`'s row shows why. Public for the headless tests.
-    pub fn save(
-        &mut self,
-        field: Field,
-        patch: serde_json::Value,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let host = self.host.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let saved = cx
-                .background_executor()
-                .spawn(async move { host.update_settings(&patch) })
-                .await;
-            let _ = this.update_in(cx, |view, window, cx| {
-                match saved {
-                    Ok(config) => {
-                        view.error = None;
-                        if matches!(field, Field::MaxSize | Field::Excludes) {
-                            view.flash_saved(field, cx);
-                        }
-                        view.indexing = config.indexing;
-                        view.ui = config.ui.clone();
-                        let _ = view.events.try_send(AppEvent::Ui(config.ui));
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "a settings change failed");
-                        view.error = Some((field, ErrorCode::from(&error)));
-                    }
-                }
-                // The controls show what is saved: the rounded amount, or the
-                // old values when the save failed.
-                view.sync_controls(window, cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Shows `field` as saved for a moment.
-    fn flash_saved(&mut self, field: Field, cx: &mut Context<Self>) {
-        self.saved = Some(field);
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SAVED_FOR).await;
-            let _ = this.update(cx, |view, cx| {
-                if view.saved == Some(field) {
-                    view.saved = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
     /// The row showing a failed change, if any.
     pub fn failed(&self) -> Option<Field> {
         self.error.as_ref().map(|(field, _)| *field)
@@ -648,69 +446,6 @@ impl SettingsView {
     pub fn advanced_shown(&self) -> bool {
         self.advanced_open || self.has_problem(Field::Excludes)
     }
-
-    fn has_problem(&self, field: Field) -> bool {
-        self.error.as_ref().is_some_and(|(f, _)| *f == field)
-    }
-
-    /// The failed change's message, for the last line of `field`'s row. It
-    /// fades in, again for a different message in the same row.
-    fn problem(&self, field: Field, s: &Strings, p: &Palette) -> Option<impl IntoElement> {
-        self.error
-            .as_ref()
-            .filter(|(f, _)| *f == field)
-            .map(|(_, error)| {
-                let text = error_text(error, s);
-                let id = SharedString::from(format!("problem-{field:?}-{text}"));
-                theme::fade_in(warn_note(p, text), id)
-            })
-    }
-
-    /// A grouped row; a failed change in it tints it.
-    fn row(&self, field: Field, p: &Palette) -> Div {
-        row().when(self.has_problem(field), |d| d.bg(p.warn.opacity(0.08)))
-    }
-
-    /// A setting's name and note, and its problem if it has one.
-    fn labelled(
-        &self,
-        label: &'static str,
-        note_text: Option<&'static str>,
-        field: Field,
-        s: &Strings,
-        p: &Palette,
-    ) -> Div {
-        div()
-            .flex_1()
-            .min_w_0()
-            .child(label)
-            .children(note_text.map(|text| {
-                if self.saved == Some(field) {
-                    saved_note(s, p)
-                } else {
-                    note(p).child(text)
-                }
-            }))
-            .children(self.problem(field, s, p))
-    }
-
-    /// One setting's row: its icon, its name and note, and its control.
-    #[allow(clippy::too_many_arguments)]
-    fn setting(
-        &self,
-        field: Field,
-        icon: IconName,
-        label: &'static str,
-        note_text: Option<&'static str>,
-        control: impl IntoElement,
-        s: &Strings,
-        p: &Palette,
-    ) -> Div {
-        self.row(field, p)
-            .child(row_icon(icon, p))
-            .child(self.labelled(label, note_text, field, s, p))
-            .child(div().flex_none().child(control))
-    }
 }
 
 impl Render for SettingsView {
@@ -721,103 +456,7 @@ impl Render for SettingsView {
         // alpha, as the search window's panel does; the boxes stay opaque.
         let alpha = p.tint_alpha(self.backdrop());
         let tint = |color: Hsla| color.opacity(alpha);
-        // The accent bar slides from the section before; under reduced motion
-        // GPUI shows it in place.
-        let (from, to) = (self.prev_section as usize, self.section as usize);
-        let pitch = NAV_ITEM_H + NAV_GAP;
-        let bar = div()
-            .absolute()
-            .left_0()
-            .w(px(3.))
-            .h(px(NAV_ITEM_H * 0.35))
-            .rounded_full()
-            .bg(p.accent)
-            .with_animation(
-                ("nav-bar", from * SECTIONS.len() + to),
-                Animation::new(NAV_SLIDE).with_easing(ease_in_out),
-                move |bar, t| {
-                    let row = from as f32 + (to as f32 - from as f32) * t;
-                    bar.top(px(row * pitch + NAV_ITEM_H * 0.375))
-                },
-            );
-        let sections = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .gap(px(NAV_GAP))
-            .children(SECTIONS.iter().enumerate().map(|(ix, &section)| {
-                let selected = section == self.section;
-                // A button, so Tab and Enter reach every section.
-                Button::new(("section", ix))
-                    .cursor_pointer()
-                    .ghost()
-                    .selected(selected)
-                    .w_full()
-                    .h(px(NAV_ITEM_H))
-                    .px_0()
-                    .rounded(px(6.))
-                    .when(selected, |b| b.bg(p.selected_fill(2.)))
-                    // The content row centers a label; a filling child sits
-                    // left. The padding is the label's, so the content row
-                    // starts at the button's edge.
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .px_3()
-                            .child(
-                                Icon::new(section.icon())
-                                    .size(px(15.))
-                                    .text_color(if selected { p.accent } else { p.mute }),
-                            )
-                            .child(section.title(s)),
-                    )
-                    .accessibility_label(section.title(s))
-                    .on_click(cx.listener(move |this, _, _, cx| this.show(section, cx)))
-            }))
-            .child(bar);
-        let nav = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .w(px(210.))
-            .gap(px(NAV_GAP))
-            .p_2()
-            .bg(tint(p.side))
-            .child(
-                div()
-                    .px_3()
-                    .pb_3()
-                    .text_xs()
-                    .text_color(p.mute)
-                    .child(s.settings),
-            )
-            .child(sections)
-            // A hairline marks it as an action, not a sixth section.
-            .child(
-                div()
-                    .mt_auto()
-                    .child(div().h(px(1.)).mx_3().mb(px(6.)).bg(p.line))
-                    .child(self.search_button(s, &p, cx)),
-            )
-            .child(
-                div()
-                    .id("version")
-                    .px_3()
-                    .py_1()
-                    .text_xs()
-                    .text_color(p.mute)
-                    // A testing aid, not a control: ten quick taps run the
-                    // onboarding again, as `magi --onboarding` does.
-                    .on_click(cx.listener(|this, _, _, _| {
-                        if version_tap(&mut this.version_taps, Instant::now()) {
-                            let _ = this.events.try_send(AppEvent::Onboarding);
-                        }
-                    }))
-                    .child(concat!("Magi ", env!("CARGO_PKG_VERSION"))),
-            );
+        let nav = self.nav(s, &p, alpha, cx);
         let body = match self.section {
             Section::Folders => self.folders(&p, cx),
             Section::Searched => self.features(&p, cx),

@@ -1,7 +1,5 @@
-//! Query sanitization, BM25, `snippet()`. Implemented in M2 (see SPEC.md §7 M2).
-//!
-//! Full hybrid fusion (RRF over keyword + vector lists, §5.6) lands in M3;
-//! this module is the FTS5-only path used by `magi-cli search --mode fts`.
+//! Query sanitization, BM25, `snippet()`: the keyword list hybrid search
+//! fuses (SPEC.md §5.6), and the FTS5-only path of `magi-cli search --mode fts`.
 
 use std::path::PathBuf;
 

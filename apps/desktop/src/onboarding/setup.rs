@@ -15,7 +15,7 @@ use gpui_kit::*;
 use magi_core::config::FeaturesConfig;
 use magi_core::dto::{Install, RootStatus};
 
-use super::{OnboardingView, STEP_IN};
+use super::{OnboardingView, frame::STEP_IN};
 use crate::i18n::Strings;
 use crate::settings::{guidance_of, root_explain, root_state};
 use crate::theme::{self, Palette, Tone};

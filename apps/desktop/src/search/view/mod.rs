@@ -4,6 +4,7 @@
 
 mod footer;
 mod hints;
+mod pane;
 mod results;
 
 use std::time::{Duration, Instant};
@@ -12,7 +13,7 @@ use gpui_kit::component::input::{Copy as CopyText, Input, InputEvent, InputState
 use gpui_kit::component::{Icon, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use magi_core::dto::{ErrorCode, SearchRequest};
+use magi_core::dto::{ErrorCode, FileDetails, SearchRequest};
 use magi_core::host::Host;
 
 use super::state::{Query, SearchState};
@@ -30,7 +31,7 @@ pub const DEBOUNCE: Duration = Duration::from_millis(150);
 const SLOW: Duration = Duration::from_millis(150);
 /// How long the first failed search waits before trying again by itself.
 const AUTO_RETRY: Duration = Duration::from_millis(1500);
-/// How long "Path copied" replaces "Copy path".
+/// How long "Path copied" replaces "Copy".
 const COPIED: Duration = Duration::from_millis(1200);
 /// The footer's copy hint, whose label becomes "Path copied".
 const COPY_KEY: &str = "secondary-c";
@@ -43,6 +44,9 @@ pub const MAX_HEIGHT: Pixels = px(560.);
 /// The opening height: the input row alone.
 pub const OPEN_HEIGHT: Pixels = px(58.);
 const LIST_MAX_HEIGHT: Pixels = px(420.);
+/// The result list's width when the detail pane is on (`ui.detail_pane`);
+/// the pane takes the rest.
+const SPLIT_LIST_WIDTH: Pixels = px(340.);
 
 /// How a search window was opened.
 pub struct Opening {
@@ -80,6 +84,12 @@ pub struct SearchView {
     copies: u64,
     /// `ui.hotkey`, when this window was opened some other way than by it.
     teach: Option<String>,
+    /// `ui.detail_pane`, read when the window opens (it is recreated on
+    /// every show, so a change in Settings applies the next time).
+    detail_pane: bool,
+    /// The selected result's [`FileDetails`], by `file_id`; `None` inside
+    /// while they could not be read.
+    details: Option<(i64, Option<FileDetails>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -122,6 +132,7 @@ impl SearchView {
             }),
         ];
         input.update(cx, |input, cx| input.focus(window, cx));
+        let detail_pane = host.settings().is_ok_and(|c| c.ui.detail_pane);
         let mut view = Self {
             host,
             live,
@@ -141,6 +152,8 @@ impl SearchView {
             copies: 0,
             restored: false,
             teach: opening.teach,
+            detail_pane,
+            details: None,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -366,6 +379,30 @@ impl SearchView {
         }
     }
 
+    /// Reads the selected result's details when the selection has moved to
+    /// another file. Only with the pane on; one indexed row read, like
+    /// [`act`](Self::act)'s.
+    fn sync_details(&mut self) {
+        if !self.detail_pane {
+            return;
+        }
+        let Some(file_id) = self.state.selected().map(|r| r.file_id) else {
+            self.details = None;
+            return;
+        };
+        if self.details.is_some_and(|(id, _)| id == file_id) {
+            return;
+        }
+        let details = self
+            .host
+            .file_details(file_id)
+            .inspect_err(
+                |error| tracing::warn!(file_id, %error, "a result's details could not be read"),
+            )
+            .ok();
+        self.details = Some((file_id, details));
+    }
+
     fn select(&mut self, delta: isize, cx: &mut Context<Self>) {
         self.state.select(delta);
         if let Some(ix) = self.state.selected_index() {
@@ -397,6 +434,7 @@ impl Render for SearchView {
         if let Some(opened_at) = self.opened_at.take() {
             tracing::info!(elapsed = ?opened_at.elapsed(), "search window first frame");
         }
+        self.sync_details();
         let p = Palette::new(self.dark);
         div()
             .key_context(CONTEXT)
