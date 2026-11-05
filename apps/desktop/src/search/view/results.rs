@@ -11,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{IndexState, SearchResult};
 
-use super::{COPY_FLASH, LIST_MAX_HEIGHT, SearchView};
+use super::{COPY_FLASH, LIST_MAX_HEIGHT, SPLIT_LIST_WIDTH, SearchView};
 use crate::i18n::Lang;
 use crate::search::highlight;
 use crate::search::hint::hint;
@@ -194,6 +194,7 @@ impl SearchView {
         let selected = state.selected_index();
         let dimmed = self.dimmed();
         let reduce_motion = self.copied.is_some() && magi_core::platform::reduce_motion();
+        let split = self.detail_pane;
         let rows = results.iter().enumerate().map(|(ix, r)| {
             // The row that was copied, not the selection: it may have moved on.
             let flash = self
@@ -208,7 +209,7 @@ impl SearchView {
                 true => p.selection,
                 false => p.selection.opacity(0.),
             };
-            row(ix, r, selected == Some(ix), flash, p, lang, today)
+            row(ix, r, selected == Some(ix), flash, split, p, lang, today)
                 // Mouse move, not hover: keyboard scrolling slides rows under a
                 // still cursor and must not steal the selection.
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -238,35 +239,49 @@ impl SearchView {
                     None => row.into_any_element(),
                 })
         });
+        let list = div()
+            .id("results")
+            .role(Role::ListBox)
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .px(px(6.))
+            .pt(px(4.))
+            .pb(px(6.))
+            .map(|list| match split {
+                // A fixed height, so the window does not resize as the
+                // selection moves through results of different detail.
+                true => list.w(SPLIT_LIST_WIDTH).flex_none().h_full(),
+                false => list.max_h(LIST_MAX_HEIGHT),
+            })
+            .children(rows)
+            .map(|list| match dimmed {
+                true => list
+                    .with_animation(
+                        "dim",
+                        Animation::new(theme::FADE).with_easing(ease_out_quint()),
+                        |list, t| list.opacity(1. - 0.55 * t),
+                    )
+                    .into_any_element(),
+                false => list.into_any_element(),
+            });
+        let pane = split
+            .then(|| state.selected().map(|r| self.pane(r, p, cx)))
+            .flatten();
         Some(
             div()
                 .flex()
                 .flex_col()
                 .child(
                     div()
-                        .id("results")
-                        .role(Role::ListBox)
                         .flex()
-                        .flex_col()
-                        .max_h(LIST_MAX_HEIGHT)
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .px(px(6.))
-                        .pt(px(4.))
-                        .pb(px(6.))
-                        .border_t_1()
-                        .border_color(p.line)
-                        .children(rows)
-                        .map(|list| match dimmed {
-                            true => list
-                                .with_animation(
-                                    "dim",
-                                    Animation::new(theme::FADE).with_easing(ease_out_quint()),
-                                    |list, t| list.opacity(1. - 0.55 * t),
-                                )
-                                .into_any_element(),
-                            false => list.into_any_element(),
-                        }),
+                        // Beside the pane the two sides read as one surface,
+                        // with no line under the input or between them.
+                        .when(!split, |d| d.border_t_1().border_color(p.line))
+                        .when(split, |d| d.h(LIST_MAX_HEIGHT))
+                        .child(list)
+                        .children(pane),
                 )
                 .children(hint.map(|h| div().px(px(12.)).pb(px(10.)).child(h)))
                 .into_any_element(),
@@ -284,12 +299,16 @@ fn copy_tint(base: Hsla, accent: Hsla, k: f32) -> Hsla {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn row(
     ix: usize,
     r: &SearchResult,
     selected: bool,
     // `Some(copies)` while "Copied" shows in place of the match sources.
     copied: Option<u64>,
+    // Beside the detail pane, which shows the folder, date and sources: the
+    // row keeps its name, page and snippet.
+    compact: bool,
     p: &Palette,
     lang: Lang,
     today: NaiveDate,
@@ -305,7 +324,7 @@ fn row(
     // height as the selection moves. A snippet leaves no room for the path,
     // so the folder's name follows the file's instead, behind a folder icon
     // so it reads as where the file is, not as more of its name.
-    let folder = r.snippet.is_some().then(|| {
+    let folder = (r.snippet.is_some() && !compact).then(|| {
         let full: SharedString = folder_of(&r.path).into();
         div()
             .id(("folder", ix))
@@ -417,7 +436,7 @@ fn row(
                 .flex_none()
                 .text_xs()
                 .text_color(p.mute)
-                .child(date)
+                .when(!compact, |d| d.child(date))
                 .map(|d| match copied {
                     // Where the eyes are when copying; replays per copy.
                     Some(n) => d.child(theme::fade_in(
@@ -432,7 +451,7 @@ fn row(
                     )),
                     // On every row: why it matched is the product, not a
                     // detail of the selection.
-                    None if !sources.is_empty() => d.child(
+                    None if !sources.is_empty() && !compact => d.child(
                         div()
                             .id(("match-sources", ix))
                             .text_color(if selected { p.accent } else { p.mute })
@@ -459,7 +478,7 @@ fn icon(r: &SearchResult) -> AnyElement {
     }
 }
 
-fn folder_of(path: &str) -> String {
+pub(super) fn folder_of(path: &str) -> String {
     Path::new(path)
         .parent()
         .map(|p| p.display().to_string())
@@ -479,7 +498,7 @@ fn row_label(name: &str, folder: &str, date: &str, sources: &str) -> String {
 
 /// The last two folders of the path, `…\Documents\Contratos`: enough to
 /// tell two files of one name apart; the tooltip has the rest.
-fn short_folder(path: &str) -> String {
+pub(super) fn short_folder(path: &str) -> String {
     let Some(parent) = Path::new(path).parent() else {
         return String::new();
     };
@@ -506,7 +525,7 @@ fn folder_name(path: &str) -> String {
         .unwrap_or_default()
 }
 
-fn local_date(unix_ms: i64) -> Option<NaiveDate> {
+pub(super) fn local_date(unix_ms: i64) -> Option<NaiveDate> {
     chrono::DateTime::from_timestamp_millis(unix_ms)
         .map(|t| t.with_timezone(&chrono::Local).date_naive())
 }

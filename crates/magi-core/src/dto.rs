@@ -378,6 +378,17 @@ pub struct SearchResult {
     pub match_sources: Vec<MatchSource>,
 }
 
+/// What the search window's detail pane adds for the selected result
+/// (`file_details`), from the index only: no file is opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDetails {
+    /// Bytes, as last indexed.
+    pub size: u64,
+    /// The last page (PDF page, slide) any chunk was read from: the page
+    /// count, unless the last pages hold no text.
+    pub pages: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,

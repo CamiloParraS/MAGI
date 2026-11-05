@@ -7,7 +7,7 @@ use rusqlite::{Connection, params};
 
 use crate::db::roots::indexable_sql;
 use crate::discovery::Kind;
-use crate::dto::{FileError, FileErrorCode};
+use crate::dto::{FileDetails, FileError, FileErrorCode};
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
 use crate::extract::{ChunkSource, RawChunk};
@@ -256,6 +256,24 @@ pub fn path_of(conn: &Connection, file_id: i64) -> Result<PathBuf> {
     )
     .optional()?
     .map(PathBuf::from)
+    .ok_or(crate::error::Error::FileIdNotFound(file_id))
+}
+
+/// The selected result's size and page count, for the detail pane.
+pub fn details_of(conn: &Connection, file_id: i64) -> Result<FileDetails> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT f.size, (SELECT MAX(page) FROM chunks WHERE file_id = f.id)
+         FROM files f WHERE f.id = ?1",
+        params![file_id],
+        |row| {
+            Ok(FileDetails {
+                size: row.get::<_, i64>(0)?.max(0) as u64,
+                pages: row.get(1)?,
+            })
+        },
+    )
+    .optional()?
     .ok_or(crate::error::Error::FileIdNotFound(file_id))
 }
 
@@ -904,6 +922,48 @@ mod tests {
         assert_eq!(path_of(&conn, id).unwrap(), path);
         assert!(matches!(
             path_of(&conn, id + 1),
+            Err(Error::FileIdNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn details_have_the_size_and_the_last_page_read() {
+        let (_dir, mut conn) = open_test_db();
+        let path = PathBuf::from("/roots/a/notes.txt");
+        let rel = PathBuf::from("notes.txt");
+        let paged = |text: &str, page| RawChunk {
+            page: Some(page),
+            ..RawChunk::body(text.into())
+        };
+        let chunks = [paged("one", 1), paged("four", 4), paged("two", 2)];
+        let id = upsert(
+            &mut conn,
+            &sample_record(&path, &rel),
+            &chunks,
+            &fake_embeddings(&chunks),
+        )
+        .unwrap();
+        assert_eq!(
+            details_of(&conn, id).unwrap(),
+            FileDetails {
+                size: 11,
+                pages: Some(4)
+            }
+        );
+
+        let plain = PathBuf::from("/roots/a/plain.txt");
+        let rel = PathBuf::from("plain.txt");
+        let chunks = [RawChunk::body("no pages".into())];
+        let id = upsert(
+            &mut conn,
+            &sample_record(&plain, &rel),
+            &chunks,
+            &fake_embeddings(&chunks),
+        )
+        .unwrap();
+        assert_eq!(details_of(&conn, id).unwrap().pages, None);
+        assert!(matches!(
+            details_of(&conn, id + 1),
             Err(Error::FileIdNotFound(_))
         ));
     }

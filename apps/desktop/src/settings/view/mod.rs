@@ -143,6 +143,7 @@ pub enum Field {
     Feature(Feature),
     LaunchAtLogin,
     CopyAsFile,
+    DetailPane,
     Language,
     Results,
     Theme,

@@ -16,8 +16,8 @@ use rusqlite::Connection;
 use crate::config::{self, Config};
 use crate::db::{self, files};
 use crate::dto::{
-    FeatureStatus, FileError, IndexStatus, Install, MatchSource, PermissionIssue, RootStatus,
-    SearchRequest, SearchResponse, SearchResult, Snippet, permission_issues,
+    FeatureStatus, FileDetails, FileError, IndexStatus, Install, MatchSource, PermissionIssue,
+    RootStatus, SearchRequest, SearchResponse, SearchResult, Snippet, permission_issues,
 };
 use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
@@ -214,6 +214,12 @@ impl Host {
         } else {
             Err(crate::error::Error::FileIdNotFound(file_id))
         }
+    }
+
+    /// Size and page count of one result, for the search window's detail
+    /// pane. From the index alone, so a cloud placeholder is not downloaded.
+    pub fn file_details(&self, file_id: i64) -> Result<FileDetails> {
+        files::details_of(&lock(&self.inner.reader), file_id)
     }
 
     /// From the database, so it answers while the engine (re)starts.

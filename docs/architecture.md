@@ -37,6 +37,12 @@ Installed { size_bytes } | Failed { code }`, tagged by `state`), `Backfill
 `ChecksumMismatch`, `DiskFull`, `PermissionDenied`, `WriteFailed`). See
 "Search features" below.
 
+`Host::file_details(file_id) -> FileDetails { size, pages? }` serves the
+search window's detail pane, for the selected result only. It reads the
+index alone (`files.size`, `MAX(chunks.page)`), never the file, so a cloud
+placeholder is not downloaded. `pages` is the last page any chunk came
+from: the page count, unless the last pages hold no text.
+
 ## Database schema
 
 See SPEC.md §5.5, implemented by `crates/magi-core/src/db/migrations/`
@@ -68,6 +74,20 @@ dark, `theme::{LIGHT,DARK}_MIN_TINT`, so muted text stays readable), and `ui.onb
 is finished. The setup screen (folders, features, launch at login) saves
 `done` when confirmed; `features` and `background` are left from the earlier
 four-screen flow and, like `folders`, reopen the setup screen. Unknown enum values fail to parse.
+`ui.detail_pane` (default false; Settings › Appearance › Search window
+layout, picked from two drawings of the window) splits the search window
+into a 340 px result list and a pane for the selected result. The pane
+shows the thumbnail above the name, or with no thumbnail the file's glyph
+beside it. Under the name come the last two folders (a click reveals the
+file) and a details line (`search::detail::details_line`: type, date, pages,
+size). Chips say why it matched (`search::detail::reasons`, the sentence in
+a tooltip) and on which page; the page is a chip because a PDF's thumbnail
+is its first page. The snippet sits in a card, left out when it only
+repeats the path (`search::detail::snippet_is_the_path`), and clamped to
+the whole lines that fit (4 under a thumbnail, 10 without). Open and Show
+in folder stay pinned at the bottom with the chips right-aligned beside
+them. No line divides the input from the list and the pane, only a line between those two. A thumbnail grows into the height the text leaves (at least 144 px). Beside the pane
+the rows drop the folder, the date and the sources. The window reads the key when it opens.
 The default `exclude_globs` also skip Unity's regenerated `Library` caches,
 `*.meta` files and build output (`*.dll`, `*.pdb`, `*.obj`, `*.o`). Defaults
 apply only when the config file is first written: an existing config keeps

@@ -59,6 +59,8 @@ pub struct Strings {
     pub still_indexing: Plural,
     /// `{n}` is the page number.
     pub page: &'static str,
+    /// The detail pane's page count.
+    pub pages: Plural,
     pub open: &'static str,
     pub reveal: &'static str,
     pub copy_path: &'static str,
@@ -220,6 +222,12 @@ pub struct Strings {
     pub results_shown_note: &'static str,
     pub copy_as_file: &'static str,
     pub copy_as_file_note: &'static str,
+    /// Settings › Appearance: the search window with or without the
+    /// detail pane, each drawn as a small picture.
+    pub search_layout: &'static str,
+    pub search_layout_note: &'static str,
+    pub layout_list: &'static str,
+    pub layout_preview: &'static str,
     pub theme: &'static str,
     pub theme_light: &'static str,
     pub theme_dark: &'static str,
@@ -463,6 +471,27 @@ impl Lang {
         shown.unwrap_or_else(|_| date.to_string())
     }
 
+    /// A file's size: "900 B", "59 KB", "2.4 MB", "23 MB", "1.2 GB"
+    /// (decimal units, like the OS; one decimal only below ten).
+    pub fn file_size(self, bytes: u64) -> String {
+        // Rounded to `unit`, with one decimal while below ten of them.
+        let scaled = |unit: u64, name: &str| {
+            if bytes < 10 * unit {
+                let mut tenths = Decimal::from((bytes + unit / 20) / (unit / 10));
+                tenths.multiply_pow10(-1);
+                format!("{} {name}", self.decimal(tenths))
+            } else {
+                format!("{} {name}", self.number((bytes + unit / 2) / unit))
+            }
+        };
+        match bytes {
+            0..1_000 => format!("{} B", self.number(bytes)),
+            1_000..1_000_000 => format!("{} KB", self.number((bytes + 500) / 1_000)),
+            1_000_000..1_000_000_000 => scaled(1_000_000, "MB"),
+            _ => scaled(1_000_000_000, "GB"),
+        }
+    }
+
     /// Download sizes: "812 MB", "1.2 GB" (decimal units, like the OS).
     pub fn size(self, bytes: u64) -> String {
         if bytes >= 1_000_000_000 {
@@ -535,5 +564,15 @@ mod tests {
         assert_eq!(Lang::En.size(812_300_000), "812 MB");
         assert_eq!(Lang::En.size(1_240_000_000), "1.2 GB");
         assert_eq!(Lang::Es.size(1_240_000_000), "1,2 GB");
+    }
+
+    #[test]
+    fn file_sizes_scale_from_bytes_to_gigabytes() {
+        assert_eq!(Lang::En.file_size(900), "900 B");
+        assert_eq!(Lang::En.file_size(59_400), "59 KB");
+        assert_eq!(Lang::En.file_size(2_440_000), "2.4 MB");
+        assert_eq!(Lang::En.file_size(23_400_000), "23 MB");
+        assert_eq!(Lang::En.file_size(1_240_000_000), "1.2 GB");
+        assert_eq!(Lang::Es.file_size(2_440_000), "2,4 MB");
     }
 }
