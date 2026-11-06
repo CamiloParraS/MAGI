@@ -251,6 +251,9 @@ rss_mb=$(( $(ps -o rss= -p "$pid") / 1024 ))
 # Where the footprint goes, region by region (NFR-1 is unmet on macOS:
 # ~346 MB on 2026-11-06), kept in the artifact.
 vmmap --summary "$pid" > "$OUT/vmmap-idle.txt" 2>&1 || true
+# What the heap holds, by type: Core Text/Foundation objects (CFData,
+# CTFont...) point at fonts and AppKit; "non-object" is Rust's own.
+heap -sortBySize "$pid" > "$OUT/heap-idle.txt" 2>&1 || heap "$pid" > "$OUT/heap-idle.txt" 2>&1 || true
 footprint_mb=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/ {
   v = $3; unit = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
   if (unit == "G") n *= 1024; else if (unit == "K") n /= 1024
@@ -309,6 +312,16 @@ else
   record "M10 after a force-quit" fail "--toggle did not reach the relaunched app"
   kill "$toggler" 2>/dev/null
 fi
+stop
+
+# Diagnosis for row 11, not graded: the footprint of a launch that never
+# opens a window (`--background`, as at login). Close to the idle figure
+# means the memory is taken at startup; far below means windows leave it.
+"$BIN/magi" --background & pid=$!
+sleep 30
+bg_mb=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/ { print $3; exit }')
+echo "background launch, no window ever opened: footprint ${bg_mb:-?}" | tee "$OUT/background-footprint.txt"
+heap -sortBySize "$pid" > "$OUT/heap-background.txt" 2>&1 || true
 stop
 
 {
