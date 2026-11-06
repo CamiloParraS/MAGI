@@ -1,0 +1,35 @@
+# cargo-about: Rust crate licences for THIRD_PARTY_LICENSES.md (`just licenses`).
+# Accepted: permissive licences, plus MPL-2.0 (used unmodified). Where a crate
+# offers a choice (e.g. "Apache-2.0 OR GPL-2.0-only"), cargo-about picks an
+# accepted one, so no copyleft licence applies to the shipped app.
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+    "bzip2-1.0.6",
+    "MPL-2.0",
+]
+# What ships: the three release targets, no dev or build-only crates.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Our own workspace crates (publish = false) are not third-party.
+[private]
+ignore = true

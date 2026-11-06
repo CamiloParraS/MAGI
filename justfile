@@ -54,6 +54,10 @@ eval-random names="random_names":
 bench:
     cargo run -p xtask --release -- bench-corpus
 
+# Regenerate THIRD_PARTY_LICENSES.md (needs: cargo install --locked cargo-about --features cli)
+licenses:
+    cargo run -p xtask -- licenses
+
 # Build the desktop app in release mode (installers: SPEC.md §9 Q9)
 build:
     cargo build -p magi-desktop --release
