@@ -72,7 +72,12 @@ jobs:
         with:
           components: clippy
 
+      # One cache per image: the job id and runner OS are the same for both,
+      # and a bookworm build that restored trixie's target dir failed with
+      # "can't find crate" for crates it had cached (2026-11-06).
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.image }}
 
       - name: Fetch PDFium binaries
         run: cargo run -p xtask -- fetch-pdfium

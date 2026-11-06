@@ -66,8 +66,16 @@ root_status() { "$BIN/magi-cli" roots list | awk -F'\t' -v p="$1" '$2 == p || $2
 status_is() { [ "$(root_status "$1")" = "$2" ]; }
 finds() { "$BIN/magi-cli" search "$1" | grep -q -- "$2"; }
 finds_nothing() { "$BIN/magi-cli" search "$1" | grep -q "^no results"; }
-front_pid() {
-  osascript -e 'tell application "System Events" to get unix id of first process whose frontmost is true' 2>/dev/null
+# Owner of the topmost normal window on screen. Not System Events'
+# "frontmost process": a menu-bar-only (Accessory) app never becomes that,
+# whatever window it shows (the menu bar keeps the previous app's).
+# 1 = kCGWindowListOptionOnScreenOnly, 16 = ExcludeDesktopElements.
+top_window_pid() {
+  osascript -l JavaScript -e '
+    ObjC.import("CoreGraphics");
+    const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1 | 16, 0)));
+    const top = list.find(w => w.kCGWindowLayer === 0);
+    top ? String(top.kCGWindowOwnerPID) : "";' 2>/dev/null
 }
 
 # ---------------------------------------------------------------- folders
@@ -152,16 +160,16 @@ else
   fi
 fi
 
-# M3: Cmd+, opens settings, and it must be the front app.
+# M3: Cmd+, opens settings, and its window must be on top of the others.
 cliclick kd:cmd t:, ku:cmd; sleep 3
 shot "04-settings"
-front=$(front_pid)
+front=$(top_window_pid)
 if [ -z "$front" ]; then
-  record "M3 settings comes to the front" unknown "no UI scripting on this runner"
+  record "M3 settings comes to the front" unknown "could not read the window list"
 elif [ "$front" = "$pid" ]; then
-  record "M3 settings comes to the front" pass "Magi is the frontmost process"
+  record "M3 settings comes to the front" pass "Magi owns the topmost window"
 else
-  record "M3 settings comes to the front" fail "frontmost pid $front, Magi is $pid"
+  record "M3 settings comes to the front" fail "topmost window belongs to pid $front ($(ps -o comm= -p "$front")), Magi is $pid"
 fi
 
 # --------------------------------------------------------- folders (M5-M16)
@@ -215,11 +223,21 @@ fi
 # Row 11: idle memory, all windows closed.
 osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid) to keystroke \"w\" using command down" 2>/dev/null
 cliclick kp:esc; sleep 20
+shot "09-idle-no-windows"
+# Graded on the physical footprint, Activity Monitor's "Memory" and the
+# closest to Windows' private working set. RSS also counts shared
+# frameworks and GPU-mapped memory, so it is printed but not graded.
 rss_mb=$(( $(ps -o rss= -p "$pid") / 1024 ))
-if [ "$rss_mb" -le 150 ]; then
-  record "row 11 idle memory" pass "$rss_mb MB RSS (<= 150)"
+footprint_mb=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/ {
+  v = $3; unit = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
+  if (unit == "G") n *= 1024; else if (unit == "K") n /= 1024
+  printf "%d", n; exit }')
+if [ -z "$footprint_mb" ]; then
+  record "row 11 idle memory" unknown "vmmap gave no footprint; RSS $rss_mb MB"
+elif [ "$footprint_mb" -le 150 ]; then
+  record "row 11 idle memory" pass "footprint $footprint_mb MB (<= 150); RSS $rss_mb MB"
 else
-  record "row 11 idle memory" fail "$rss_mb MB RSS (> 150)"
+  record "row 11 idle memory" fail "footprint $footprint_mb MB (> 150); RSS $rss_mb MB"
 fi
 
 # -------------------------------------------- shortcut and single instance
