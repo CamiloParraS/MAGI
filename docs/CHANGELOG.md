@@ -20,6 +20,8 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
   clearer setup footer.
 - **Search quality:** a strong image match now reaches the top 10 more
   often; a result is tagged "File name" only when the words matched its name.
+- macOS: an app or photo library inside an indexed folder is found by its
+  name, instead of waiting in the queue and then showing as unreadable.
 - `THIRD_PARTY_LICENSES.md` lists every bundled library and model licence.
 
 ### 0.1.1 (Linux fixes)

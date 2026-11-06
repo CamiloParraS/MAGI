@@ -77,6 +77,13 @@ top_window_pid() {
     const top = list.find(w => w.kCGWindowLayer === 0);
     top ? String(top.kCGWindowOwnerPID) : "";' 2>/dev/null
 }
+# How many normal windows Magi has on screen.
+magi_windows() {
+  osascript -l JavaScript -e "
+    ObjC.import('CoreGraphics');
+    const list = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1 | 16, 0)));
+    String(list.filter(w => w.kCGWindowLayer === 0 && w.kCGWindowOwnerPID === $pid).length);" 2>/dev/null
+}
 
 # ---------------------------------------------------------------- folders
 # Prepared before the first launch, so the app meets them as a user would.
@@ -205,10 +212,14 @@ else
 fi
 
 if wait_for 60 finds ledger ledger.txt; then
-  if finds_nothing zebrabundle; then
-    record "M14 .app is one item" pass "a file inside Thing.app is not indexed"
-  else
+  # One item: found by its name, its insides never read. (The name used to
+  # stay unfound: the bundle sat in the queue retrying a read of a folder.)
+  if ! finds_nothing zebrabundle; then
     record "M14 .app is one item" fail "a file inside Thing.app was indexed"
+  elif wait_for 30 finds Thing Thing.app; then
+    record "M14 .app is one item" pass "found by name, its contents not indexed"
+  else
+    record "M14 .app is one item" fail "Thing.app is not found by name (still queued?)"
   fi
   # M20: search the precomposed spelling for a decomposed file name.
   if "$BIN/magi-cli" search "canción" | grep -q descompuesta; then
@@ -220,10 +231,19 @@ else
   record "M14 / M20" fail "the plain folder was never indexed"
 fi
 
-# Row 11: idle memory, all windows closed.
-osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid) to keystroke \"w\" using command down" 2>/dev/null
-cliclick kp:esc; sleep 20
+# Row 11: idle memory, all windows closed. Keystrokes go to the frontmost
+# app (Finder, for a menu-bar-only app), so press each window's close button.
+cliclick kp:esc; sleep 1
+osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
+  repeat with w in windows
+    try
+      click (first button of w whose subrole is \"AXCloseButton\")
+    end try
+  end repeat
+end tell" 2>/dev/null
+sleep 20
 shot "09-idle-no-windows"
+open_windows=$(magi_windows)
 # Graded on the physical footprint, Activity Monitor's "Memory" and the
 # closest to Windows' private working set. RSS also counts shared
 # frameworks and GPU-mapped memory, so it is printed but not graded.
@@ -232,7 +252,9 @@ footprint_mb=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/ 
   v = $3; unit = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
   if (unit == "G") n *= 1024; else if (unit == "K") n /= 1024
   printf "%d", n; exit }')
-if [ -z "$footprint_mb" ]; then
+if [ "${open_windows:-0}" -gt 0 ]; then
+  record "row 11 idle memory" unknown "$open_windows Magi window(s) still open, not idle: footprint ${footprint_mb:-?} MB, RSS $rss_mb MB"
+elif [ -z "$footprint_mb" ]; then
   record "row 11 idle memory" unknown "vmmap gave no footprint; RSS $rss_mb MB"
 elif [ "$footprint_mb" -le 150 ]; then
   record "row 11 idle memory" pass "footprint $footprint_mb MB (<= 150); RSS $rss_mb MB"

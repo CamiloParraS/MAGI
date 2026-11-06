@@ -145,6 +145,53 @@ fn a_cloud_only_file_is_indexed_by_name_and_never_read() {
     assert_eq!(hits("report"), 1, "the name is still searchable");
 }
 
+/// A package bundle (`.app`, `.photoslibrary`) is one item: settled by name
+/// at once, never read. Reading the folder used to fail with EISDIR, so it
+/// waited in the queue through every retry and then showed as unreadable
+/// (macOS checks workflow, 2026-11-06: "Indexing, 1 file to go").
+#[test]
+fn a_package_bundle_is_one_item_found_by_name() {
+    let (_db_dir, root_dir, mut conn, root_id) = open_test_db();
+    let root_path = crate::paths::canonicalize(root_dir.path()).unwrap();
+    let bundle = root_path.join("Thing.app");
+    fs::create_dir_all(bundle.join("Contents")).unwrap();
+    fs::write(bundle.join("Contents/inner.txt"), "zebrabundle").unwrap();
+    let entry = discovery::stat(&bundle).unwrap();
+    assert!(entry.is_dir);
+    files::insert_pending(
+        &conn,
+        root_id,
+        &bundle,
+        Path::new("Thing.app"),
+        entry.size,
+        entry.mtime_ns,
+        1,
+    )
+    .unwrap();
+    let job = Job {
+        root_id,
+        root_path: root_path.clone(),
+        stored: files::get_stored(&conn, &bundle).unwrap().unwrap(),
+        entry,
+    };
+
+    let step = index_file(
+        &IndexContext::new(Arc::new(FakeEmbedder)),
+        &default_options(),
+        job,
+    )
+    .unwrap();
+    let status = lifecycle::apply_alone(&mut conn, step).unwrap();
+
+    assert!(matches!(status, Some(Status::Skipped)));
+    let row = db::files::get_by_path(&conn, &bundle).unwrap().unwrap();
+    assert_eq!(row.state, "skipped");
+    assert_eq!(row.skip_reason.as_deref(), Some("bundle"));
+    let hits = |q| crate::search::fts::search_fts(&conn, q, 10).unwrap().len();
+    assert_eq!(hits("zebrabundle"), 0, "its contents are not read");
+    assert_eq!(hits("Thing"), 1, "the bundle is found by name");
+}
+
 /// Extracts one new file into a job for the embed stage.
 fn extracted(conn: &Connection, root_id: i64, root_path: &Path, name: &str) -> (Job, Fresh) {
     let path = root_path.join(name);

@@ -183,6 +183,11 @@ pub(super) fn plan_entry(
             "cloud_only",
         )));
     }
+    // A package bundle (`.app`, `.photoslibrary`): the walk yields the folder
+    // as one item, so it is found by name. There is nothing to read.
+    if entry.is_dir {
+        return Plan::Done(Box::new(skipped(Kind::Other, "bundle")));
+    }
     if entry.size > max_size_bytes {
         return Plan::Done(Box::new(skipped(
             discovery::classify(path, &[]),
