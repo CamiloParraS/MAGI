@@ -39,7 +39,7 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 10 | Results < 400 ms after typing, warm | `search results after typing stopped elapsed=` | ✅ 2026-09-30, 154–214 ms | | |
 | 11 | Idle RSS ≤ 150 MB | Window closed, models unloaded; Task Manager › Details › Memory (private working set). | ✅ ~24 MB | | |
 | 12 | Software rendering | See "No GPU" below. | not run | | |
-| 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change both ways 2026-10-11 (back to see-through ~3 s after refocus) | | |
+| 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change both ways 2026-10-11 (back to see-through ~3 s after refocus) | ⚠️ 2026-10-13 (v0.1.0 photos): dark search and settings see-through over the wallpaper; light settings looks solid near "Más transparente", check | |
 | 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's finish screen. | ⚠️ 2026-10-11 settings: recorded, works at once, Esc cancels; onboarding not run | | |
 | 15 | Hotkey conflict | See "Hotkey conflicts" below. | ⚠️ 2026-10-10 hotkey layer only (`hotkey::Hotkey::set`, real `RegisterHotKey`): `Win+E` and `Win+R` refused, a second holder of `Ctrl+Alt+K` refused, a refused change keeps the old one, freed once the holder is dropped, `Alt+Space` reserved. Not seen: the settings warning box, AutoHotkey, the startup case | | |
 | 16 | Real feature download | Isolated instance without `MAGI_FAKE_EMBEDDER`; see "Downloads" below. | ⚠️ 2026-10-11 OCR (13 MB): Installed, Remove download empties models/. Not run: 135 MB model, network cut | | |
@@ -48,10 +48,90 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 19 | Unreadable list live | Settings › Index open; drop a broken PDF (e.g. `echo x > bad.pdf`) into a root: it appears without reopening; Retry all updates it. | ✅ 2026-10-11 | | |
 | 20 | Light-mode see-through | Light theme, blurred background: every step of the slider changes the window, from "More solid" (opaque) to "More transparent". | ✅ 2026-10-11 (brightness falls monotonically, 245.7 to ~215) | | |
 | 21 | Dark-mode switch contrast | Dark theme: an off switch is clearly visible on its box. | ✅ 2026-10-11 (track ratio ~1.7:1) | | |
-| 22 | Spanish and English | `ui.language = es`, then `en`, from settings: every window relabels live; tray too. | ✅ es 2026-09-30 | | |
+| 22 | Spanish and English | `ui.language = es`, then `en`, from settings: every window relabels live; tray too. | ✅ es 2026-09-30 | ⚠️ 2026-10-13 es (follows the system); en not seen | |
 | 23 | Startup failure | Isolated instance with a folder where the database should be (`mkdir $MAGI_DATA_DIR/magi.db`): "Magi couldn't start" with the error; Show log reveals `magi.log`; Quit and closing both exit. | ✅ 2026-10-05; Show log 2026-10-11 | | |
 | 24 | Onboarding setup | `--onboarding`: drag a folder from Explorer/Finder onto the drop zone, it is added (a dropped file is not); every icon draws; ⓘ opens what a feature does; the button reads "Download {size} and start", or "Start" with every feature off; light and dark, English and Spanish: no name cut off, no scrolling in the features column. | ⚠️ 2026-10-11 all but dropping a folder | | |
 | 25 | Detail pane | Settings › Appearance › Search window layout › List and preview (the drawing is framed in the accent), then reopen search: the list is on the left, the pane on the right. Arrow keys and the mouse move the pane with the selection, and the window keeps its height. A PDF shows a page chip and an image its thumbnail; a text file shows a small glyph beside its name, with no empty box. A match on the file name shows no snippet card. Open and Show in folder stay in view. The details line has type, date, pages and size. Clicking the folder and Show in folder reveal the file; Open opens it. Light and dark, English and Spanish: nothing is cut off. Off again: the old single list. | | | |
+
+## macOS session (M6 column + M7)
+
+**On CI first:** the "macOS checks" workflow (`.github/workflows/macos-checks.yml`,
+run by hand) checks M2, M3, M5, M6 (with a folder made unreadable, not the
+real consent prompt), M10, M11, M14, M16 (a disk image ejected and
+re-mounted), M20, M21 and rows 2, 9, 10, 11 on a hosted Mac, with a
+pass/fail table in the run summary and screenshots. A hosted Mac has no
+iCloud account, network share, battery or real blur, so M12, M13, M15 and
+M19 and the real consent prompt (M4, M7) stay with a borrowed Mac.
+
+For a borrowed Mac: one sitting, in this order. Use the `.dmg` from the
+`release.yml` draft release (a signed bundle matters: macOS ties permission
+grants to the app's signature, so a terminal-launched dev build gets its
+prompts attributed to the terminal). Record each result as ✅ / ❌ / ⚠️ with
+the date in `docs/progress.md`, plus a screenshot where it says so.
+
+**Install and first run**
+
+- M1. Open the `.dmg`, drag Magi to Applications, open it. Note any
+  Gatekeeper warning (ad-hoc signed, not notarized: right-click › Open is
+  expected).
+- M2. ✅ 2026-10-13 no Dock icon (Cmd-Tab and the menu-bar icon not seen;
+  a menu-bar manager may have hidden it). No Dock icon and not in Cmd-Tab; the menu-bar icon is there.
+  Screenshot the menu bar, light and dark (the icon is full colour; judge
+  whether it looks out of place).
+- M3. Onboarding and Settings come to the front when opened from the menu
+  bar, not behind the browser.
+
+**Permissions (Files and Folders)**
+
+- M4. Add `~/Documents`: the system prompt shows Magi's reason text
+  (screenshot it). Click **Don't Allow**.
+- M5. Settings › Folders: Documents says which permission is missing and
+  shows "Open System Settings"; the button lands on Privacy & Security ›
+  Files and Folders (screenshot).
+- M6. Grant access there. Within ~60 s Documents starts indexing with no
+  restart or rescan.
+- M7. Add a folder outside the protected set that is denied (e.g. another
+  user's folder, or `~/Library/Mail`): the guidance says Full Disk Access
+  and that a restart may be needed; the button opens that page.
+- M8. Run the onboarding permission check (`--onboarding`, or a fresh
+  account): the denied folder is listed with the same guidance.
+- M9. Switch the language to Spanish: the guidance relabels.
+
+**Background behaviour**
+
+- M10. Force-quit Magi (Activity Monitor), relaunch: it starts, and
+  `magi --toggle` (from the bundle: `/Applications/Magi.app/Contents/MacOS/magi --toggle`)
+  opens search. This is the stale-socket fix.
+- M11. Shift+Cmd+Space opens and closes search (table row 1).
+- M12. iCloud Drive with "Optimize Mac Storage" and a file evicted
+  (cloud icon): after indexing it is still a cloud file (not downloaded)
+  and is found by its name.
+- M13. A folder on an SMB share: Settings says it is checked periodically,
+  not watched; a file added on the share appears within a few minutes.
+- M14. A `.app` or `.photoslibrary` inside an indexed folder is one item,
+  not its contents.
+- M15. ⚠️ 2026-10-13 status read "En pausa: con batería"; timing and
+  resume on AC not seen. On battery with "Pause on battery" on: indexing pauses within 30 s,
+  resumes on AC; the status says "Paused: on battery".
+- M16. Unplug a USB drive that is a root: it shows "missing", its results
+  go; replug: it resumes with no re-embedding.
+- M17. Ten idle minutes with windows closed: memory (Activity Monitor ›
+  Memory) back near the idle footprint (table row 11).
+- M18. Type a search while a big folder indexes: results still come
+  quickly (row 10's log line).
+
+**Look and feel**
+
+- M19. Search and settings over a busy wallpaper, light and dark: the
+  blur is real (see-through), the slider changes it; with System Settings ›
+  Accessibility › Display › Reduce transparency on, both go solid (row 13).
+- M20. Type `canción` with the dead-key accent; also search a file whose
+  name has an accent (macOS may store it decomposed).
+- M21. Launch at login on: a "background item added" notice appears once;
+  after logging out and in, Magi runs with no window.
+
+Then the M6 table above, macOS column: rows 1–7, 9–11, 13–25 (8 is
+Linux-only; use Cmd where the table says Ctrl).
 
 ## Hotkey conflicts
 
