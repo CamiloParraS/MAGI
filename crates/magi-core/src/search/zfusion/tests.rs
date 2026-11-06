@@ -191,3 +191,16 @@ fn with_words_gated_a_minority_of_the_words_adds_nothing() {
     assert!((ranked[&1] - 2.0).abs() < 1e-9);
     assert!((ranked[&2] - (2.0 + 2.0 * 0.5f64.powf(1.5))).abs() < 1e-9);
 }
+
+#[test]
+fn a_reference_sets_the_scale_and_the_scores_are_placed_on_it() {
+    let reference = text(&[0.4, 0.6].repeat(10));
+    // Mean 0.5, deviation 0.1: 0.7 sits two deviations up, whatever the
+    // scores themselves look like.
+    let z = meaning_z_against(&text(&[0.7, 0.5]), &reference);
+    assert!((z[0] - 2.0).abs() < 1e-9 && z[1].abs() < 1e-9, "{z:?}");
+    // Against itself it is `meaning_z`.
+    let scores = text(&[0.1, 0.2, 0.9]);
+    assert_eq!(meaning_z_against(&scores, &scores), meaning_z(&scores));
+    assert_eq!(meaning_z_against(&scores, &[]), vec![0.0; 3]);
+}

@@ -349,6 +349,14 @@ In parallel, SigLIP's ~800 MB session build lands on top of e5 instead of after
 warm query. `QueryVectors::embed` runs them in order and a unit test pins it.
 What was kept: the Host embeds before taking the shared reader lock.
 
+## 100k-chunk latency of the #11 / 0003 candidates, 2026-11-05
+
+`just bench`, same index and 200 warm queries per row, Windows dev machine:
+RRF warm p95 241 ms (cold 1.34 s, both NFRs pass). RRF plus the strength
+label's sample scale 367 ms; z reranker 381 ms (scale from the nearest
+4,096 rows), 504 ms (scale from a 500-row sample: `vec0` walks every vector
+to read the sample). None shipped; see `docs/eval.md`, 2026-11-05 "Precision".
+
 ## Reproducing
 
 ```

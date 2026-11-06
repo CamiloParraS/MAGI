@@ -3,6 +3,8 @@
 
 pub mod fts;
 pub mod fuse;
+pub mod rerank;
+pub mod strength;
 pub mod vector;
 pub mod zfusion;
 
@@ -50,6 +52,10 @@ pub struct SearchHit {
     pub match_sources: Vec<MatchSource>,
     /// Page of the best chunk (PDF page, slide), when it has one.
     pub page: Option<i64>,
+    /// Cosine from the text-vector list, when it found the file.
+    pub text_similarity: Option<f64>,
+    /// Cosine from the visual list, when it found the file.
+    pub image_similarity: Option<f64>,
 }
 
 /// One file's best-matching chunk from a single ranked source. Every ranked
@@ -69,6 +75,9 @@ pub struct FileHit {
     /// The best chunk's source; `None` for a visual match, which has no
     /// chunk.
     pub source: Option<ChunkSource>,
+    /// Cosine of the query against the best chunk (text list) or the image
+    /// (visual list); `None` for a keyword hit.
+    pub similarity: Option<f64>,
 }
 
 /// How many chunk rows to read before per-file dedup: one file can
@@ -215,6 +224,8 @@ pub(crate) fn boost_and_assemble(
                 snippet: hit.snippet.clone(),
                 match_sources,
                 page: hit.page,
+                text_similarity: vector.and_then(|h| h.similarity),
+                image_similarity: image.and_then(|h| h.similarity),
             })
         })
         .collect();

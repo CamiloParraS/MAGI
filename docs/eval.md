@@ -796,7 +796,7 @@ over the top 30 would reach six of the seven. Prefixes (`query: ` /
 `passage: `), mean pooling, L2 normalisation and best-chunk-per-file in
 `embed/e5.rs` and `search/vector.rs` were checked and are correct, so the
 limit is `multilingual-e5-small` int8 itself. Ticket:
-`docs/issues/0001-cross-lingual-ranker.md`.
+`docs/archive/0001-cross-lingual-ranker.md`.
 
 **Image matches were buried: `IMAGE_WEIGHT` 0.8 -> 1.1.** Five image misses
 had the right file at rank 1-2 of the visual list. The visual list already
@@ -938,7 +938,7 @@ The gain on the other buckets is real (z ranks a clear single-list winner
 first where RRF credits files for appearing in two lists), so a hybrid of
 the two (z-score for the order, RRF's deep list for candidates) is the
 version worth trying next, after a stronger cross-lingual embedder
-(`docs/issues/0001-cross-lingual-ranker.md`), which would lift exactly the
+(`docs/archive/0001-cross-lingual-ranker.md`), which would lift exactly the
 cosines the gate cuts.
 
 **Nonsense queries.** Five made-up queries (`zxqv blorft`, `qwpoeiruty`,
@@ -1026,6 +1026,188 @@ architecture.md "Embeddings and hybrid search", and the latency benchmark.
 the nonsense queries (RRF / gate 2.0 / gate 2.0 + floor). The z-score code is
 kept for that comparison and for the follow-up; it is not reachable from the
 app.
+
+## 2026-11-05: Precision, fresh queries, and the z-score reranker confirmed or not
+
+`docs/issues/0002` (precision measures), GitHub #11 (confirm the reranker)
+and the calibration step of `docs/issues/0003` (the "nothing closely
+related" label). Release build, real models, fresh DB, Windows.
+
+**What changed in the query files.** 31 fresh positive queries (`"fresh":
+true`, written after the #9 decision: 6 `en`, 5 `es`, 7 `cross`, 3 `kw`, 2
+`img`, 8 `img2`), and an 18-query `neg` bucket (`"expected": []`): the five
+old nonsense strings plus 13 plausible-but-absent ones in English and
+Spanish (`tax return 2019`, `fotos de la boda`, `un barco en el puerto`, ...),
+each checked against the corpus, `local/` and the OCR golden text.
+`declaración de la renta` is a deliberate trap ("renta" is in the lease, as
+rent). `magi-cli eval` now runs RRF and the #11 reranker only (the other
+z-score variants are recorded above), skips `neg` in recall, reports fresh
+queries again as `fresh` / `f-<bucket>`, and sweeps the strong/weak label.
+
+### The new baseline (hybrid r@5 / r@10 / MRR)
+
+| corpus (positives) | RRF, all | RRF, fresh (31) | reranker, all | reranker, fresh |
+| --- | --: | --: | --: | --: |
+| named (195) | 0.974 / 0.985 / 0.897 | 0.935 / 0.968 / **0.860** | 0.974 / 0.985 / 0.921 | 0.935 / 0.968 / **0.844** |
+| random names (194) | 0.907 / 0.923 / 0.854 | 0.839 / 0.871 / **0.795** | 0.907 / 0.923 / 0.877 | 0.839 / 0.871 / **0.757** |
+| realistic (194) | 0.933 / 0.933 / 0.869 | 0.903 / 0.903 / **0.829** | 0.933 / 0.933 / 0.884 | 0.903 / 0.903 / **0.797** |
+
+`cross` MRR, RRF -> reranker, all 27 queries: named 0.673 -> 0.684, random
+0.465 -> 0.422, realistic 0.521 -> 0.502. Fresh `cross` alone: 0.690 ->
+0.690, 0.643 -> 0.476, 0.743 -> 0.671. These numbers are not comparable
+with the 164-query rows above: the set grew.
+
+New RRF misses on fresh queries (named): `votar entre dos novelas de
+misterio` (the English book club notes are past rank 10) and
+`two-wheeled vehicles` (rank 8).
+
+### GitHub #11: the reranker is rejected
+
+1. **Fresh queries.** Recall equals RRF's, but MRR on the fresh queries is
+   lower on all three corpora (-0.016, -0.038, -0.032), with `cross` and
+   `es` the buckets that fall. With the fresh `cross` queries in, `cross`
+   MRR over the whole set regresses on two of three corpora. The old gain
+   (+0.015 to +0.024 overall MRR here) was the queries it was tuned on.
+2. **Latency** (`just bench`, 100k synthetic chunks, text only, 200 warm
+   queries, same index and queries for every row):
+
+   | path | warm p50 | warm p95 |
+   | --- | --: | --: |
+   | RRF (shipped) | 230 ms | **241 ms** |
+   | RRF + strength label (sample scale) | 352 ms | 367 ms |
+   | z reranker, scale from the nearest 4,096 rows | 366 ms | 381 ms |
+   | z reranker, scale from a 500-row sample | 489 ms | 504 ms |
+
+   Past 4,096 chunks the nearest rows are only the top of the
+   distribution, so a correct scale needs the whole table. The sample
+   (`ZFusionParams::sample_scale`, every n-th row) was meant to be the
+   cheap way. It gives the same eval numbers as the nearest-4,096 scale
+   (the corpora are under 500 vectors, so both are the whole table), but
+   `vec0` walks every vector to read it, so it adds ~125 ms. Every variant
+   is over NFR-2's 300 ms.
+
+Both conditions fail: RRF stays, #11 is closed as rejected. The code stays
+behind `magi-cli eval` for comparison.
+
+### Precision: the label of docs/issues/0003 has no threshold that works
+
+Each RRF result list (top 10) is labelled: keyword hits are strong; a
+meaning-only hit is strong when its cosine clears a threshold. Three
+scales were swept (`magi-cli eval` prints the full grid):
+
+- **sample:** z against a fixed ~500-row sample of each table;
+- **fetched:** z against the 100 chunks / 50 images RRF already fetches;
+- **cosine:** the raw cosine, no scale.
+
+"neg" = `neg` queries whose whole list is weak ("Nothing closely related",
+the point of the label); "false-weak" = positive queries whose expected file
+is in the top 10 but labelled weak (the cost: a found file behind a fold).
+Text / image thresholds, named | random | realistic:
+
+| scale | thresholds | neg labelled (of 18) | false-weak | fresh false-weak |
+| --- | --- | --- | --- | --- |
+| sample | z 1.0 / 3.0 | 0 \| 0 \| 0 | 0/192 \| 1/179 \| 0/181 | 0 \| 0 \| 0 |
+| sample | z 2.0 / 3.0 | 2 \| 11 \| 6 | 5 \| 12 \| 9 | 2 \| 5 \| 3 |
+| sample | z 2.5 / 3.0 | 12 \| 17 \| 16 | 18 \| 22 \| 16 | 6 \| 8 \| 7 |
+| fetched | z 1.5 / 3.0 | 6 \| 13 \| 11 | 10 \| 16 \| 16 | 2 \| 5 \| 4 |
+| fetched | z 2.0 / 3.0 | 11 \| 17 \| 17 | 18 \| 23 \| 22 | 5 \| 6 \| 7 |
+| cosine | 0.80 / 0.10 | 0 \| 0 \| 0 | 0 \| 0 \| 0 | 0 \| 0 \| 0 |
+| cosine | 0.82 / 0.10 | 4 \| 4 \| 4 | 7 \| 5 \| 5 | 1 \| 1 \| 1 |
+| cosine | 0.84 / 0.10 | 8 \| 8 \| 10 | 17 \| 14 \| 17 | 7 \| 6 \| 7 |
+
+0003's rule was "false-weak near zero, then as many `neg` labelled as
+possible". On every scale the settings with false-weak at zero label no
+`neg` query at all, and the first setting that labels a few already folds
+5-12 right answers (1 in 20 to 1 in 6 of the fresh ones). For reference, the
+0.5x-top fold of #9 folds 6 / 3 / 4 right answers under RRF.
+
+**Why.** The best of N unrelated chunks lands near z = sqrt(2 ln N),
+about 2.9 for these ~300-chunk corpora, and that is where the nonsense
+queries' best hits are (sample scale, named: 1.9 to 3.2; `declaración de
+la renta` is highest at 3.24, from the lease). Weak true matches, mostly
+`cross` and paraphrases, sit in the same range. The null maximum also
+grows with the index, so a z threshold tuned here would drift on a user's
+larger index. Raw cosine has the same overlap.
+
+**Decision.** The label is not shipped. `search::strength` stays as the
+measuring code (not on the product path), and 0003 waits for a signal that
+separates. The candidate is a cross-encoder score from the reranker spike
+of `docs/issues/0001`, which scores query and document together instead of
+reading a distance. The eval prints the same sweep for any new signal.
+
+## 2026-11-05: cross-encoder spike (docs/issues/0001)
+
+`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`, qint8 ONNX, approved by the
+owner and hash-checked locally (ADR-0013 has the files). Run by
+`magi-cli eval` with `MAGI_RERANKER_DIR` set (`eval/rerank.rs`); the model
+reads the file name plus its text chunks, 256 tokens per pair unless
+`MAGI_SPIKE_TOKENS` says otherwise. Every variant is graded on the same RRF
+lists, top 10. Release build, Windows dev machine.
+
+**Everything in the top 30/75 reranked.** `cross` MRR, RRF -> rerank top 30
+-> top 75: named 0.673 -> 1.000 -> 1.000, random 0.465 -> 0.778 -> 0.926,
+realistic 0.521 -> 0.938 -> 0.963. But a text model cannot judge photos:
+`img2` MRR 0.929 / 0.895 / 0.903 -> 0.368 / 0.124 / 0.133 (top 30), and
+overall MRR falls to 0.707 / 0.559 / 0.576. Blending with RRF only halves
+the loss. Scoring time p50 / p95: 2.4-2.5 / 2.7-3.0 s for 30 results,
+6.0-6.4 / 6.6-7.4 s for 75.
+
+**Text results only** (`MAGI_SPIKE_TEXT_ONLY`: images keep their RRF slots,
+the text hits of the top 30 are scored and re-sorted among the slots they
+held). MRR, RRF / pure rerank / blend (RRF of the two ranks), 256 tokens:
+
+| bucket | named | random names | realistic |
+| --- | --- | --- | --- |
+| overall | 0.897 / 0.901 / **0.911** | 0.854 / 0.874 / **0.867** | 0.869 / 0.883 / **0.885** |
+| cross | 0.673 / 0.815 / 0.753 | 0.465 / 0.674 / 0.537 | 0.521 / 0.745 / 0.615 |
+| en | 0.892 / 0.912 / 0.913 | 0.865 / 0.875 / 0.885 | 0.904 / 0.942 / 0.923 |
+| es | 0.940 / **0.833** / 0.940 | 0.960 / **0.880** / 0.960 | 0.960 / **0.830** / 0.960 |
+| kw | 0.962 / **0.897** / 0.962 | 0.962 / 0.962 / 0.962 | 0.962 / **0.885** / 0.962 |
+| fresh | 0.860 / 0.855 / 0.890 | 0.795 / 0.827 / 0.822 | 0.829 / **0.806** / 0.871 |
+| img, img2, ocr, qr, skip | unchanged | unchanged | unchanged |
+
+Recall@5, RRF -> blend: 0.974 -> 0.985, 0.907 -> 0.928, 0.933 -> 0.943.
+The pure rerank lifts `cross` most but puts the English twin above the
+Spanish answer (`es`) and drops some `kw` answers. **The blend is the only
+variant where no bucket regresses on any corpus**, fresh queries included.
+At 128 tokens the blend is unchanged on named but `en` drops slightly on
+the other two (0.885 -> 0.856, 0.923 -> 0.894), so 256 stays.
+
+**Cost of the text-only rerank** (top 30, warm, p50 / p95; text pairs per
+query p50 in brackets): 256 tokens 617 / 1,633 ms (10), 135 / 909 ms (5),
+214 / 971 ms (6); 128 tokens 155 / 457, 56 / 225, 74 / 312 ms. Over the ~60
+ms NFR-2 leaves, so it has to re-sort after RRF's list is shown.
+
+**Peak memory** (NFR-12 method, `docs/benchmarks.md`: cold `magi-cli search
+--mode hybrid` on a 24-file index, `GetProcessMemoryInfo` sampled every 10
+ms, 5 queries): no reranker 845-850 MB; reranker built while SigLIP is
+loaded 997-998 MB (fails the 900 MB); SigLIP unloaded first
+(`MAGI_SPIKE_UNLOAD_SIGLIP`) 842-843 MB, at 256 and 128 tokens alike.
+
+**The label of docs/issues/0003, on the logit.** Text hits only (images are
+not judged): strong if keyword search found it or logit >= threshold. Text
+`neg` lists labelled "nothing closely related" / found text answers labelled
+weak (fresh in brackets), 256 tokens, named | random | realistic:
+
+| logit | neg labelled (of 18) | false-weak |
+| --- | --- | --- |
+| -6 | 7 \| 10 \| 11 | 1/91 (1) \| 0/84 (0) \| 0/88 (0) |
+| -4 | 12 \| 16 \| 17 | 1/91 (1) \| 0/84 (0) \| 1/88 (0) |
+| -3 | 17 \| 17 \| 17 | 6/91 (3) \| 4/84 (2) \| 5/88 (2) |
+| -2 | 17 \| 18 \| 18 | 8/91 (3) \| 4/84 (2) \| 5/88 (2) |
+
+Unlike every cosine signal above, this one separates: at -4 most absent
+queries are labelled and almost no found answer is. The `neg` best logits
+on the named corpus run from -6.5 (`kubernetes deployment yaml`) to -1.4
+(`fotos de la boda`).
+
+**Decision (ADR-0013): deferred.** The text-only blend of the top 30 at
+256 tokens passes the "no bucket regresses" rule, but the owner chose not to
+ship it now: a small overall gain chosen on the same queries, a label that
+covers text only, a second-long re-sort and a fourth download, and
+training data under non-commercial terms. If it is revisited, the design
+and plan are ADR-0013's option 3 and `docs/archive/0004-ship-text-reranker.md`.
+The model is not in `models/manifest.toml`.
 
 ## Not yet done
 

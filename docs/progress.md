@@ -2580,7 +2580,7 @@ The owner chose to start M8 now so testers can download builds for the open M6/M
 - **Windows NSIS built locally:** `just package nsis` → `target/packages/magi_0.1.0_x64-setup.exe`, 18.7 MB. Its contents (7-Zip) put `magi.exe`, `onnxruntime.dll` and `pdfium.dll` side by side. Not installed or run yet.
 - **`release.yml`:** on a `v*` tag or by hand, builds NSIS (Windows), `.app` → ad-hoc signed → `.dmg` (macOS 14 runner), and `.deb` + AppImage (Ubuntu 22.04). It then makes a draft pre-release with `SHA256SUMS`, and a tag must match `packager.json`'s version. Not run yet.
 - README "Install", "Privacy" and "Uninstall and remove data" sections; `CHANGELOG.md` (now `docs/CHANGELOG.md`).
-- Not done: `THIRD_PARTY_LICENSES.md` (cargo-about), the clean-machine verification, installer sizes against NFR-6, and the network check.
+- Not done: the clean-machine verification, installer sizes against NFR-6, and the network check.
 - **Release review fixes.** Launch at login registers `$APPIMAGE` instead of the `/tmp/.mount_*` executable inside an AppImage (`paths::installed_exe`; test: `paths::tests::an_appimage_launches_from_its_own_file_not_the_mount`; not run on Linux). `release.yml` also fails when `packager.json`'s version differs from `Cargo.toml`'s. SPEC M8 now describes where the libraries are loaded from instead of `@rpath`, and ADR-0012 notes that a notarized build moves them to `Contents/Frameworks`. The `.deb` depends list was checked against `Cargo.lock`: no ALSA, and `libgtk-3-0` pulls in fontconfig, Wayland and X11.
 - **macOS blur on by default.** gpui-pre 0.3.7's `Blurred` on macOS is an `NSVisualEffectView` (real vibrancy, not Liquid Glass), so `platform::backdrop_support` now says yes on macOS and reads "Reduce transparency" (`defaults read com.apple.universalaccess reduceTransparency`, the same way as reduce motion). `BackdropSupport::mica` is renamed `blur`. ADR-0011 and SPEC M6 updated. Not seen on a real Mac yet: the open ⚠️ macOS blur item above still needs that check (search and settings over a wallpaper, light and dark, the see-through slider).
 - **Linux startup crash and X11 focus (2026-10-12).** tray-icon's default AppIndicator backend panicked at startup ("GTK has not been initialized"; GPUI runs no GTK loop), seen on a tester's machine and in the new Debian screenshots workflow (`screenshots-debian.yml`, `debian:trixie` under Xvfb + openbox). tray-icon now uses its `ksni` backend, so GTK, libappindicator and libxdo leave the tree, the `.deb` depends list (now fontconfig, Wayland client, X11/xcb, xkbcommon, Vulkan) and the CI apt lines; a left click on the Linux tray opens search. Panics now reach `magi.log`. On X11 GPUI's `PopUp` is override-redirect and never got the keyboard, so search opens as `Floating` there (`platform::popup_takes_focus`). The Debian screenshots run then showed onboarding, search and settings as intended. The `v0.1.1` release run's `deb-check` job installed the `.deb` on a clean `debian:bookworm`, found every linked library and kept `magi` running under Xvfb without a panic (X11 only; Wayland unchecked).
@@ -2595,3 +2595,36 @@ No behaviour change. Every source file is now under ~500 lines (`i18n/mod.rs`, t
 - **Comments:** stale "Implemented in Mx", "Slice N" and Tauri mentions in module headers and docs removed; a misplaced doc comment on `FileRecord`, `status_thread` and onboarding's `Readiness`/`progress` put back on its item.
 
 Verification: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` and `cargo test --workspace` pass on Windows (core: 336 unit tests). Not compiled on macOS or Linux: the `platform/{desktop,vendor}.rs` OS branches only reference their own `super::{macos,linux}` module, but CI is the first build there.
+
+## Search precision, fresh queries, #11 reranker (2026-11-05)
+
+Eval-only; nothing on the product path changed (RRF, `hybrid_search` and the Host API are untouched). Details and tables: `docs/eval.md`, "2026-11-05: Precision, fresh queries, and the z-score reranker confirmed or not".
+
+- **docs/issues/0002 done** (moved to `docs/archive/`). `eval/*.jsonl` gain 31 `fresh` queries and an 18-query `neg` bucket (`tools/random_names_queries.py` passes `neg` through). `magi-cli eval` (now `eval/{mod,precision,tests}.rs`) skips `neg` in recall, reports fresh queries apart, and sweeps a strong/weak label over three scales. New RRF baseline, hybrid MRR: named 0.897, random 0.854, realistic 0.869 (fresh: 0.860 / 0.795 / 0.829).
+- **GitHub #11 rejected.** On the fresh queries the z-score reranker's MRR is below RRF's on all three corpora (-0.016 to -0.038, `cross` worst), and `just bench` puts it at 381 ms warm p95 (504 ms with a scale that is correct past 4,096 chunks) against RRF's 241 ms and NFR-2's 300 ms. `ZFusionParams::sample_scale` was added to measure the second.
+- **docs/issues/0003 blocked.** `search::strength` (keyword = strong; meaning-only hit strong above a z or cosine threshold) measured, not shipped: no threshold labels any `neg` query without folding right answers. `FileHit::similarity` and `SearchHit::{text,image}_similarity` carry the cosines it needs (internal, not in the DTO).
+- **`just bench` (Windows, this run):** RRF cold 1.34 s, warm p50 230 ms / p95 241 ms: NFR-2 and NFR-3 pass. The bench now also times the label and both reranker scales on the same index (not graded).
+
+Verification: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace` (Windows); `just eval`, `just eval-random`, `just eval-random realistic_names`, `just bench`.
+
+## macOS photos from a borrowed Mac (v0.1.0, 2026-10-13)
+
+Three photos of the screen, Spanish UI, recorded 2026-11-05 from the owner's notes; no memory or timing numbers were taken. Nothing was indexed at the time ("Busca en 0 archivos"), so search, permissions and memory are still unchecked.
+
+- **No Dock icon** (M7 `hide_dock_icon`): the Dock has no Magi icon. The menu-bar icon is not visible in the photos; a menu-bar manager (`«`) was collapsing icons, so unknown.
+- **Blur:** search and Settings in dark theme are see-through over the wallpaper (real `NSVisualEffectView`). Settings in light theme looks solid with the slider near "Más transparente": to check (`docs/qa-checklist.md` row 13).
+- **Pause on battery:** the search footer reads "En pausa: con batería".
+- **Language** follows the system (Spanish); the shortcut shows as ⇧⌘Space; Settings came to the front.
+
+## Third-party licences (M8, 2026-11-05)
+
+`THIRD_PARTY_LICENSES.md` generated by `just licenses` (`xtask licenses`): cargo-about 0.9.3 for crates (`about.toml`: permissive licences plus MPL-2.0; build and dev crates left out; the workspace crates are now `publish = false` so they are not listed), plus ONNX Runtime 1.28.0's LICENSE and ThirdPartyNotices (from the v1.28.0 tag) and PDFium chromium/8044's licences (from the pdfium-binaries archive) kept in `licenses/`, and the model licences (`licenses/models.md`). Not done: shipping the file inside the installers.
+
+## Cross-encoder spike, docs/issues/0001 (2026-11-05)
+
+Passed the eval rule; deferred by the owner (ADR-0013, "Why deferred"). The shipping plan is archived as `docs/archive/0004-ship-text-reranker.md`. Numbers: `docs/eval.md`, "2026-11-05: cross-encoder spike".
+
+- Model approved by the owner and hash-checked locally: `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` qint8 + `tokenizer.json` at `1427fd65…`; candidates and sources in `docs/research/cross-lingual-reranker.md`. Not in `models/manifest.toml` yet.
+- Spike code (not on the app's path): `search::rerank` (`CrossEncoder`, `file_text`), `magi-cli eval` with `MAGI_RERANKER_DIR` (+ `MAGI_SPIKE_TEXT_ONLY`, `MAGI_SPIKE_TOKENS`), `magi-cli search --mode hybrid --rerank DIR` (+ `MAGI_SPIKE_UNLOAD_SIGLIP`).
+- Result: reranking everything breaks photos; the pure text rerank drops `es`/`kw`; the text-only blend of the top 30 at 256 tokens regresses no bucket on any corpus (overall MRR +0.013 to +0.016, `cross` +0.07 to +0.09, fresh +0.027 to +0.042). Its logit at −4 labels 12/16/17 of 18 `neg` text lists with 1/0/1 found text answers weak, which unblocks 0003 for text.
+- Cost: 135–617 ms p50, 0.9–1.6 s p95 for the text hits of a top 30, so it re-sorts after the first list. NFR-12: 842 MB if SigLIP is released first, 998 MB if not.

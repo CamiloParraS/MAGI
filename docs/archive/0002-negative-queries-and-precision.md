@@ -1,7 +1,9 @@
 # 0002: Measure precision: negative queries and wrongly folded answers
 
-Status: open. Eval-only (no product change). Prerequisite for 0003 and for
-GitHub #11's threshold work.
+Status: done 2026-11-05. Results and baselines: `docs/eval.md`,
+"2026-11-05: Precision, fresh queries, and the z-score reranker confirmed or
+not". The false-weak rate is reported per label setting in the strong/weak
+sweep, and the 0.5x-top fold's count stays as `answer folded`.
 
 ## Problem
 

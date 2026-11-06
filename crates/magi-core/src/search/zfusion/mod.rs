@@ -17,6 +17,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
 use crate::error::Result;
+use crate::search::strength::{SCALE_SAMPLE, sample_image_cosines, sample_text_cosines};
 use crate::search::vector::{MAX_KNN_K, image_cosines, text_cosines};
 use crate::search::{FTS_FETCH_LIMIT, FileHit, QueryVectors, SearchHit, boost_and_assemble, fts};
 
@@ -36,6 +37,12 @@ pub struct ZFusionParams {
     /// Coverage under `coverage_gate` adds nothing to the score (DigUp adds
     /// it to any candidate).
     pub words_need_gate: bool,
+    /// Take the scale (each modality's mean, the shared deviation) from a
+    /// fixed sample of each table (`search::strength::SCALE_SAMPLE` rows)
+    /// instead of from the nearest `SCAN_K` rows. The nearest rows are the
+    /// whole table only under 4,096 vectors; past it they are the top of
+    /// the distribution and would shrink every z (GitHub #11).
+    pub sample_scale: bool,
 }
 
 impl Default for ZFusionParams {
@@ -47,6 +54,7 @@ impl Default for ZFusionParams {
             coverage_gate: 0.5,
             image_min_cosine: None,
             words_need_gate: false,
+            sample_scale: false,
         }
     }
 }
@@ -70,13 +78,19 @@ const MIN_DEVIATION: f64 = 0.02;
 /// the centered scores together (one shared scale, so within a modality the
 /// order is the model's own). DigUp's `Searcher.meaning`.
 pub fn meaning_z(scores: &[(Modality, f64)]) -> Vec<f64> {
-    if scores.is_empty() {
-        return Vec::new();
+    meaning_z_against(scores, scores)
+}
+
+/// [`meaning_z`] with the means and deviation taken from `reference`
+/// instead of from `scores` itself (a sample of each table).
+pub fn meaning_z_against(scores: &[(Modality, f64)], reference: &[(Modality, f64)]) -> Vec<f64> {
+    if scores.is_empty() || reference.is_empty() {
+        return vec![0.0; scores.len()];
     }
-    let n = scores.len() as f64;
-    let overall = scores.iter().map(|(_, s)| s).sum::<f64>() / n;
+    let n = reference.len() as f64;
+    let overall = reference.iter().map(|(_, s)| s).sum::<f64>() / n;
     let mut groups: HashMap<Modality, (f64, usize)> = HashMap::new();
-    for &(modality, score) in scores {
+    for &(modality, score) in reference {
         let group = groups.entry(modality).or_default();
         group.0 += score;
         group.1 += 1;
@@ -85,11 +99,20 @@ pub fn meaning_z(scores: &[(Modality, f64)]) -> Vec<f64> {
         Some(&(sum, count)) if count >= MIN_GROUP => sum / count as f64,
         _ => overall,
     };
-    let centered: Vec<f64> = scores.iter().map(|&(m, s)| s - mean_of(m)).collect();
-    let mean = centered.iter().sum::<f64>() / n;
-    let variance = centered.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / n;
+    let centered =
+        |s: &[(Modality, f64)]| -> Vec<f64> { s.iter().map(|&(m, c)| c - mean_of(m)).collect() };
+    let reference_centered = centered(reference);
+    let mean = reference_centered.iter().sum::<f64>() / n;
+    let variance = reference_centered
+        .iter()
+        .map(|c| (c - mean).powi(2))
+        .sum::<f64>()
+        / n;
     let deviation = variance.sqrt().max(MIN_DEVIATION);
-    centered.iter().map(|c| (c - mean) / deviation).collect()
+    centered(scores)
+        .iter()
+        .map(|c| (c - mean) / deviation)
+        .collect()
 }
 
 /// Function words left out of word coverage: they are in nearly every file,
@@ -186,10 +209,9 @@ pub fn strong_count(scores: &[f64], ratio: f64) -> usize {
     }
 }
 
-/// Vectors scored per table to build the distribution. sqlite-vec's KNN
-/// cap, so a corpus over 4,096 chunks is scaled from its nearest 4,096
-/// only; the eval corpora are far below it. A product version would need a
-/// full scan, as DigUp does.
+/// Vectors fetched per table as candidates, and (without `sample_scale`)
+/// to build the distribution. sqlite-vec's KNN cap, so without the sample a
+/// corpus over 4,096 chunks is scaled from its nearest 4,096 only.
 pub const SCAN_K: u32 = MAX_KNN_K;
 
 /// The z-score counterpart of [`crate::search::search_with`]: same inputs,
@@ -217,7 +239,26 @@ pub fn search_zscore(
         .map(|(_, c)| (Modality::Text, *c))
         .chain(image.iter().map(|(_, c)| (Modality::Visual, *c)))
         .collect();
-    let z = meaning_z(&scores);
+    let z = if params.sample_scale {
+        let mut reference: Vec<(Modality, f64)> = Vec::new();
+        if let Some(e) = &vectors.text {
+            reference.extend(
+                sample_text_cosines(conn, e, SCALE_SAMPLE)?
+                    .into_iter()
+                    .map(|c| (Modality::Text, c)),
+            );
+        }
+        if let Some(e) = &vectors.image {
+            reference.extend(
+                sample_image_cosines(conn, e, SCALE_SAMPLE)?
+                    .into_iter()
+                    .map(|c| (Modality::Visual, c)),
+            );
+        }
+        meaning_z_against(&scores, &reference)
+    } else {
+        meaning_z(&scores)
+    };
     let (text_z, image_z) = z.split_at(text.len());
     let best_text = best_per_file(text.iter().map(|(h, _)| h).zip(text_z));
     let floor = params.image_min_cosine.map_or(f64::NEG_INFINITY, f64::from);
@@ -295,6 +336,7 @@ fn file_hit(conn: &Connection, file_id: i64) -> Result<Option<FileHit>> {
                 thumb_key: row.get(4)?,
                 page: None,
                 source: None,
+                similarity: None,
             })
         })
         .optional()?;

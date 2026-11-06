@@ -52,6 +52,10 @@ enum Command {
         mode: String,
         #[arg(long, default_value_t = 30)]
         limit: u32,
+        /// Spike (docs/issues/0001): rerank hybrid's results with the
+        /// cross-encoder in this folder (`model.onnx`, `tokenizer.json`).
+        #[arg(long)]
+        rerank: Option<PathBuf>,
     },
     /// Index `--corpus` and report recall@5, recall@10, and MRR for
     /// fts/vector/hybrid search against a queries.jsonl file.
@@ -100,7 +104,12 @@ fn main() -> anyhow::Result<()> {
         Command::Roots { action } => roots(action)?,
         Command::Index { root } => index_cmd(root)?,
         Command::Daemon { stats } => daemon_cmd(stats)?,
-        Command::Search { query, mode, limit } => search_cmd(&query, &mode, limit)?,
+        Command::Search {
+            query,
+            mode,
+            limit,
+            rerank,
+        } => search_cmd(&query, &mode, limit, rerank.as_deref())?,
         Command::Eval { queries, corpus } => eval::eval_cmd(queries, corpus)?,
         Command::Features { action } => features_cmd(action)?,
     }
@@ -452,7 +461,12 @@ fn show(snippet: &str) -> String {
         .replace(HIGHLIGHT_END, "]")
 }
 
-fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
+fn search_cmd(
+    query: &str,
+    mode: &str,
+    limit: u32,
+    rerank: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     let conn = db::open(&db_path())?;
     match mode {
         "fts" => {
@@ -471,13 +485,33 @@ fn search_cmd(query: &str, mode: &str, limit: u32) -> anyhow::Result<()> {
                     "search by meaning is not installed; run: magi-cli features enable meaning"
                 );
             };
-            let hits = magi_core::search::hybrid_search(
+            let mut hits = magi_core::search::hybrid_search(
                 &conn,
                 Some(&OneShotQuery(embedder.as_ref())),
                 image.as_deref(),
                 query,
                 limit,
             )?;
+            if let Some(dir) = rerank {
+                // As the app would: the reranker is built after the query
+                // is embedded, then reorders the results it was given.
+                // `MAGI_SPIKE_UNLOAD_SIGLIP`: free SigLIP's sessions first.
+                if std::env::var_os("MAGI_SPIKE_UNLOAD_SIGLIP").is_some()
+                    && let Some(image) = &image
+                {
+                    image.unload_if_idle(Duration::ZERO);
+                }
+                let model = magi_core::search::rerank::CrossEncoder::load(dir)?;
+                let docs = hits
+                    .iter()
+                    .map(|h| magi_core::search::rerank::file_text(&conn, h.file_id))
+                    .collect::<magi_core::Result<Vec<_>>>()?;
+                let scores = model.score(query, &docs)?;
+                for (hit, score) in hits.iter_mut().zip(scores) {
+                    hit.score = f64::from(score);
+                }
+                hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+            }
             if hits.is_empty() {
                 println!("no results");
             }

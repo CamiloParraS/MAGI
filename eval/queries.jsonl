@@ -162,3 +162,52 @@
 {"query": "Version 2", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 2nd of 3 QR codes; not in the file name. Verified with OpenCV (independent decoder), not just ours"}
 {"query": "Version 3 QR Code", "lang": "qr", "expected": ["local/3_barcodes_ver1_ver2_ver3.png"], "notes": "payload of the 3rd QR code; verified with OpenCV"}
 {"query": "qrwp", "lang": "qr", "expected": ["local/Adrian_Warburton_grave_tilted_qr_code_to_his_wikipedia_page.jpg"], "notes": "payload http://en.qrwp.org/Adrian_Warburton (OpenCV, from a crop). A ~100 px code in a 1600x2035 photo: needs the tiled scan, the shrink-only ladder cannot see it"}
+{"query": "chocolate cake for thirty guests", "lang": "en", "expected": ["en/birthday_party.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "changes not picked up after the laptop wakes up", "lang": "en", "expected": ["en/bug_report.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "what to bring to my yearly physical", "lang": "en", "expected": ["en/doctor_appointment.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "who pays the utilities in the apartment", "lang": "en", "expected": ["en/lease_agreement.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "return flight on Sunday evening", "lang": "en", "expected": ["en/travel_itinerary.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "guest wifi password and building access codes", "lang": "en", "expected": ["en/onboarding_notes.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "cuando hay que pagar la renta", "lang": "es", "expected": ["es/contrato_alquiler.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "que comprar para la semana pan y cafe", "lang": "es", "expected": ["es/lista_compras.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "el mecanico recomendo cambiar los frenos", "lang": "es", "expected": ["es/mantenimiento_auto.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "gastos bajo control nueva politica de compras", "lang": "es", "expected": ["es/informe_trimestral.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "contraseña del wifi para visitantes", "lang": "es", "expected": ["es/notas_incorporacion.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "how to make corn patties", "lang": "cross", "expected": ["es/receta_arepas.txt"], "ignore": ["en/arepas_recipe.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "vuelo de regreso el domingo", "lang": "cross", "expected": ["en/travel_itinerary.txt"], "ignore": ["es/itinerario_viaje.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "brake pads replacement mileage", "lang": "cross", "expected": ["es/mantenimiento_auto.txt"], "ignore": ["en/car_maintenance.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "votar entre dos novelas de misterio", "lang": "cross", "expected": ["en/book_club.txt"], "ignore": ["es/club_lectura.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "welcome packet for new employees", "lang": "cross", "expected": ["es/notas_incorporacion.txt"], "ignore": ["en/onboarding_notes.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "expenses under control this quarter", "lang": "cross", "expected": ["es/informe_trimestral.txt"], "ignore": ["pdf/report.pdf"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "factura de reparacion electrica", "lang": "cross", "expected": ["en/electrician_invoice.txt"], "ignore": ["pdf/factura_electricista.pdf"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "ninety thousand kilometers", "lang": "kw", "expected": ["en/car_maintenance.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "pinch of salt", "lang": "kw", "expected": ["en/arepas_recipe.txt"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "Point origin", "lang": "kw", "expected": ["code/sample.rs"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "pets at the seaside", "lang": "img", "expected": ["images/dog_on_beach.jpg", "images/dog_on_beach2.jpg", "images/cat_on_beach.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "un perro con una pelota", "lang": "img", "expected": ["images/dog_on_beach2.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "breakfast pancakes", "lang": "img2", "expected": ["local/mae-mu-burguer.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "public transport", "lang": "img2", "expected": ["local/jonathan-borba-bus.jpg", "local/juan-encalada-bus.jpg", "local/mitchell-johnson-bus-inside.jpg", "local/andy-holmes-train.jpg", "local/daniel-abadia-train.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "musical instruments", "lang": "img2", "expected": ["local/apolo-photographer-guitar.jpg", "local/wes-hicks-MEL-guitars.jpg", "local/polygon-group-bass.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "un lobo", "lang": "img2", "expected": ["local/wolf.jpg", "local/wolf_sillouthe.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "forest in winter", "lang": "img2", "expected": ["local/madara-parma-snowy-forest.jpg", "local/piotr-szajewski-snowy-forest.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "comida italiana", "lang": "img2", "expected": ["local/pizza.jpg", "local/pizza - copia.jpg", "local/krista-stucchio-pasta.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "two-wheeled vehicles", "lang": "img2", "expected": ["local/harley-davidson-motorbike.jpg", "local/carl-nenzen-loven-bike.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "bedroom interior", "lang": "img2", "expected": ["local/room.jpg", "local/room - copia.jpg"], "notes": "fresh query, written 2026-11-05 after the #9 decision", "fresh": true}
+{"query": "zxqv blorft", "lang": "neg", "expected": [], "notes": "nonsense: no answer in any corpus"}
+{"query": "glarb snorfle wibble", "lang": "neg", "expected": [], "notes": "nonsense: no answer in any corpus"}
+{"query": "qwpoeiruty", "lang": "neg", "expected": [], "notes": "nonsense: no answer in any corpus"}
+{"query": "fnord quux xyzzy plugh", "lang": "neg", "expected": [], "notes": "nonsense: no answer in any corpus"}
+{"query": "vrrmbl kzzt", "lang": "neg", "expected": [], "notes": "nonsense: no answer in any corpus"}
+{"query": "tax return 2019", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "wedding photos", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "kubernetes deployment yaml", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "passport renewal form", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "snowboarding lessons", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "a sailboat on the ocean", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "an elephant at the zoo", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "declaración de la renta", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05 ('renta' is in the lease, as rent)"}
+{"query": "nómina de octubre", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "fotos de la boda", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "horario de clases de yoga", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "certificado de vacunación", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}
+{"query": "un barco en el puerto", "lang": "neg", "expected": [], "notes": "plausible but absent; checked against the corpus, local/ and the OCR golden text on 2026-11-05"}

@@ -1,8 +1,18 @@
 # 0003: Say "nothing closely related" without hiding results
 
-Status: open. Depends on 0002 (needs its precision numbers to pick a
-threshold). Changes the Host API, so `docs/architecture.md` is updated with
-it; ship inside a milestone.
+Status: blocked on a shippable signal (2026-11-05). No cosine signal
+separates absent answers from weak right ones (`docs/eval.md`, "Precision").
+A cross-encoder's logit does for text (ADR-0013: threshold -4 labels
+12/16/17 of 18 `neg` lists with 1/0/1 found text answers weak), but the
+reranker was deferred, and photos have no signal either way. 0002's numbers are in
+(`docs/eval.md`, "2026-11-05: Precision ..."): neither z on a sample, z on
+the fetched lists, nor raw cosine labels any `neg` query without also
+folding right answers. With false-weak at zero, no `neg` list is labelled;
+the first setting that labels 4 of 18 already folds 5-7 found answers.
+Not shipped. `search::strength` and the eval sweep stay, so a new signal is
+one function away from the same table. Next candidate: a cross-encoder
+score from 0001's reranker spike. When it ships it changes the Host API, so
+`docs/architecture.md` is updated with it, inside a milestone.
 
 ## Problem
 

@@ -19,6 +19,10 @@
   would cap the bucket's MRR near 0.5 whatever the ranking does. With it,
   `cross` measures how far up the other-language document gets.
   `tools/random_names_queries.py` maps these paths to the copies too.
+- `fresh` — optional, `true` for the queries written on 2026-11-05 after
+  the #9 decision. No threshold was tuned on them; `magi-cli eval` reports
+  them again on their own as `fresh` and `f-<bucket>`. Mark new queries
+  `fresh` only until something is tuned on them.
 - `notes` — free text; `"keyword+semantic"` means the query's terms
   literally appear in the document, `"semantic paraphrase"` means they
   don't (only a real embedder can find it), `"cross-lingual"` self-explains.
@@ -32,6 +36,13 @@ invoice`, `receta de arepas`) are included verbatim under `lang: "cross"`.
 The `img`, `img2`, `ocr`, `qr` and `skip` buckets are the image queries. `img` (29) is the first batch. `img2` (54) covers the 2026-09-21 photo batch: food, vehicles, animals, landscapes, rooms, instruments, toy cars. `ocr` (7) is text printed in a picture, scored against `fixtures/golden/ocr/fixture_stem.txt`. `qr` (3) is text that exists only in a decoded QR payload, so the words are deliberately absent from file names (an earlier version used `ver1` and `wikipedia`, which are in the file names, and passed for the wrong reason). `skip` (1) checks that an image skipped for size is still found by name.
 
 **File names leak.** A file called `pizza.jpg` is found for `pizza` by its filename chunk alone. The `visual` row in `magi-cli eval` output (no filename, no OCR) is the clean measure of the image model; hybrid is what a user sees. Expected answers for the photo batch were written from looking at every image, not from its file name: `mae-mu-burguer.jpg`, for example, is a stack of pancakes.
+
+`neg` (18) has `"expected": []`: queries with no answer in the corpus, five
+nonsense strings and thirteen plausible-but-absent searches in English and
+Spanish. Each was checked against the corpus, `local/` and the OCR golden
+text before it was added; check again when adding fixtures. They are left out
+of recall and MRR, and scored for precision: how many lists the strong/weak
+label would head "Nothing closely related" (docs/issues/0002, 0003).
 
 The `local/` images are gitignored (`fixtures/README.md`), so the image buckets only run on a machine that has them.
 
@@ -69,7 +80,9 @@ overall and broken down by `lang` bucket. All three modes run through
 `search::rank_and_boost`, so the two baselines are hybrid's own ranking
 function with one input list emptied, not a different one. Hybrid then
 runs a second time on the same index with the experimental z-score +
-word-coverage fusion (`search::zfusion`) in five variants; the RRF and
-z-score sections also print result counts and how many results would fold
-under "weaker matches", and the run ends with result counts for a few
-nonsense queries. See `docs/eval.md` for recorded baselines.
+word-coverage reranker (`search::zfusion`, GitHub #11), scaled two ways.
+The RRF and z-score sections also print result counts, how many right
+answers a 0.5x-top fold would hide, the `neg` result counts, and a sweep of
+the strong/weak label (`search::strength`) over three scales: neg lists
+labelled "nothing close" against false-weak answers. See `docs/eval.md` for
+recorded baselines.
