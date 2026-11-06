@@ -213,6 +213,48 @@ pub fn bench_corpus() -> Result<()> {
         "warm latency over {WARM_QUERIES} queries: p50={p50:.1} ms  p95={p95:.1} ms  max={max:.1} ms  -- NFR-2 target: p95 <= 300 ms"
     );
 
+    // The candidates GitHub #11 and docs/issues/0003 would add to the path,
+    // same queries and index. Not graded: they print next to RRF's p95.
+    let variant = |label: &str, run: &dyn Fn(&search::QueryVectors, &str) -> Result<()>| {
+        let mut ms = Vec::with_capacity(WARM_QUERIES);
+        for i in 0..WARM_QUERIES {
+            let query = QUERIES[i % QUERIES.len()];
+            let t = Instant::now();
+            let vectors = search::QueryVectors::embed(Some(&embedder), None, query)?;
+            run(&vectors, query)?;
+            ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!(
+            "{label:<34} p50={:.1} ms  p95={:.1} ms  max={:.1} ms",
+            percentile(&ms, 50.0),
+            percentile(&ms, 95.0),
+            ms.last().copied().unwrap_or(0.0)
+        );
+        anyhow::Ok(())
+    };
+    println!();
+    variant("rrf + strength label (sample)", &|v, q| {
+        search::search_with(&conn, v, q, 30)?;
+        search::strength::Scales::sample(&conn, v)?;
+        Ok(())
+    })?;
+    let reranker = |sample_scale| search::zfusion::ZFusionParams {
+        z_gate: 1.0,
+        image_min_cosine: Some(search::IMAGE_MIN_COSINE),
+        words_need_gate: true,
+        sample_scale,
+        ..Default::default()
+    };
+    variant("z reranker, nearest-4096 scale", &|v, q| {
+        search::zfusion::search_zscore(&conn, v, q, 30, &reranker(false))?;
+        Ok(())
+    })?;
+    variant("z reranker, sample scale", &|v, q| {
+        search::zfusion::search_zscore(&conn, v, q, 30, &reranker(true))?;
+        Ok(())
+    })?;
+
     println!(
         "\nNFR-3 (cold <= 3000 ms): {}",
         if cold_ms <= 3000.0 { "PASS" } else { "FAIL" }

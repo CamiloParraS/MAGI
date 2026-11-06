@@ -48,9 +48,11 @@ with open("eval/queries.jsonl", encoding="utf-8") as src, open(
         expected = [
             name for e in query["expected"] if e in original for name in copies[original[e]]
         ]
-        if not expected:
+        # `neg` queries have no answer anywhere; everything else must map.
+        if not expected and query["expected"]:
             raise SystemExit(f"no copy of {query['expected']} for {query['query']!r}")
-        query["notes"] = f"copy of {', '.join(query['expected'])}"
+        if query["expected"]:
+            query["notes"] = f"copy of {', '.join(query['expected'])}"
         query["expected"] = expected
         if "ignore" in query:
             query["ignore"] = [

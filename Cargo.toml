@@ -5,6 +5,7 @@ members = ["crates/magi-core", "crates/magi-cli", "apps/desktop", "xtask"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
+publish = false
 version = "0.1.1"
 
 [workspace.dependencies]

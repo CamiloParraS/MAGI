@@ -65,6 +65,7 @@ pub fn search_fts(conn: &Connection, query: &str, limit: u32) -> Result<Vec<File
                 snippet: row.get(4)?,
                 page: row.get(5)?,
                 source: Some(row.get(6)?),
+                similarity: None,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

@@ -1,7 +1,8 @@
 //! Cross-platform dev tasks: fetch-pdfium, fetch-onnxruntime, fetch-models,
-//! bench-corpus (SPEC.md §5.1).
+//! bench-corpus, stage-libs, licenses (SPEC.md §5.1).
 
 mod bench_corpus;
+mod licenses;
 
 use std::fs;
 use std::io::Write;
@@ -15,7 +16,7 @@ use sha2::{Digest, Sha256};
 /// PDFium release pinned from https://github.com/bblanchon/pdfium-binaries.
 /// Version and per-target SHA-256 checksums must be re-verified whenever
 /// `PDFIUM_TAG` changes (see SPEC.md §0: "Never invent ... checksums").
-const PDFIUM_TAG: &str = "chromium/8044";
+pub(crate) const PDFIUM_TAG: &str = "chromium/8044";
 
 struct PdfiumTarget {
     /// Directory name under `vendor/pdfium/`, also the asset's target suffix.
@@ -143,7 +144,7 @@ fn fetch_pdfium() -> Result<()> {
 /// archive's SHA-256 is the whole downloaded release asset's hash,
 /// re-verified whenever `ONNXRUNTIME_VERSION` changes (see SPEC.md §0:
 /// "Never invent ... checksums").
-const ONNXRUNTIME_VERSION: &str = "1.28.0";
+pub(crate) const ONNXRUNTIME_VERSION: &str = "1.28.0";
 
 struct OnnxRuntimeTarget {
     /// Directory name under `vendor/onnxruntime/`.
@@ -346,10 +347,11 @@ fn main() -> Result<()> {
         Some("fetch-models") => fetch_models(),
         Some("bench-corpus") => bench_corpus::bench_corpus(),
         Some("stage-libs") => stage_libs(),
+        Some("licenses") => licenses::licenses(),
         Some(other) => bail!("unknown xtask command: {other}"),
         None => {
             bail!(
-                "usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus|stage-libs>"
+                "usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus|stage-libs|licenses>"
             )
         }
     }

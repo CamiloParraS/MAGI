@@ -2,17 +2,24 @@
 //! MRR for FTS-only, vector-only, and hybrid search against a
 //! `queries.jsonl` file, broken down by `lang` bucket (SPEC.md §7 M3).
 //! Hybrid runs twice on the same index: the shipped RRF fusion and the
-//! experimental z-score fusion (`search::zfusion`, GitHub issue #9).
+//! z-score reranker (`search::zfusion`, GitHub issue #11). Queries in the
+//! `neg` bucket have no answer and are scored for precision only
+//! (`precision`, docs/issues/0002); `fresh` queries are also reported apart.
+
+mod precision;
+mod rerank;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
+use magi_core::search::strength::Scales;
 use magi_core::search::vector::{search_vector_image, search_vector_text};
 use magi_core::search::zfusion::{ZFusionParams, search_zscore, strong_count};
 use magi_core::search::{FileHit, QueryVectors};
 use magi_core::{config, db, search};
+use precision::Judged;
 use serde::Deserialize;
 
 const FETCH_LIMIT: u32 = 10;
@@ -29,6 +36,16 @@ struct EvalQuery {
     /// `cross` query's same-language twin, which correctly ranks first.
     #[serde(default)]
     ignore: Vec<String>,
+    /// Written after the 2026-11-05 decisions, so no threshold was tuned on
+    /// it (docs/issues/0002).
+    #[serde(default)]
+    fresh: bool,
+}
+
+impl EvalQuery {
+    fn is_neg(&self) -> bool {
+        self.lang == "neg"
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -157,19 +174,21 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         Mode::Vector,
         Mode::Visual,
         Mode::Rrf,
-        // DigUp's fusion as ported, then the two fixes tried on it
-        // (docs/eval.md, 2026-11-05).
-        Mode::ZScore(z_params(2.0, false, false)),
-        Mode::ZScore(z_params(2.0, true, false)),
-        Mode::ZScore(z_params(2.0, true, true)),
-        Mode::ZScore(z_params(1.0, true, false)),
-        Mode::ZScore(z_params(1.0, true, true)),
+        // The reranker variant of GitHub #11; the other z-score variants are
+        // recorded in docs/eval.md (2026-11-05) and no longer run.
+        Mode::ZScore(z_params(1.0, true, true, false)),
+        // The same, scaled from a fixed sample of each table: what scales
+        // past sqlite-vec's 4,096-row KNN cap (`ZFusionParams::sample_scale`).
+        Mode::ZScore(z_params(1.0, true, true, true)),
     ];
     for mode in modes {
         println!("\n=== {} ===", mode.label());
         let mut overall = Accum::default();
         let mut by_lang: BTreeMap<String, Accum> = BTreeMap::new();
+        let mut fresh = Accum::default();
+        let mut fresh_by_lang: BTreeMap<String, Accum> = BTreeMap::new();
         let mut folds = FoldStats::default();
+        let mut judged: Vec<Judged> = Vec::new();
 
         for q in &queries {
             // An ignored hit must not cost the query a top-10 slot.
@@ -180,6 +199,16 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
             // `search_vector_text` (no boosts) against boosted hybrid is
             // what made the old M3 item-4 numbers uninterpretable; see
             // docs/eval.md.
+            let fused = matches!(mode, Mode::Rrf | Mode::ZScore(_));
+            let vectors = if fused {
+                QueryVectors::embed(
+                    Some(embedder.as_ref()),
+                    Some(image_embedder.as_ref()),
+                    &q.query,
+                )?
+            } else {
+                QueryVectors::default()
+            };
             let hits = match mode {
                 Mode::Fts => {
                     let fts = search_fts(&conn, &q.query, search::FTS_FETCH_LIMIT)?;
@@ -200,39 +229,33 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
                     )?;
                     search::rank_and_boost(&q.query, &[], &[], &visual, limit)
                 }
-                Mode::Rrf => search::hybrid_search(
-                    &conn,
-                    Some(embedder.as_ref()),
-                    Some(image_embedder.as_ref()),
-                    &q.query,
-                    limit,
-                )?,
-                Mode::ZScore(params) => {
-                    let vectors = QueryVectors::embed(
-                        Some(embedder.as_ref()),
-                        Some(image_embedder.as_ref()),
-                        &q.query,
-                    )?;
-                    search_zscore(&conn, &vectors, &q.query, limit, &params)?
-                }
+                Mode::Rrf => search::search_with(&conn, &vectors, &q.query, limit)?,
+                Mode::ZScore(params) => search_zscore(&conn, &vectors, &q.query, limit, &params)?,
             };
             let scores: Vec<f64> = hits.iter().map(|h| h.score).collect();
             let hit_paths: Vec<String> = hits
-                .into_iter()
+                .iter()
                 .map(|h| relative_slash_path(&h.path, &root.path))
                 .collect();
 
             let rank = first_match_rank(&hit_paths, &q.expected, &q.ignore);
-            folds.add(&scores, rank);
-            let z_misses = matches!(mode, Mode::ZScore(p) if p.z_gate == 2.0);
-            if z_misses && rank.is_none_or(|r| r > 5) {
-                println!(
-                    "  miss [{}] {:?}: rank {rank:?}, top hit {}",
-                    q.lang,
-                    q.query,
-                    hit_paths.first().map_or("-", String::as_str)
-                );
+            if fused {
+                let sample = Scales::sample(&conn, &vectors)?;
+                let fetched = Scales::fetched(&conn, &vectors)?;
+                judged.push(Judged {
+                    query: q.query.clone(),
+                    lang: q.lang.clone(),
+                    fresh: q.fresh,
+                    expected_at: hit_paths.iter().position(|p| q.expected.contains(p)),
+                    hits,
+                    sample,
+                    fetched,
+                });
             }
+            if q.is_neg() {
+                continue;
+            }
+            folds.add(&scores, rank);
             // Bucket averages hide which query failed; list the misses.
             if mode == Mode::Rrf && rank.is_none_or(|r| r > 5) {
                 println!(
@@ -262,37 +285,44 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
             }
             overall.add(rank);
             by_lang.entry(q.lang.clone()).or_default().add(rank);
+            if q.fresh {
+                fresh.add(rank);
+                fresh_by_lang.entry(q.lang.clone()).or_default().add(rank);
+            }
         }
 
         overall.report("overall");
         for (lang, acc) in &by_lang {
             acc.report(lang);
         }
+        fresh.report("fresh");
+        for (lang, acc) in &fresh_by_lang {
+            acc.report(&format!("f-{lang}"));
+        }
         if matches!(mode, Mode::Rrf | Mode::ZScore(_)) {
             folds.report();
+            precision::report(&judged);
+            if mode == Mode::Rrf {
+                precision::report_neg_detail(&judged);
+            }
         }
     }
 
-    println!("\n=== nonsense queries: results of 100, rrf / zscore gate 2.0 / + image floor ===");
-    for query in NONSENSE_QUERIES {
-        let vectors = QueryVectors::embed(
-            Some(embedder.as_ref()),
-            Some(image_embedder.as_ref()),
-            query,
+    if let Some(dir) = std::env::var_os("MAGI_RERANKER_DIR") {
+        rerank::run(
+            Path::new(&dir),
+            &queries,
+            |query, limit| {
+                let vectors = QueryVectors::embed(
+                    Some(embedder.as_ref()),
+                    Some(image_embedder.as_ref()),
+                    query,
+                )?;
+                Ok(search::search_with(&conn, &vectors, query, limit)?)
+            },
+            |file_id| Ok(search::rerank::file_text(&conn, file_id)?),
+            |hit| relative_slash_path(&hit.path, &root.path),
         )?;
-        let rrf = search::search_with(&conn, &vectors, query, 100)?;
-        let z = search_zscore(&conn, &vectors, query, 100, &z_params(2.0, false, false))?;
-        let floored = search_zscore(&conn, &vectors, query, 100, &z_params(2.0, true, false))?;
-        let top = z
-            .first()
-            .map(|h| format!("  (zscore top: {})", h.file_name))
-            .unwrap_or_default();
-        println!(
-            "  {query:<24} {:>3} / {:>3} / {:>3}{top}",
-            rrf.len(),
-            z.len(),
-            floored.len()
-        );
     }
     Ok(())
 }
@@ -316,7 +346,7 @@ impl Mode {
             Mode::Visual => "visual".into(),
             Mode::Rrf => "hybrid (rrf)".into(),
             Mode::ZScore(p) => format!(
-                "hybrid (zscore, gate {:.1}{}{})",
+                "hybrid (zscore, gate {:.1}{}{}{})",
                 p.z_gate,
                 if p.image_min_cosine.is_some() {
                     ", image floor"
@@ -328,24 +358,28 @@ impl Mode {
                 } else {
                     ""
                 },
+                if p.sample_scale { ", sample scale" } else { "" },
             ),
         }
     }
 }
 
 /// `image_floor`: the RRF path's `IMAGE_MIN_COSINE` on images;
-/// `words_gated`: coverage under the gate adds nothing.
-fn z_params(gate: f64, image_floor: bool, words_gated: bool) -> ZFusionParams {
+/// `words_gated`: coverage under the gate adds nothing; `sample`: the
+/// scale comes from a fixed sample of each table.
+fn z_params(gate: f64, image_floor: bool, words_gated: bool, sample: bool) -> ZFusionParams {
     ZFusionParams {
         z_gate: gate,
         image_min_cosine: image_floor.then_some(search::IMAGE_MIN_COSINE),
         words_need_gate: words_gated,
+        sample_scale: sample,
         ..ZFusionParams::default()
     }
 }
 
 /// How long result lists are, and what folding everything under half the
-/// top score into "weaker matches" would hide (issue #9, item 5).
+/// top score into "weaker matches" would hide (issue #9, item 5): that
+/// rule's false-weak count, kept to compare with `precision`'s labels.
 #[derive(Default)]
 struct FoldStats {
     queries: usize,
@@ -379,30 +413,5 @@ impl FoldStats {
     }
 }
 
-/// Queries with no answer in any corpus: RRF returns its nearest vectors
-/// whatever the query, so an empty list from the z gate is a UX win.
-const NONSENSE_QUERIES: &[&str] = &[
-    "zxqv blorft",
-    "glarb snorfle wibble",
-    "qwpoeiruty",
-    "fnord quux xyzzy plugh",
-    "vrrmbl kzzt",
-];
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn paths(p: &[&str]) -> Vec<String> {
-        p.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn ignored_hits_do_not_take_a_rank() {
-        let hits = paths(&["en/meeting_notes.txt", "es/notas_reunion.txt"]);
-        let expected = paths(&["es/notas_reunion.txt"]);
-        assert_eq!(first_match_rank(&hits, &expected, &[]), Some(2));
-        let ignore = paths(&["en/meeting_notes.txt"]);
-        assert_eq!(first_match_rank(&hits, &expected, &ignore), Some(1));
-    }
-}
+mod tests;

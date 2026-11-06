@@ -105,6 +105,7 @@ fn text_rows(
                         snippet: row.get(4)?,
                         page: row.get(7)?,
                         source: Some(row.get(8)?),
+                        similarity: Some(unit_l2_to_cosine(row.get(5)?)),
                     },
                     row.get::<_, f64>(5)?,
                     row.get::<_, i64>(6)?,
@@ -183,6 +184,7 @@ pub fn image_cosines(
                     thumb_key: row.get(6)?,
                     page: None,
                     source: None,
+                    similarity: Some(unit_l2_to_cosine(row.get(4)?)),
                 },
                 row.get::<_, f64>(4)?,
             ))

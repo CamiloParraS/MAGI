@@ -3,6 +3,7 @@ name = "magi-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "magi desktop app (GPUI, ADR-0011)"
 
 [[bin]]

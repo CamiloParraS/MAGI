@@ -1,7 +1,8 @@
 # 0001: Cross-language misses need a reranker or a stronger embedder
 
-Status: open. Needs an ADR and a verified model before any download. Not
-scheduled; ship only inside a milestone (M7 and M8 are still open).
+Status: spike done 2026-11-05. It passed the eval rule but was deferred
+by the owner (ADR-0013, "Why deferred"; numbers in `docs/eval.md`,
+"2026-11-05: cross-encoder spike").
 
 ## Problem
 
@@ -38,7 +39,13 @@ problem of the index.
    Needs a full re-index and risks the 845 MB peak (NFR-12; the ORT session
    build is the peak, mimalloc was rejected).
 
-Recommendation: spike the reranker first.
+Recommendation: spike the reranker first. It may also unblock 0003: on
+2026-11-05 no cosine-based signal separated "nothing related" from weak
+right answers (`docs/eval.md`), and a cross-encoder's score is the next
+candidate. Record its separation in the same `magi-cli eval` sweep.
+
+The z-score reranker of GitHub #11 is not an alternative: rejected on fresh
+queries and latency the same day (`docs/eval.md`).
 
 ## Spike (throwaway, not shipped)
 

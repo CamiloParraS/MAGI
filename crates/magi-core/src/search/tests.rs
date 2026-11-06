@@ -309,6 +309,7 @@ fn the_best_chunks_source_and_page_reach_the_hit() {
         snippet: "s".into(),
         page,
         source: Some(source),
+        similarity: None,
     };
     let hits = rank_and_boost(
         "zzz",
@@ -341,6 +342,7 @@ fn a_name_is_tagged_only_when_the_keywords_matched_it() {
         snippet: "s".into(),
         page: None,
         source: Some(ChunkSource::Filename),
+        similarity: None,
     };
     let hits = rank_and_boost("zzz", &[name(1)], &[name(2)], &[], 10);
     let by_id = |id| hits.iter().find(|h| h.file_id == id).unwrap();

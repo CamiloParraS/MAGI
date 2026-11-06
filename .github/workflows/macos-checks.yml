@@ -1,0 +1,45 @@
+name: macOS checks
+
+# Manual only: runs the parts of docs/qa-checklist.md's "macOS session" a
+# hosted Mac can check, each with a pass/fail result in the run summary
+# (.github/scripts/macos-checks.sh). Screenshots and magi.log are the run's
+# `macos-checks` artifact. iCloud, network shares, battery and the blur stay
+# manual.
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch PDFium and ONNX Runtime binaries
+        run: |
+          cargo run -p xtask -- fetch-pdfium
+          cargo run -p xtask -- fetch-onnxruntime
+
+      - name: Install cliclick
+        run: brew install cliclick
+
+      # Release: the latency and memory checks are graded on it.
+      - name: Build
+        run: cargo build --release -p magi-desktop -p magi-cli
+
+      - name: Run the checks
+        run: bash .github/scripts/macos-checks.sh
+        env:
+          OUT: checks
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-checks
+          path: checks/
+          if-no-files-found: warn
