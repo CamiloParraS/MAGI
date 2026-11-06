@@ -4,6 +4,24 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### 0.1.2 (test build)
+
+- **Detail pane (optional):** Settings › Appearance › Search window layout ›
+  List and preview shows the selected result beside the list, with its page
+  or thumbnail, why it matched, and Open / Show in folder.
+- **Copy a result as a file** (paste it into a chat or an email) on Windows,
+  macOS and Linux; a setting keeps the old copy-the-path behaviour.
+- **Search window:** calmer look, one reason per result in the footer,
+  match-kind chips, readable dark glass; the footer's unreadable-files note
+  opens Settings. Screen-reader labels throughout.
+- **Settings:** pause and rescan from Index; folders and file types read as
+  one list; text fields show "Saved"; a button back to search.
+- **Onboarding:** "Start with your computer" is a switch, as in Settings;
+  clearer setup footer.
+- **Search quality:** a strong image match now reaches the top 10 more
+  often; a result is tagged "File name" only when the words matched its name.
+- `THIRD_PARTY_LICENSES.md` lists every bundled library and model licence.
+
 ### 0.1.1 (Linux fixes)
 
 - The app no longer crashes at startup: the tray icon talks to the desktop
