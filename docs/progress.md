@@ -2628,3 +2628,13 @@ Passed the eval rule; deferred by the owner (ADR-0013, "Why deferred"). The ship
 - Spike code (not on the app's path): `search::rerank` (`CrossEncoder`, `file_text`), `magi-cli eval` with `MAGI_RERANKER_DIR` (+ `MAGI_SPIKE_TEXT_ONLY`, `MAGI_SPIKE_TOKENS`), `magi-cli search --mode hybrid --rerank DIR` (+ `MAGI_SPIKE_UNLOAD_SIGLIP`).
 - Result: reranking everything breaks photos; the pure text rerank drops `es`/`kw`; the text-only blend of the top 30 at 256 tokens regresses no bucket on any corpus (overall MRR +0.013 to +0.016, `cross` +0.07 to +0.09, fresh +0.027 to +0.042). Its logit at −4 labels 12/16/17 of 18 `neg` text lists with 1/0/1 found text answers weak, which unblocks 0003 for text.
 - Cost: 135–617 ms p50, 0.9–1.6 s p95 for the text hits of a top 30, so it re-sorts after the first list. NFR-12: 842 MB if SigLIP is released first, 998 MB if not.
+
+## macOS checks on CI (2026-11-06)
+
+`.github/workflows/macos-checks.yml` on a hosted Mac (macos-latest, release build, fake embedder), three runs. Final run: 13 of 14 pass.
+
+- ✅ M2 no Dock icon (process type `UIElement`), M3 Settings owns the topmost window, M5/M6 an unreadable root reports `permission_denied` and indexes within 75 s of being readable again with no restart, M10 force-quit then `--toggle`, M11 Shift+Cmd+Space, M14 `.app` found by name with its contents unread, M16 an ejected disk image goes `missing` with results hidden and comes back, M20 a precomposed query finds a decomposed name, M21 onboarding registers the login item; rows 2 (single instance), 9 (first frame, worst 86 ms) and 10 (results 3 ms after typing).
+- **Bug found and fixed:** a package bundle was read as a file, failed with EISDIR, retried through every backoff ("Indexing, 1 file to go") and would have ended as unreadable. Now skipped as `bundle` and found by name (`a_package_bundle_is_one_item_found_by_name`).
+- **❌ NFR-1 on macOS:** idle with every window closed, no models, indexing done: physical footprint 346-351 MB, RSS 525 MB, against 150 MB (Windows: ~24 MB). Not yet explained: the next run saves `vmmap --summary` (`vmmap-idle.txt`) to tell GPUI/Metal, fonts and the VM's GPU apart. Needs the same reading from Activity Monitor on a real Mac.
+- Fixes to the checks themselves: an Accessory app is never System Events' frontmost process (check the topmost window instead); keystrokes go to Finder, so windows are closed with their close buttons; memory graded on the footprint, not RSS.
+- CI: the two Debian images shared one rust-cache key; bookworm restored trixie's target and failed with "can't find crate". Separate keys now.

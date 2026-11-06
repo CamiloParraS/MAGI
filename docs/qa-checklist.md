@@ -27,17 +27,17 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 
 | # | Check | How | Windows | macOS | Linux |
 |---|-------|-----|---------|-------|-------|
-| 1 | Hotkey toggles search | Press the shortcut twice: opens, closes. | ✅ 2026-09-29 | | |
-| 2 | `--toggle` and single instance | `magi --toggle` opens search in the running app; a plain second launch opens settings and exits. | ✅ 2026-09-29 (`--toggle`) | | |
+| 1 | Hotkey toggles search | Press the shortcut twice: opens, closes. | ✅ 2026-09-29 | ✅ 2026-11-06 CI (Shift+Cmd+Space opens search) | |
+| 2 | `--toggle` and single instance | `magi --toggle` opens search in the running app; a plain second launch opens settings and exits. | ✅ 2026-09-29 (`--toggle`) | ✅ 2026-11-06 CI (second launch exits; --toggle after a force-quit) | |
 | 3 | Open and Reveal | Enter opens, Ctrl/Cmd+Enter reveals; on a deleted file both keep the window. | ✅ 2026-09-29 | | |
 | 4 | Hides on blur and Esc | Click another window; press Esc. | ✅ 2026-09-29 | | |
 | 5 | Multi-monitor placement | Two displays: move the cursor to the second, press the shortcut; search opens centered there. | not run (one monitor) | | |
 | 6 | HiDPI | Display scale 150 % then 200 % (Settings › System › Display): text crisp, search and settings windows scale, nothing clipped. | | | |
 | 7 | IME / dead keys | Type `canción` with the dead `'` key; an IME (e.g. Japanese) composes in place. | ✅ dead keys 2026-09-29; IME not run | | |
 | 8 | Works with no tray | Linux GNOME without AppIndicator: plain launch opens settings, hotkey opens search, Settings › General › Quit exits. | n/a | n/a | |
-| 9 | Window first frame < 150 ms | `search window first frame elapsed=` in `magi.log`, 10 samples. | ✅ 2026-09-29, max 57 ms | | |
-| 10 | Results < 400 ms after typing, warm | `search results after typing stopped elapsed=` | ✅ 2026-09-30, 154–214 ms | | |
-| 11 | Idle RSS ≤ 150 MB | Window closed, models unloaded; Task Manager › Details › Memory (private working set). | ✅ ~24 MB | | |
+| 9 | Window first frame < 150 ms | `search window first frame elapsed=` in `magi.log`, 10 samples. | ✅ 2026-09-29, max 57 ms | ✅ 2026-11-06 CI, worst 86 ms | |
+| 10 | Results < 400 ms after typing, warm | `search results after typing stopped elapsed=` | ✅ 2026-09-30, 154–214 ms | ✅ 2026-11-06 CI, 3 ms | |
+| 11 | Idle RSS ≤ 150 MB | Window closed, models unloaded; Task Manager › Details › Memory (private working set). | ✅ ~24 MB | ❌ 2026-11-06 CI: footprint 346 MB idle, no window, no models (RSS 525 MB) | |
 | 12 | Software rendering | See "No GPU" below. | not run | | |
 | 13 | Transparency effects | Off in the OS → search and settings are solid; turning it on/off **while settings is open** updates the window when you come back to it. | ✅ off → solid 2026-09-29; live change both ways 2026-10-11 (back to see-through ~3 s after refocus) | ⚠️ 2026-10-13 (v0.1.0 photos): dark search and settings see-through over the wallpaper; light settings looks solid near "Más transparente", check | |
 | 14 | Hotkey recorder | Settings › General › Change, press Ctrl+Alt+K: saved, works at once, no restart. Esc cancels. Same from onboarding's finish screen. | ⚠️ 2026-10-11 settings: recorded, works at once, Esc cancels; onboarding not run | | |
@@ -74,21 +74,21 @@ the date in `docs/progress.md`, plus a screenshot where it says so.
 - M1. Open the `.dmg`, drag Magi to Applications, open it. Note any
   Gatekeeper warning (ad-hoc signed, not notarized: right-click › Open is
   expected).
-- M2. ✅ 2026-10-13 no Dock icon (Cmd-Tab and the menu-bar icon not seen;
+- M2. ✅ 2026-11-06 CI. ✅ 2026-10-13 no Dock icon (Cmd-Tab and the menu-bar icon not seen;
   a menu-bar manager may have hidden it). No Dock icon and not in Cmd-Tab; the menu-bar icon is there.
   Screenshot the menu bar, light and dark (the icon is full colour; judge
   whether it looks out of place).
-- M3. Onboarding and Settings come to the front when opened from the menu
+- M3. ✅ 2026-11-06 CI. Onboarding and Settings come to the front when opened from the menu
   bar, not behind the browser.
 
 **Permissions (Files and Folders)**
 
 - M4. Add `~/Documents`: the system prompt shows Magi's reason text
   (screenshot it). Click **Don't Allow**.
-- M5. Settings › Folders: Documents says which permission is missing and
+- M5. ✅ 2026-11-06 CI (folder made unreadable; real prompt not seen). Settings › Folders: Documents says which permission is missing and
   shows "Open System Settings"; the button lands on Privacy & Security ›
   Files and Folders (screenshot).
-- M6. Grant access there. Within ~60 s Documents starts indexing with no
+- M6. ✅ 2026-11-06 CI. Grant access there. Within ~60 s Documents starts indexing with no
   restart or rescan.
 - M7. Add a folder outside the protected set that is denied (e.g. another
   user's folder, or `~/Library/Mail`): the guidance says Full Disk Access
@@ -99,21 +99,21 @@ the date in `docs/progress.md`, plus a screenshot where it says so.
 
 **Background behaviour**
 
-- M10. Force-quit Magi (Activity Monitor), relaunch: it starts, and
+- M10. ✅ 2026-11-06 CI. Force-quit Magi (Activity Monitor), relaunch: it starts, and
   `magi --toggle` (from the bundle: `/Applications/Magi.app/Contents/MacOS/magi --toggle`)
   opens search. This is the stale-socket fix.
-- M11. Shift+Cmd+Space opens and closes search (table row 1).
+- M11. ✅ 2026-11-06 CI. Shift+Cmd+Space opens and closes search (table row 1).
 - M12. iCloud Drive with "Optimize Mac Storage" and a file evicted
   (cloud icon): after indexing it is still a cloud file (not downloaded)
   and is found by its name.
 - M13. A folder on an SMB share: Settings says it is checked periodically,
   not watched; a file added on the share appears within a few minutes.
-- M14. A `.app` or `.photoslibrary` inside an indexed folder is one item,
+- M14. ✅ 2026-11-06 CI (after the bundle fix). A `.app` or `.photoslibrary` inside an indexed folder is one item,
   not its contents.
 - M15. ⚠️ 2026-10-13 status read "En pausa: con batería"; timing and
   resume on AC not seen. On battery with "Pause on battery" on: indexing pauses within 30 s,
   resumes on AC; the status says "Paused: on battery".
-- M16. Unplug a USB drive that is a root: it shows "missing", its results
+- M16. ✅ 2026-11-06 CI (disk image). Unplug a USB drive that is a root: it shows "missing", its results
   go; replug: it resumes with no re-embedding.
 - M17. Ten idle minutes with windows closed: memory (Activity Monitor ›
   Memory) back near the idle footprint (table row 11).
@@ -125,9 +125,9 @@ the date in `docs/progress.md`, plus a screenshot where it says so.
 - M19. Search and settings over a busy wallpaper, light and dark: the
   blur is real (see-through), the slider changes it; with System Settings ›
   Accessibility › Display › Reduce transparency on, both go solid (row 13).
-- M20. Type `canción` with the dead-key accent; also search a file whose
+- M20. ✅ 2026-11-06 CI. Type `canción` with the dead-key accent; also search a file whose
   name has an accent (macOS may store it decomposed).
-- M21. Launch at login on: a "background item added" notice appears once;
+- M21. ✅ 2026-11-06 CI. Launch at login on: a "background item added" notice appears once;
   after logging out and in, Magi runs with no window.
 
 Then the M6 table above, macOS column: rows 1–7, 9–11, 13–25 (8 is

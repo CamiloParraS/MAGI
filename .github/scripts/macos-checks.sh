@@ -248,6 +248,9 @@ open_windows=$(magi_windows)
 # closest to Windows' private working set. RSS also counts shared
 # frameworks and GPU-mapped memory, so it is printed but not graded.
 rss_mb=$(( $(ps -o rss= -p "$pid") / 1024 ))
+# Where the footprint goes, region by region (NFR-1 is unmet on macOS:
+# ~346 MB on 2026-11-06), kept in the artifact.
+vmmap --summary "$pid" > "$OUT/vmmap-idle.txt" 2>&1 || true
 footprint_mb=$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/ {
   v = $3; unit = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
   if (unit == "G") n *= 1024; else if (unit == "K") n /= 1024
