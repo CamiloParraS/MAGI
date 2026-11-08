@@ -18,6 +18,7 @@ use crate::search::hint::hint;
 use crate::search::state::{cause, explain_sources, shown_sources};
 use crate::theme::{self, Palette};
 
+mod fold;
 mod labels;
 
 use labels::{folder_name, row_label};
@@ -248,38 +249,27 @@ impl SearchView {
         let strong = state.strong_count();
         let mut rows: Vec<AnyElement> = rows.collect();
         if weak > 0 {
-            // Between the groups, so an open fold reads as a divider.
-            let label = match state.weak_open() {
-                true => s.weaker_hide.to_string(),
-                false => lang.plural(&s.weaker_matches, weak as u64),
-            };
-            let toggle = Button::new("weaker-matches")
-                .cursor_pointer()
-                .ghost()
-                .small()
-                .label(label)
-                .on_click(cx.listener(|this, _, _, cx| {
+            let label = lang.plural(&s.weaker_matches, weak as u64);
+            let divider = fold::divider(state.weak_open(), label, p).on_click(cx.listener(
+                |this, _, _, cx| {
                     this.state.toggle_weak();
                     cx.notify();
-                }));
+                },
+            ));
+            let nothing_close = (strong == 0).then(|| {
+                div()
+                    .px(px(13.))
+                    .pt(px(8.))
+                    .text_color(p.mute)
+                    .child(s.nothing_close)
+            });
             rows.insert(
                 strong,
                 div()
                     .flex()
                     .flex_col()
-                    .items_start()
-                    .px(px(7.))
-                    .py(px(4.))
-                    .when(strong == 0, |d| {
-                        d.child(
-                            div()
-                                .px(px(6.))
-                                .pb(px(4.))
-                                .text_color(p.mute)
-                                .child(s.nothing_close),
-                        )
-                    })
-                    .child(toggle)
+                    .children(nothing_close)
+                    .child(divider)
                     .into_any_element(),
             );
         }

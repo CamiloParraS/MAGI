@@ -44,7 +44,6 @@ pub struct Strings {
     pub no_match: &'static str,
     /// The fold under the good results: `{n}` weaker ones behind it.
     pub weaker_matches: Plural,
-    pub weaker_hide: &'static str,
     /// Above the fold when every result is in it.
     pub nothing_close: &'static str,
     /// Beside a result: `{n}` identical files elsewhere.

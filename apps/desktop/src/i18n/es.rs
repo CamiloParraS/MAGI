@@ -13,7 +13,6 @@ pub const STRINGS: Strings = Strings {
         one: "{n} coincidencia más débil",
         other: "{n} coincidencias más débiles",
     },
-    weaker_hide: "Ocultar coincidencias más débiles",
     nothing_close: "No se encontró nada muy relacionado.",
     other_copies: Plural {
         one: "+{n} copia",

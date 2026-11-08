@@ -13,7 +13,6 @@ pub const STRINGS: Strings = Strings {
         one: "{n} weaker match",
         other: "{n} weaker matches",
     },
-    weaker_hide: "Hide weaker matches",
     nothing_close: "Nothing closely related found.",
     other_copies: Plural {
         one: "+{n} copy",
