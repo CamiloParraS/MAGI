@@ -10,8 +10,8 @@ mod results;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{Copy as CopyText, Input, InputEvent, InputState};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{ErrorCode, FileDetails, SearchRequest};
 use magi_core::host::Host;
@@ -41,8 +41,8 @@ pub const WIDTH: Pixels = px(820.);
 /// The tallest the window gets. It opens with its top where a window this
 /// tall would be centered, then fits its content, growing downward.
 pub const MAX_HEIGHT: Pixels = px(560.);
-/// The opening height: the input row alone.
-pub const OPEN_HEIGHT: Pixels = px(58.);
+/// The opening height: the input row and the loading track under it.
+pub const OPEN_HEIGHT: Pixels = px(60.);
 const LIST_MAX_HEIGHT: Pixels = px(420.);
 /// The result list's width when the detail pane is on (`ui.detail_pane`);
 /// the pane takes the rest.
@@ -316,10 +316,49 @@ impl SearchView {
         cx.notify();
     }
 
-    /// The search has been loading past [`SLOW`]: the list dims and the bar
-    /// pulses.
+    /// The search has been loading past [`SLOW`]: the list dims, the icon
+    /// spins and the track sweeps.
     fn dimmed(&self) -> bool {
         self.state.is_loading() && self.slow
+    }
+
+    /// The magnifier, which becomes a spinner while a slow search runs: the
+    /// wait shows where the eye already is. Both fill the same 18 px box.
+    fn search_icon(&self, p: &Palette) -> Div {
+        let slot = div()
+            .flex_none()
+            .size(px(18.))
+            .flex()
+            .items_center()
+            .justify_center();
+        if self.dimmed() {
+            slot.child(Spinner::new().color(p.accent))
+        } else {
+            slot.child(Icon::new(IconName::Search).size(px(18.)).text_color(p.mute))
+        }
+    }
+
+    /// The 2 px strip under the input, always there so a search starting or
+    /// ending never moves the list. While a slow search runs, a short accent
+    /// segment sweeps along it; with reduced motion, a still bar stands in.
+    fn loading_track(&self, p: &Palette) -> Div {
+        let track = div().relative().w_full().h(px(2.)).overflow_hidden();
+        if !self.dimmed() {
+            return track;
+        }
+        let segment = div().absolute().top_0().h_full().bg(p.accent);
+        if magi_core::platform::reduce_motion() {
+            return track.child(segment.left_0().w_full().opacity(0.4));
+        }
+        track.child(
+            segment.w(relative(0.3)).with_animation(
+                "loading",
+                Animation::new(Duration::from_millis(1100))
+                    .repeat()
+                    .with_easing(ease_in_out),
+                |bar, t| bar.left(relative(t * 1.3 - 0.3)),
+            ),
+        )
     }
 
     /// Opens (or, with `reveal`, shows in the file manager) the selected
@@ -463,23 +502,13 @@ impl Render for SearchView {
                             .gap_3()
                             .px(px(18.))
                             .py(px(7.))
-                            .child(Icon::new(IconName::Search).size(px(18.)).text_color(p.mute))
+                            .child(self.search_icon(&p))
                             // The large size's own text size: its line box is
                             // fixed at 20 px, so bigger text clips descenders.
                             .child(Input::new(&self.input).appearance(false).large()),
                     )
                     .children(self.shortcut_hint(&p, cx))
-                    .when(self.dimmed(), |d| {
-                        d.child(
-                            div().h(px(2.)).bg(p.accent).with_animation(
-                                "loading",
-                                Animation::new(Duration::from_millis(1200))
-                                    .repeat()
-                                    .with_easing(pulsating_between(0.25, 0.5)),
-                                |bar, alpha| bar.opacity(alpha),
-                            ),
-                        )
-                    })
+                    .child(self.loading_track(&p))
                     .children(self.body(&p, cx))
                     .child(self.footer(&p, cx)),
             )
