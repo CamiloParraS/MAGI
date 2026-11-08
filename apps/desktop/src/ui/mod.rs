@@ -1,5 +1,6 @@
 //! Small building blocks every window draws with.
 
+pub mod folder_list;
 pub mod folders;
 pub mod keycaps;
 

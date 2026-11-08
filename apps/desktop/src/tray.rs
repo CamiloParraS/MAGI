@@ -9,8 +9,8 @@ use tray_icon::menu::accelerator::Accelerator;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use crate::hotkey::to_keystroke;
 use crate::i18n::Lang;
-use crate::settings::hotkey_keystroke;
 use crate::theme::Tone;
 use crate::ui::keycaps::shortcut_text;
 
@@ -166,7 +166,7 @@ impl Tray {
             tracing::warn!(%error, ?hotkey, "the tray could not show the hotkey");
         }
         let tooltip = hotkey
-            .and_then(|h| Keystroke::parse(&hotkey_keystroke(h)).ok())
+            .and_then(|h| Keystroke::parse(&to_keystroke(h)).ok())
             .map(|k| shortcut_text(&k, self.lang.strings(), SYMBOL_MODIFIERS))
             .map_or_else(|| "Magi".to_owned(), |keys| format!("Magi — {keys}"));
         if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {

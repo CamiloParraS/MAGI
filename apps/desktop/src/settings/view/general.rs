@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::{Field, SettingsView};
 use crate::app::AppEvent;
-use crate::settings::hotkey_keystroke;
+use crate::hotkey::{RecorderStep, change, recorder_step, to_keystroke};
 use crate::theme::Palette;
 use crate::ui::{card, grouped, note, row_icon, stack, subheading};
 
@@ -27,29 +27,22 @@ impl SettingsView {
     }
 
     pub fn record(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
-        if k.key == "escape" && !k.modifiers.modified() {
-            self.recording = false;
-            return cx.notify();
-        }
-        let Some(spec) = crate::hotkey::from_keystroke(k) else {
-            return;
+        let spec = match recorder_step(k) {
+            RecorderStep::Wait => return,
+            RecorderStep::Cancel => {
+                self.recording = false;
+                return cx.notify();
+            }
+            RecorderStep::Submit(spec) => spec,
         };
         self.recording = false;
         cx.notify();
-        let events = self.events.clone();
+        let (host, events) = (self.host.clone(), self.events.clone());
         cx.spawn_in(window, async move |this, cx| {
-            // ponytail: a failed save leaves the new hotkey registered until
-            // restart; re-register the old one if that ever matters.
-            if crate::app::register_hotkey(&events, spec.clone()).await {
+            let executor = cx.background_executor().clone();
+            if let Some(saved) = change(&events, host, spec, &executor).await {
                 let _ = this.update_in(cx, |view, window, cx| {
-                    if spec != view.ui.hotkey {
-                        view.save(
-                            Field::Hotkey,
-                            json!({ "ui": { "hotkey": spec } }),
-                            window,
-                            cx,
-                        );
-                    }
+                    view.finish_save(Field::Hotkey, saved, window, cx);
                 });
             }
         })
@@ -59,7 +52,7 @@ impl SettingsView {
     pub(super) fn general(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let s = live.lang.strings();
-        let kbd = |spec: &str| Keystroke::parse(&hotkey_keystroke(spec)).ok().map(Kbd::new);
+        let kbd = |spec: &str| Keystroke::parse(&to_keystroke(spec)).ok().map(Kbd::new);
         let recording = self.recording;
         let (problem, problem_note) = if magi_core::platform::is_wayland() {
             (s.shortcut_wayland, s.shortcut_wayland_note)

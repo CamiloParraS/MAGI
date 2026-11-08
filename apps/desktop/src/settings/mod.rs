@@ -19,9 +19,6 @@ use std::time::{Duration, Instant};
 use crate::i18n::{Lang, Strings};
 use crate::theme::{self, Backdrop, Tone};
 
-/// With no unreadable file listed, whether files are still to be read: queued
-/// (retried ones among them), or counted as errors by a status from before a
-/// retry. Until then the list cannot say every file was read.
 /// How long a stat tile's count takes to reach a new value.
 pub const ROLL: Duration = Duration::from_millis(200);
 
@@ -73,6 +70,9 @@ impl Roll {
     }
 }
 
+/// With no unreadable file listed, whether files are still to be read: queued
+/// (retried ones among them), or counted as errors by a status from before a
+/// retry. Until then the list cannot say every file was read.
 pub fn still_reading(status: Option<&IndexStatus>) -> bool {
     status.is_some_and(|st| st.queued > 0 || st.errors > 0)
 }
@@ -178,32 +178,6 @@ pub fn feature_action(f: &FeatureStatus) -> FeatureAction {
         Install::Failed { .. } => FeatureAction::Retry,
         _ => FeatureAction::Nothing,
     }
-}
-
-/// `ui.hotkey` (global-hotkey's `CmdOrCtrl+Shift+Space`) as a GPUI
-/// keystroke, which [`Kbd`](gpui_kit::component::kbd::Kbd) shows the
-/// platform's way.
-pub fn hotkey_keystroke(hotkey: &str) -> String {
-    hotkey
-        .split('+')
-        .map(|key| {
-            let key = key.to_lowercase();
-            match key.as_str() {
-                "cmdorctrl" | "cmdorcontrol" | "commandorctrl" | "commandorcontrol" => {
-                    "secondary".into()
-                }
-                "control" => "ctrl".into(),
-                "option" => "alt".into(),
-                "command" | "super" => "cmd".into(),
-                _ => key
-                    .strip_prefix("key")
-                    .or_else(|| key.strip_prefix("digit"))
-                    .filter(|rest| rest.len() == 1)
-                    .map_or_else(|| key.clone(), String::from),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-")
 }
 
 /// The "Results shown" choices, with the saved one even if it is not a

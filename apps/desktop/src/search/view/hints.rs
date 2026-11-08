@@ -7,8 +7,9 @@ use gpui_kit::*;
 use magi_core::features::Feature;
 
 use super::SearchView;
+use crate::hotkey::to_keystroke;
 use crate::search::hint::{Hint, teach_shortcut};
-use crate::settings::{hotkey_keystroke, turn_on};
+use crate::settings::turn_on;
 use crate::theme::{self, Palette};
 
 impl SearchView {
@@ -49,7 +50,7 @@ impl SearchView {
             .teach
             .as_ref()
             .filter(|_| show)
-            .and_then(|hotkey| Keystroke::parse(&hotkey_keystroke(hotkey)).ok())?;
+            .and_then(|hotkey| Keystroke::parse(&to_keystroke(hotkey)).ok())?;
         let hint = div()
             .flex()
             .items_center()

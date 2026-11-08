@@ -181,7 +181,7 @@ impl SettingsView {
     /// sections above it, opening the search window (or bringing it forward).
     /// The shortcut is in its tooltip: beside the label it would overflow.
     fn search_button(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> impl IntoElement {
-        let hotkey = Keystroke::parse(&crate::settings::hotkey_keystroke(&self.ui.hotkey))
+        let hotkey = Keystroke::parse(&crate::hotkey::to_keystroke(&self.ui.hotkey))
             .ok()
             .map(|k| shortcut_text(&k, s, SYMBOL_MODIFIERS));
         Button::new("open-search")

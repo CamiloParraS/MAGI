@@ -3,6 +3,7 @@
 
 use gpui_kit::component::select::SelectEvent;
 use gpui_kit::*;
+use magi_core::config::Config;
 use magi_core::dto::ErrorCode;
 use magi_core::host::Host;
 
@@ -55,7 +56,7 @@ impl SettingsView {
                 }
                 // A failed removal leaves its row working again.
                 if let (Field::Root(id), Err(_)) = (field, &done) {
-                    view.removing.retain(|&r| r != id);
+                    view.folder_list.removal_failed(id);
                 }
                 view.error = done.err().map(|error| {
                     tracing::warn!(%error, ?field, "a change failed");
@@ -86,28 +87,39 @@ impl SettingsView {
                 .spawn(async move { host.update_settings(&patch) })
                 .await;
             let _ = this.update_in(cx, |view, window, cx| {
-                match saved {
-                    Ok(config) => {
-                        view.error = None;
-                        if matches!(field, Field::MaxSize | Field::Excludes) {
-                            view.flash_saved(field, cx);
-                        }
-                        view.indexing = config.indexing;
-                        view.ui = config.ui.clone();
-                        let _ = view.events.try_send(AppEvent::Ui(config.ui));
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "a settings change failed");
-                        view.error = Some((field, ErrorCode::from(&error)));
-                    }
-                }
-                // The controls show what is saved: the rounded amount, or the
-                // old values when the save failed.
-                view.sync_controls(window, cx);
-                cx.notify();
+                view.finish_save(field, saved, window, cx);
             });
         })
         .detach();
+    }
+
+    /// Shows how a save ended; on success the shell gets the new `ui`.
+    pub(super) fn finish_save(
+        &mut self,
+        field: Field,
+        saved: magi_core::Result<Config>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match saved {
+            Ok(config) => {
+                self.error = None;
+                if matches!(field, Field::MaxSize | Field::Excludes) {
+                    self.flash_saved(field, cx);
+                }
+                self.indexing = config.indexing;
+                self.ui = config.ui.clone();
+                let _ = self.events.try_send(AppEvent::Ui(config.ui));
+            }
+            Err(error) => {
+                tracing::warn!(%error, "a settings change failed");
+                self.error = Some((field, ErrorCode::from(&error)));
+            }
+        }
+        // The controls show what is saved: the rounded amount, or the old
+        // values when the save failed.
+        self.sync_controls(window, cx);
+        cx.notify();
     }
 
     /// Shows `field` as saved for a moment.

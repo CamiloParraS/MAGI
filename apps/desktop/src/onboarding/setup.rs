@@ -1,7 +1,6 @@
 //! The setup screen: folders on the left; features, startup and the strip
 //! on the right.
 
-use std::path::Path;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -10,23 +9,24 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::config::FeaturesConfig;
 use magi_core::dto::{Install, RootStatus};
 
 use super::{OnboardingView, frame::STEP_IN};
 use crate::i18n::Strings;
-use crate::settings::{guidance_of, root_explain, root_state};
-use crate::theme::{self, Palette, Tone};
-use crate::ui::folders::{add_folder_row, drop_zone, folder_name, suggested_folders, suggestions};
+use crate::settings::root_explain;
+use crate::theme::Palette;
+use crate::ui::folder_list::{RootRow, RowParts, root_row};
+use crate::ui::folders::{
+    accept_dropped_folders, add_folder_row, drop_zone, suggested_folders, suggestions,
+};
 use crate::ui::{divider, feature_icon, group, grouped, heading, note, row_icon, scan_row};
 
 impl OnboardingView {
     /// FR-10's permission check: each folder's status says whether Magi can
     /// read it. With none yet, a drop zone; folders can be dropped either way.
     pub(super) fn folders(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        let accent = p.accent;
         let roots = self.roots(cx).filter(|roots| !roots.is_empty());
         let body = match roots {
             None => drop_zone(s, p, cx.listener(|this, _, _, cx| this.add_folder(cx))),
@@ -74,14 +74,7 @@ impl OnboardingView {
             // A just-added folder says it is being walked and read: silence
             // here reads as an app that did nothing.
             .children(scan_row(self.live.read(cx), p))
-            .child(
-                body.drag_over::<ExternalPaths>(move |style, _, _, _| {
-                    style.border_color(accent).bg(accent.opacity(0.08))
-                })
-                .on_drop(
-                    cx.listener(|this, paths: &ExternalPaths, _, cx| this.drop_folders(paths, cx)),
-                ),
-            )
+            .child(accept_dropped_folders(body, p, cx, Self::add_folders))
             .children(chips)
     }
 
@@ -92,92 +85,40 @@ impl OnboardingView {
         p: &Palette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let (badge, tone, _) = root_state(root, s);
         let live = self.live.read(cx);
         let explain = root_explain(root, &live.permissions, s, live.lang);
-        let settings_url = root
-            .enabled
-            .then(|| guidance_of(root, &live.permissions)?.settings_url())
-            .flatten();
+        let row = RootRow::new(root, explain, &live.permissions, &self.folder_list, s);
         let id = root.id;
-        let removing = self.removing.contains(&id);
-        let icon = match tone {
-            Tone::Warn | Tone::Err => Icon::new(IconName::TriangleAlert).text_color(p.tone(tone)),
-            _ => Icon::new(IconName::Folder).text_color(p.accent),
-        };
-        // Spaced as `row`: the folder's name, its parent under it, as file
-        // managers show folders.
-        let path = Path::new(&root.path);
-        let parent = path.parent().map(|parent| parent.display().to_string());
-        let row = crate::ui::row()
-            .child(icon.size(px(18.)).flex_none())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(folder_name(path)),
-                    )
-                    .children(parent.map(|parent| {
-                        note(p)
-                            .mt_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis_middle()
-                            .child(parent)
-                    }))
-                    .children(explain.map(|e| note(p).child(e)))
-                    .children(settings_url.map(|url| {
-                        Button::new(("open-system-settings", id as u64))
-                            .cursor_pointer()
-                            .small()
-                            .mt(px(6.))
-                            .label(s.open_system_settings)
-                            .on_click(move |_, _, cx| cx.open_url(url))
-                    })),
-            )
-            .children(badge.map(|badge| p.status(badge, tone)))
-            // A rescan probes each root again: a fixed permission or
-            // a reconnected drive clears the badge.
-            .when(matches!(tone, Tone::Warn | Tone::Err), |row| {
-                row.child(
-                    Button::new(("retry-root", id as u64))
-                        .cursor_pointer()
-                        .ghost()
-                        .small()
-                        .label(s.try_again)
-                        .disabled(removing)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.run_root(|host| host.engine().map(|e| drop(e.rescan())), cx);
-                        })),
-                )
-            })
-            .child(
-                // Minus, not a trash can: it only leaves Magi's list.
-                Button::new(("remove-root", id as u64))
-                    .cursor_pointer()
-                    .ghost()
-                    .small()
-                    .icon(IconName::Minus)
-                    .tooltip(s.remove)
-                    .accessibility_label(format!("{} {}", s.remove, root.path))
-                    // A spinner in the minus's place; it takes no clicks.
-                    .loading(removing)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.removing.push(id);
-                        cx.notify();
-                        this.run_root(move |host| host.engine()?.remove_root(id), cx);
-                    })),
-            );
-        if removing {
-            theme::dim(row, ("removing-root", id as u64)).into_any_element()
-        } else {
-            row.into_any_element()
-        }
+        // A rescan probes each root again: a fixed permission or a
+        // reconnected drive clears the badge.
+        let retry = row.has_trouble().then(|| {
+            Button::new(("retry-root", id as u64))
+                .cursor_pointer()
+                .ghost()
+                .small()
+                .label(s.try_again)
+                .disabled(row.removing())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_root(|host| host.engine().map(|e| drop(e.rescan())), cx);
+                }))
+                .into_any_element()
+        });
+        root_row(
+            row,
+            RowParts {
+                base: crate::ui::row(),
+                fade_badge: false,
+                problem: None,
+                controls: retry.into_iter().collect(),
+                on_remove: cx.listener(move |this, _, _, cx| {
+                    this.folder_list.start_removing(id);
+                    cx.notify();
+                    this.run_root(move |host| host.engine()?.remove_root(id), cx);
+                }),
+            },
+            s,
+            p,
+        )
     }
 
     /// The download consent (FR-10, ADR-0010): each feature's exact size;

@@ -9,12 +9,11 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{ErrorCode, Install};
-use serde_json::json;
 
-use super::{OnboardingView, Readiness, progress, readiness, save_step};
+use super::{OnboardingView, Readiness, progress, readiness};
 use crate::app::AppEvent;
+use crate::hotkey::{RecorderStep, change, recorder_step, to_keystroke};
 use crate::i18n::Strings;
-use crate::settings::hotkey_keystroke;
 use crate::theme::{self, Palette, Tone};
 use crate::ui::keycaps::{key_caps, keycap};
 use crate::ui::{card, heading, note, warn_note};
@@ -36,27 +35,33 @@ impl OnboardingView {
     /// The finish step's Change: the recorder takes the next shortcut, as
     /// in settings; the shell registers it before it is saved (FR-7).
     pub fn record(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(spec) = crate::hotkey::from_keystroke(k) else {
-            return;
+        let spec = match recorder_step(k) {
+            RecorderStep::Wait => return,
+            RecorderStep::Cancel => {
+                self.recording = false;
+                window.focus(&self.focus, cx);
+                return cx.notify();
+            }
+            RecorderStep::Submit(spec) => spec,
         };
         self.recording = false;
         cx.notify();
         let (host, events) = (self.host.clone(), self.events.clone());
         cx.spawn_in(window, async move |this, cx| {
-            if !crate::app::register_hotkey(&events, spec.clone()).await {
+            let executor = cx.background_executor().clone();
+            let Some(saved) = change(&events, host, spec, &executor).await else {
                 return;
-            }
-            let saved = cx
-                .background_executor()
-                .spawn(async move { save_step(&host, json!({ "hotkey": spec })) })
-                .await;
+            };
             let _ = this.update(cx, |view, cx| {
                 match saved {
-                    Ok(ui) => {
-                        view.hotkey = ui.hotkey.clone();
-                        let _ = view.events.try_send(AppEvent::Ui(ui));
+                    Ok(config) => {
+                        view.hotkey = config.ui.hotkey.clone();
+                        let _ = view.events.try_send(AppEvent::Ui(config.ui));
                     }
-                    Err(error) => view.error = Some(ErrorCode::from(&error)),
+                    Err(error) => {
+                        tracing::warn!(%error, "could not save the hotkey");
+                        view.error = Some(ErrorCode::from(&error));
+                    }
                 }
                 cx.notify();
             });
@@ -145,7 +150,7 @@ impl OnboardingView {
                     ),
             );
         let recording = self.recording;
-        let caps = Keystroke::parse(&hotkey_keystroke(&self.hotkey))
+        let caps = Keystroke::parse(&to_keystroke(&self.hotkey))
             .map(|k| key_caps(&k, s, magi_core::platform::SYMBOL_MODIFIERS, &self.held))
             .unwrap_or_default();
         let (last, presses) = (

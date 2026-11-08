@@ -3,11 +3,88 @@
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use gpui_kit::Keystroke;
+use gpui_kit::{BackgroundExecutor, Keystroke};
+use magi_core::config::Config;
+use magi_core::host::Host;
+use serde_json::json;
+
+use crate::app::{AppEvent, Events};
 
 /// Accepts the Tauri-style strings the config uses (`CmdOrCtrl+Shift+Space`).
 pub fn parse(spec: &str) -> Result<HotKey, String> {
     spec.parse::<HotKey>().map_err(|e| e.to_string())
+}
+
+/// `ui.hotkey` (global-hotkey's `CmdOrCtrl+Shift+Space`) as a GPUI
+/// keystroke, which [`Kbd`](gpui_kit::component::kbd::Kbd) shows the
+/// platform's way.
+pub fn to_keystroke(hotkey: &str) -> String {
+    hotkey
+        .split('+')
+        .map(|key| {
+            let key = key.to_lowercase();
+            match key.as_str() {
+                "cmdorctrl" | "cmdorcontrol" | "commandorctrl" | "commandorcontrol" => {
+                    "secondary".into()
+                }
+                "control" => "ctrl".into(),
+                "option" => "alt".into(),
+                "command" | "super" => "cmd".into(),
+                _ => key
+                    .strip_prefix("key")
+                    .or_else(|| key.strip_prefix("digit"))
+                    .filter(|rest| rest.len() == 1)
+                    .map_or_else(|| key.clone(), String::from),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// What a key pressed in a shortcut recorder does.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecorderStep {
+    Cancel,
+    /// A modifier still held, or plain typing.
+    Wait,
+    Submit(String),
+}
+
+pub fn recorder_step(keystroke: &Keystroke) -> RecorderStep {
+    if keystroke.key == "escape" && !keystroke.modifiers.modified() {
+        return RecorderStep::Cancel;
+    }
+    from_keystroke(keystroke).map_or(RecorderStep::Wait, RecorderStep::Submit)
+}
+
+/// Asks the shell to register `spec` in place of the hotkey (FR-7 conflict
+/// detection); true when it did.
+async fn register(events: &Events, spec: String) -> bool {
+    let (reply, registered) = async_channel::bounded(1);
+    events.send(AppEvent::Hotkey(spec, reply)).await.is_ok() && registered.recv().await == Ok(true)
+}
+
+/// Registers `spec`, then saves it only if that worked. `None` when it was
+/// refused (the shell has recorded the conflict); the caller publishes a
+/// saved config.
+///
+/// ponytail: a failed save leaves the new hotkey registered until restart;
+/// re-register the old one if that ever matters.
+pub async fn change(
+    events: &Events,
+    host: Host,
+    spec: String,
+    executor: &BackgroundExecutor,
+) -> Option<magi_core::Result<Config>> {
+    if !register(events, spec.clone()).await {
+        return None;
+    }
+    let patch = json!({ "ui": { "hotkey": spec } });
+    Some(
+        executor
+            .spawn(async move { host.update_settings(&patch) })
+            .await,
+    )
 }
 
 /// A keystroke pressed in the settings recorder as a `ui.hotkey` value, or
@@ -100,6 +177,38 @@ mod tests {
 
     fn recorded(key: &str) -> Option<String> {
         from_keystroke(&gpui_kit::Keystroke::parse(key).unwrap())
+    }
+
+    fn step(key: &str) -> RecorderStep {
+        recorder_step(&gpui_kit::Keystroke::parse(key).unwrap())
+    }
+
+    #[test]
+    fn the_recorder_cancels_on_escape_and_waits_for_a_usable_shortcut() {
+        assert_eq!(step("escape"), RecorderStep::Cancel);
+        assert_eq!(step("shift-k"), RecorderStep::Wait);
+        assert_eq!(
+            step("ctrl-escape"),
+            RecorderStep::Submit("Ctrl+Escape".into()),
+            "only a bare Esc cancels"
+        );
+        assert_eq!(step("alt-k"), RecorderStep::Submit("Alt+K".into()));
+    }
+
+    #[test]
+    fn the_hotkey_setting_becomes_a_gpui_keystroke() {
+        assert_eq!(
+            to_keystroke("CmdOrCtrl+Shift+Space"),
+            "secondary-shift-space"
+        );
+        assert_eq!(to_keystroke("Alt+K"), "alt-k");
+        assert_eq!(
+            to_keystroke("Control+Option+KeyK"),
+            "ctrl-alt-k",
+            "global-hotkey's other spellings"
+        );
+        assert_eq!(to_keystroke("CommandOrControl+Digit1"), "secondary-1");
+        assert_eq!(to_keystroke("Command+Space"), "cmd-space");
     }
 
     #[test]

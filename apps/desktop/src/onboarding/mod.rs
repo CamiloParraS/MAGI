@@ -23,7 +23,8 @@ use crate::app::{AppEvent, Events};
 use crate::live::Live;
 use crate::settings::turn_on;
 use crate::theme;
-use crate::ui::folders::pick_folders;
+use crate::ui::folder_list::FolderList;
+use crate::ui::folders::{add_roots, pick_and_add};
 
 pub const SIZE: Size<Pixels> = size(px(880.), px(600.));
 /// The smallest the window resizes to: below this width the two columns and
@@ -79,8 +80,7 @@ pub struct OnboardingView {
     launch_at_login: bool,
     /// Documents, Desktop and Pictures, offered with one click.
     user_folders: Vec<PathBuf>,
-    /// The roots when the window opened, shown until the first status.
-    opening_roots: Option<Vec<RootStatus>>,
+    folder_list: FolderList,
     /// `ui.hotkey`, shown on the background step.
     hotkey: String,
     /// A step's change running; Continue waits for it.
@@ -100,9 +100,6 @@ pub struct OnboardingView {
     focus: FocusHandle,
     /// The folder list's scroll, shared with its scrollbar.
     scroll: ScrollHandle,
-    /// Roots being removed: dimmed, their buttons off, until the list no
-    /// longer has them.
-    removing: Vec<i64>,
     /// Focused while the finish step's shortcut recorder waits for keys.
     recorder: FocusHandle,
     recording: bool,
@@ -125,10 +122,7 @@ impl OnboardingView {
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
             .map(|c| c.ui)
             .unwrap_or_default();
-        let opening_roots = host
-            .list_roots()
-            .inspect_err(|error| tracing::warn!(%error, "could not list the roots"))
-            .ok();
+        let folder_list = FolderList::open(&host);
         let subscriptions = vec![
             cx.observe_in(&live, window, |this, _, window, cx| {
                 this.prune_removing(cx);
@@ -155,7 +149,7 @@ impl OnboardingView {
             chosen: None,
             launch_at_login: true,
             user_folders: magi_core::paths::user_folders(),
-            opening_roots,
+            folder_list,
             hotkey: ui.hotkey,
             busy: false,
             error: None,
@@ -165,7 +159,6 @@ impl OnboardingView {
             was_preparing: Default::default(),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            removing: Vec::new(),
             recorder: cx.focus_handle(),
             recording: false,
             held: Modifiers::default(),
@@ -187,12 +180,7 @@ impl OnboardingView {
     }
 
     fn roots<'a>(&'a self, cx: &'a App) -> Option<&'a Vec<RootStatus>> {
-        self.live
-            .read(cx)
-            .status
-            .as_ref()
-            .map(|status| &status.roots)
-            .or(self.opening_roots.as_ref())
+        self.folder_list.roots(self.live.read(cx).status.as_ref())
     }
 
     /// From the same features the step shows, so the consent covers exactly
@@ -317,12 +305,8 @@ impl OnboardingView {
         .detach();
     }
 
-    /// Forgets the removals the folder list has caught up with.
     fn prune_removing(&mut self, cx: &App) {
-        let ids: Vec<i64> = self.roots(cx).map_or(Vec::new(), |roots| {
-            roots.iter().map(|root| root.id).collect()
-        });
-        self.removing.retain(|id| ids.contains(id));
+        self.folder_list.prune(self.live.read(cx).status.as_ref());
     }
 
     /// A root change; the next status shows it, or the error says why not.
@@ -341,14 +325,14 @@ impl OnboardingView {
                 match done {
                     Ok(roots) => {
                         view.error = None;
-                        view.opening_roots = Some(roots);
+                        view.folder_list.set_opening(roots);
                         view.prune_removing(cx);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "a folder change failed");
                         view.error = Some(ErrorCode::from(&error));
                         // The rows still there work again.
-                        view.removing.clear();
+                        view.folder_list.all_removals_failed();
                     }
                 }
                 cx.notify();
@@ -358,33 +342,11 @@ impl OnboardingView {
     }
 
     fn add_folder(&mut self, cx: &mut Context<Self>) {
-        let picked = pick_folders(cx);
-        cx.spawn(async move |this, cx| {
-            let paths = picked.await;
-            if !paths.is_empty() {
-                let _ = this.update(cx, |view, cx| view.add_folders(paths, cx));
-            }
-        })
-        .detach();
-    }
-
-    /// Folders dropped from the file manager: the user picking them, as
-    /// with the picker. Dropped files are ignored.
-    fn drop_folders(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        self.add_folders(paths.paths().to_vec(), cx);
+        pick_and_add(cx, Self::add_folders);
     }
 
     fn add_folders(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        self.run_root(
-            move |host| {
-                let engine = host.engine()?;
-                for path in paths.iter().filter(|p| p.is_dir()) {
-                    engine.add_root(path)?;
-                }
-                Ok(())
-            },
-            cx,
-        );
+        self.run_root(move |host| add_roots(host, &paths), cx);
     }
 }
 

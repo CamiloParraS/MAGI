@@ -34,6 +34,7 @@ mod index;
 mod nav;
 mod rows;
 mod save;
+mod sync;
 mod what_to_index;
 
 use nav::Section;
@@ -43,7 +44,7 @@ use gpui_kit::component::select::SelectState;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
-use magi_core::dto::{ErrorCode, FileError, RootStatus};
+use magi_core::dto::{ErrorCode, FileError};
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
@@ -55,11 +56,10 @@ use super::{Roll, slider_from_intensity};
 use crate::app::Events;
 use crate::i18n::Lang;
 use crate::live::Live;
-use crate::theme::{self, Backdrop, Palette};
+use crate::theme::{self, Palette};
+use crate::ui::folder_list::FolderList;
 use crate::ui::heading;
-use choices::{
-    Dropdown, THEMES, background_choices, count_choices, language_choices, theme_choices,
-};
+use choices::{Dropdown, background_choices, count_choices, language_choices, theme_choices};
 
 pub const SIZE: Size<Pixels> = size(px(900.), px(620.));
 /// The smallest the window resizes to. The Appearance slider row (label,
@@ -137,8 +137,7 @@ pub struct SettingsView {
     /// Back to the top on every section change.
     pane_scroll: ScrollHandle,
     dark: bool,
-    /// The roots when the window opened, shown until the first status.
-    opening_roots: Option<Vec<RootStatus>>,
+    folder_list: FolderList,
     /// Offered for one-click adding, as in onboarding.
     user_folders: Vec<std::path::PathBuf>,
     /// Read when the Index section opens, after its actions, and when the
@@ -152,9 +151,6 @@ pub struct SettingsView {
     /// The text field whose change just saved, for a moment: those save on
     /// Enter, blur or Save and show nothing else.
     saved: Option<Field>,
-    /// Roots being removed: dimmed, their controls off, until the list no
-    /// longer has them.
-    removing: Vec<i64>,
     /// Changes still running, one entry per run: their buttons spin and
     /// take no clicks until the change ends.
     busy: Vec<Field>,
@@ -185,9 +181,8 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // ponytail: this and `list_roots` below are small reads on the main
-        // thread; move them to the background executor if they ever show up
-        // in a frame trace.
+        // ponytail: a small read on the main thread; move it to the background
+        // executor if it ever shows up in a frame trace.
         let config = host
             .settings()
             .inspect_err(|error| tracing::warn!(%error, "could not read the settings"))
@@ -242,10 +237,7 @@ impl SettingsView {
                     this.load_unreadable(cx);
                 }
                 // Removals the list has caught up with.
-                if let Some(status) = &live.read(cx).status {
-                    this.removing
-                        .retain(|id| status.roots.iter().any(|root| root.id == *id));
-                }
+                this.folder_list.prune(live.read(cx).status.as_ref());
                 cx.notify();
             }),
             Self::save_on_confirm(
@@ -316,10 +308,7 @@ impl SettingsView {
                 }
             }),
         ];
-        let opening_roots = host
-            .list_roots()
-            .inspect_err(|error| tracing::warn!(%error, "could not list the roots"))
-            .ok();
+        let folder_list = FolderList::open(&host);
         let mut view = Self {
             host,
             live,
@@ -346,13 +335,12 @@ impl SettingsView {
             advanced_flips: 0,
             pane_scroll: ScrollHandle::new(),
             dark: false,
-            opening_roots,
+            folder_list,
             user_folders: magi_core::paths::user_folders(),
             unreadable: None,
             errors_listed: None,
             error: None,
             saved: None,
-            removing: Vec::new(),
             busy: Vec::new(),
             version_taps: (0, None),
             _subscriptions: subscriptions,
@@ -370,65 +358,6 @@ impl SettingsView {
             view.show(Section::Index, cx);
         }
         view
-    }
-
-    /// The window's background, from the saved settings (like the search
-    /// window's).
-    fn backdrop(&self) -> Backdrop {
-        theme::backdrop(
-            self.ui.transparency_mode,
-            self.ui.transparency_intensity,
-            self.support,
-        )
-    }
-
-    /// Makes the General and Appearance controls and the window background
-    /// show the saved settings.
-    fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.set_background_appearance(theme::window_background(self.backdrop()));
-        let (language, mode, count) = (
-            self.ui.language,
-            self.ui.transparency_mode,
-            self.ui.max_results,
-        );
-        let theme = THEMES
-            .into_iter()
-            .find(|&t| t == self.ui.theme)
-            .unwrap_or(THEMES[0]);
-        let see_through = slider_from_intensity(self.ui.transparency_intensity);
-        let lang = self.lang;
-        self.language
-            .update(cx, |d, cx| d.set_selected_value(&language, window, cx));
-        self.results.update(cx, |d, cx| {
-            d.set_items(count_choices(lang, count), window, cx);
-            d.set_selected_value(&count, window, cx);
-        });
-        self.theme_choice
-            .update(cx, |d, cx| d.set_selected_value(&theme, window, cx));
-        self.background
-            .update(cx, |d, cx| d.set_selected_value(&mode, window, cx));
-        self.see_through
-            .update(cx, |slider, cx| slider.set_value(see_through, window, cx));
-    }
-
-    /// A live language switch: the window title and the dropdown labels.
-    fn relabel(&mut self, lang: Lang, window: &mut Window, cx: &mut Context<Self>) {
-        let s = lang.strings();
-        self.lang = lang;
-        window.set_window_title(s.settings);
-        self.language
-            .update(cx, |d, cx| d.set_items(language_choices(s), window, cx));
-        self.theme_choice
-            .update(cx, |d, cx| d.set_items(theme_choices(s), window, cx));
-        self.background
-            .update(cx, |d, cx| d.set_items(background_choices(s), window, cx));
-        self.sync_controls(window, cx);
-    }
-
-    fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.theme = self.live.read(cx).theme.clone();
-        self.dark = theme::sync(&self.theme, window, cx);
-        cx.notify();
     }
 
     /// The row showing a failed change, if any.

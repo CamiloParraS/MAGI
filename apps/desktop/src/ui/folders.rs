@@ -9,6 +9,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::RootStatus;
+use magi_core::host::Host;
 
 use super::{PRESS, note, pressable};
 use crate::i18n::Strings;
@@ -32,6 +33,50 @@ pub(crate) fn pick_folders(cx: &App) -> impl Future<Output = Vec<std::path::Path
             _ => Vec::new(),
         }
     }
+}
+
+/// The native picker, then `add` with the folders chosen, if any.
+pub(crate) fn pick_and_add<V: 'static>(
+    cx: &mut Context<V>,
+    add: fn(&mut V, Vec<PathBuf>, &mut Context<V>),
+) {
+    let picked = pick_folders(cx);
+    cx.spawn(async move |this, cx| {
+        let paths = picked.await;
+        if !paths.is_empty() {
+            let _ = this.update(cx, |view, cx| add(view, paths, cx));
+        }
+    })
+    .detach();
+}
+
+/// Makes `body` take folders dropped from the file manager, the user
+/// picking them as with the picker.
+pub(crate) fn accept_dropped_folders<V: 'static>(
+    body: Div,
+    p: &Palette,
+    cx: &Context<V>,
+    add: fn(&mut V, Vec<PathBuf>, &mut Context<V>),
+) -> Div {
+    let accent = p.accent;
+    body.drag_over::<ExternalPaths>(move |style, _, _, _| {
+        style.border_color(accent).bg(accent.opacity(0.08))
+    })
+    .on_drop(
+        cx.listener(move |this, paths: &ExternalPaths, _, cx| {
+            add(this, paths.paths().to_vec(), cx)
+        }),
+    )
+}
+
+/// Adds the folders among `paths`; dropped files are ignored. Blocking: run
+/// it on the background executor.
+pub(crate) fn add_roots(host: &Host, paths: &[PathBuf]) -> magi_core::Result<()> {
+    let engine = host.engine()?;
+    for path in paths.iter().filter(|p| p.is_dir()) {
+        engine.add_root(path)?;
+    }
+    Ok(())
 }
 
 /// The user's folders still worth offering: not chosen, and not inside a

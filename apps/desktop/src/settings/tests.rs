@@ -164,22 +164,6 @@ fn a_feature_offers_the_one_action_that_fits() {
 }
 
 #[test]
-fn the_hotkey_setting_becomes_a_gpui_keystroke() {
-    assert_eq!(
-        hotkey_keystroke("CmdOrCtrl+Shift+Space"),
-        "secondary-shift-space"
-    );
-    assert_eq!(hotkey_keystroke("Alt+K"), "alt-k");
-    assert_eq!(
-        hotkey_keystroke("Control+Option+KeyK"),
-        "ctrl-alt-k",
-        "global-hotkey's other spellings"
-    );
-    assert_eq!(hotkey_keystroke("CommandOrControl+Digit1"), "secondary-1");
-    assert_eq!(hotkey_keystroke("Command+Space"), "cmd-space");
-}
-
-#[test]
 fn result_counts_keep_the_saved_one() {
     assert_eq!(result_counts(30), vec![10, 20, 30, 50, 100]);
     assert_eq!(result_counts(42), vec![10, 20, 30, 42, 50, 100]);
