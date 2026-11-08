@@ -7,6 +7,8 @@ use rusqlite::{Connection, params};
 use crate::db::roots::searchable_sql;
 use crate::embed::embedding_to_blob;
 use crate::error::Result;
+use crate::extract::ChunkSource;
+use crate::search::opaque::is_opaque_name;
 use crate::search::{FileHit, chunk_fetch_limit, first_hit_per_file};
 
 /// Runs a `vec_text` KNN search and returns up to `limit` files, closest
@@ -61,7 +63,9 @@ fn unit_l2_to_cosine(distance: f64) -> f64 {
 }
 
 /// `vec_text`'s `chunk_k` nearest chunks joined to their files, sorted by
-/// distance then chunk id, with each row's distance.
+/// distance then chunk id, with each row's distance. The filename chunk of a
+/// name with no word in it is left out, so the file only appears through
+/// chunks that have something to say.
 fn text_rows(
     conn: &Connection,
     query_embedding: &[f32],
@@ -120,6 +124,9 @@ fn text_rows(
     });
     Ok(rows
         .into_iter()
+        .filter(|(hit, _, _)| {
+            hit.source != Some(ChunkSource::Filename) || !is_opaque_name(&hit.file_name)
+        })
         .map(|(hit, distance, _)| (hit, distance))
         .collect())
 }
@@ -209,6 +216,7 @@ mod tests {
     use crate::db::files::{FileRecord, upsert_file};
     use crate::embed::{FakeEmbedder, TextEmbedder};
     use crate::extract::RawChunk;
+    use crate::extract::filename::filename_chunk;
 
     fn open_test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -219,6 +227,14 @@ mod tests {
     }
 
     fn index_text(conn: &mut Connection, path: &str, body: &str) {
+        index_chunks(conn, path, vec![RawChunk::body(body.to_string())]);
+    }
+
+    fn name_chunk(name: &str) -> RawChunk {
+        filename_chunk(std::path::Path::new(name))
+    }
+
+    fn index_chunks(conn: &mut Connection, path: &str, chunks: Vec<RawChunk>) {
         let path_buf = PathBuf::from(path);
         let rel = PathBuf::from(std::path::Path::new(path).file_name().unwrap());
         let record = FileRecord {
@@ -228,7 +244,7 @@ mod tests {
             file_name: rel.to_str().unwrap(),
             ext: Some("txt"),
             kind: "text",
-            size: body.len() as u64,
+            size: 1,
             mtime_ns: 0,
             lang: None,
             state: crate::db::files::FileState::Indexed,
@@ -239,9 +255,49 @@ mod tests {
             thumb_key: None,
             features_missing: 0,
         };
-        let chunks = vec![RawChunk::body(body.to_string())];
-        let embeddings = FakeEmbedder.embed_passages(&[body]).unwrap();
+        let embeddings = FakeEmbedder
+            .embed_passages(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>())
+            .unwrap();
         upsert_file(conn, &record, &chunks, Some(&embeddings), None).unwrap();
+    }
+
+    #[test]
+    fn a_name_with_no_word_is_not_a_meaning_match() {
+        let (_dir, mut conn) = open_test_db();
+        index_chunks(
+            &mut conn,
+            "/roots/a/IMG_0494.JPG",
+            vec![name_chunk("IMG_0494.JPG")],
+        );
+        let text = name_chunk("IMG_0494.JPG").text;
+        let query = FakeEmbedder.embed_query(&text).unwrap();
+        assert!(search_vector_text(&conn, &query, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_name_with_a_word_is_a_meaning_match() {
+        let (_dir, mut conn) = open_test_db();
+        index_chunks(&mut conn, "/roots/a/dog.jpg", vec![name_chunk("dog.jpg")]);
+        let text = name_chunk("dog.jpg").text;
+        let query = FakeEmbedder.embed_query(&text).unwrap();
+        assert_eq!(search_vector_text(&conn, &query, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_opaque_file_is_still_found_by_its_other_chunks() {
+        let (_dir, mut conn) = open_test_db();
+        index_chunks(
+            &mut conn,
+            "/roots/a/5f705a2e.pdf",
+            vec![
+                name_chunk("5f705a2e.pdf"),
+                RawChunk::body("rent contract".to_string()),
+            ],
+        );
+        let query = FakeEmbedder.embed_query("rent contract").unwrap();
+        let hits = search_vector_text(&conn, &query, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, Some(ChunkSource::Body));
     }
 
     #[test]

@@ -170,6 +170,11 @@ meaning alone below `TEXT_STRONG_COSINE` (0.80) is weak, decided after fusion
 because a floor on the list itself costs photos their deep text-vector ranks
 (docs/eval.md). The floor is calibrated to e5; recalibrate it with the model.
 
+`search::vector` ignores the filename chunk of a name with no word in it
+(`search::opaque`: digits, hashes, UUIDs, camera names like `IMG_0494.JPG`).
+The vector stays stored, so no re-index is needed. These names are still found
+by keyword and through the file's other chunks.
+
 ## Chunking
 
 `chunk::chunk_text` is token-aware (SPEC.md §7 M3): it splits on word

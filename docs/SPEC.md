@@ -638,7 +638,7 @@ Rules:
 1. **Sanitize** the query for FTS5. Escape quotes, and wrap each term in double quotes so user input can never inject FTS syntax.
 2. Run in parallel:
    - (a) FTS5 BM25, top 100 chunks.
-   - (b) `vec_text` KNN, top 100, using `"query: " + q` through e5.
+   - (b) `vec_text` KNN, top 100, using `"query: " + q` through e5. Filename chunks of names with no word in them (`IMG_0494.JPG`, hashes) are dropped from these rows.
    - (c) `vec_image` KNN, top 50, using the SigLIP text tower.
 3. **Aggregate to files:** each file's score in each list is its best chunk rank.
 4. **Fuse** with Reciprocal Rank Fusion: `score = Σ w_i / (60 + rank_i)`. Default weights: BM25 1.0, text 1.0, image 1.1 (was 0.8; see `IMAGE_WEIGHT`). Make them configurable internally, not in the UI.

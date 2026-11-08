@@ -4,6 +4,7 @@
 mod copies;
 pub mod fts;
 pub mod fuse;
+mod opaque;
 pub mod rerank;
 pub mod strength;
 pub mod vector;

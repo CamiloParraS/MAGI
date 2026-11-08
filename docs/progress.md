@@ -2646,3 +2646,5 @@ Passed the eval rule; deferred by the owner (ADR-0013, "Why deferred"). The ship
 ## Weak results folded, identical files collapsed (2026-11-08)
 
 Meaning-only text results under cosine 0.80 fold under "Weaker matches", and byte-identical files become one result with "+N copies". Host API: `SearchResult.strength` and `copies`. 0 of 195 / 184 / 188 found answers folded at the app's 30 results, 4-11 of 30 results folded per query (`docs/eval.md`). Function-word filtering measured no change and was not kept. Not yet checked by eye in the running app.
+
+Filename chunks of wordless names (`IMG_0494.JPG`, hashes) no longer count as text-vector matches (`search::opaque`). Cross-language recall@10 0.593 -> 0.815 on random names, 0.741 -> 0.815 on realistic; `img2` MRR falls 0.03-0.04, adopted as a recorded exception (`docs/eval.md`).

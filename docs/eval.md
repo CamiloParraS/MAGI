@@ -1250,6 +1250,47 @@ earlier branch runs were 285.5 and 290.1 (the first straight after a build).
 `main` itself sits nearer the 300 ms limit than the 241 ms recorded on
 2026-11-05, so NFR-2 has less headroom than that entry says.
 
+## 2026-11-08: opaque names leave the text-vector list
+
+Release build, real models, fresh DB, on top of the fold and copy collapse
+above. The filename chunk of a name with no word in it (digits, hash, UUID,
+or a camera prefix: `IMG_`, `DSC_`, `PXL_` and similar) is dropped from the
+`vec_text` rows at query time. The 2026-10-09 attempt lost because camera
+prefixes counted as words, so those names kept the two-list advantage that
+hex names lost; here both lose it.
+
+recall@10 / MRR, before -> after (the named corpus does not change):
+
+| bucket | random names | realistic names |
+| --- | --- | --- |
+| overall | 0.923 / 0.854 -> 0.954 / 0.860 | 0.933 / 0.869 -> 0.948 / 0.870 |
+| cross | 0.593 / 0.465 -> 0.815 / 0.536 | 0.741 / 0.521 -> 0.815 / 0.560 |
+| en | 0.962 / 0.865 -> 1.000 / 0.894 | 0.962 / 0.904 -> 1.000 / 0.910 |
+| img | 1.000 / 0.941 -> 0.968 / 0.968 | 0.968 / 0.935 -> 0.968 / 0.968 |
+| img2 | 0.952 / 0.895 -> 0.952 / 0.857 | 0.935 / 0.903 -> 0.935 / 0.871 |
+| fresh | 0.871 / 0.795 -> 0.935 / 0.830 | 0.903 / 0.829 -> 0.935 / 0.836 |
+
+**Adopted as an exception to "no bucket regresses".** `img2` MRR falls 0.03 to
+0.04 with its recall unchanged, and one `img` query on random names leaves the
+top 10 ("a hiking trail along a grassy ridge"). The cause of the `img2` drop was
+not established. Accepted because the gain is on the worst bucket (`cross`).
+
+**Fold, top 30, after this change.** Answers folded stay at 0 (0/189 random,
+0/189 realistic; named unchanged). Folded per list: positives 4.2 -> 17.2
+random, 8.3 -> 14.5 realistic; `neg` 1.2 -> 18.8 random, 7.4 -> 15.0 realistic.
+One realistic `neg` list now folds whole (0/18 before).
+
+**Not adopted:** also treating generic words (`Screenshot`, `Untitled`, `New
+Text Document`, `file`) as meaningless. Realistic names reached recall@10 0.964,
+MRR 0.875, and random names did not change, but the list came from that
+corpus's file names and would strip the name match from a real `book.pdf`.
+
+The shipped rule also keeps two cases the measured prototype lost: words spelled
+in hex letters in a name with no digits (`dad.jpg`) and non-Latin words under
+three characters (`报告.pdf`). Its numbers match the prototype on all three
+corpora. Latency was not re-measured; the filter is a string check per fetched
+row.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the
