@@ -181,7 +181,7 @@ impl Host {
     /// keywords alone while it (re)starts. Indexing yields to it.
     pub fn search(&self, request: &SearchRequest) -> Result<SearchResponse> {
         let started = Instant::now();
-        // The webview sets it: bound it at the trust boundary.
+        // The caller sets it: bound it here.
         let limit = match request.limit {
             Some(limit) => limit,
             None => self.inner.load_config()?.ui.max_results,
@@ -441,8 +441,7 @@ fn clear(db_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Joins in what the UI shows. `None` when the file was deleted after it
-/// was ranked: that result is dropped, not the search.
+/// Joins in what the UI shows.
 impl From<SearchHit> for SearchResult {
     fn from(hit: SearchHit) -> Self {
         let visual_only = hit.match_sources == [MatchSource::Visual];

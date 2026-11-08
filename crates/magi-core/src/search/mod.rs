@@ -292,8 +292,8 @@ pub fn hybrid_search(
 /// fuses them with Reciprocal Rank Fusion, applies filename/recency boosts,
 /// and returns the top `limit` files (SPEC.md §5.6).
 ///
-/// ponytail: the SQL runs sequentially on one connection; the embeddings,
-/// the expensive part, already run in parallel. A second reader connection
+/// ponytail: the SQL runs sequentially on one connection, after the query
+/// is embedded. A second reader connection
 /// would let FTS overlap the KNN scans if `vec_text` grows into the budget.
 pub fn search_with(
     conn: &Connection,
