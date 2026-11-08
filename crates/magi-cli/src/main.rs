@@ -1,24 +1,19 @@
 //! magi-cli: dev/test CLI (doctor, roots, index, daemon, search, eval — added
 //! milestone by milestone; see SPEC.md §7).
 
+mod daemon;
 mod eval;
+mod from_env;
+mod search;
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use magi_core::dto::FeatureStatus;
 use magi_core::dto::Install;
-use magi_core::dto::{FeatureStatus, IndexStatus, RootStatus};
-use magi_core::embed::{E5Embedder, FakeEmbedder, TextEmbedder};
-use magi_core::embed::{FakeImageEmbedder, ImageEmbedder, SigLipEmbedder};
-use magi_core::features::{Components, Feature, Features, load_components};
+use magi_core::features::{Feature, Features, load_components};
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
-use magi_core::ocr::{NoOcr, OcrEngine, paddle::PaddleOcr};
-use magi_core::search::fts::search_fts;
-use magi_core::{Engine, config, db, paths};
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use magi_core::{config, db, paths};
 
 #[derive(Parser)]
 #[command(name = "magi-cli")]
@@ -103,13 +98,13 @@ fn main() -> anyhow::Result<()> {
         Command::Doctor => doctor()?,
         Command::Roots { action } => roots(action)?,
         Command::Index { root } => index_cmd(root)?,
-        Command::Daemon { stats } => daemon_cmd(stats)?,
+        Command::Daemon { stats } => daemon::daemon_cmd(stats)?,
         Command::Search {
             query,
             mode,
             limit,
             rerank,
-        } => search_cmd(&query, &mode, limit, rerank.as_deref())?,
+        } => search::search_cmd(&query, &mode, limit, rerank.as_deref())?,
         Command::Eval { queries, corpus } => eval::eval_cmd(queries, corpus)?,
         Command::Features { action } => features_cmd(action)?,
     }
@@ -233,47 +228,6 @@ fn roots(action: RootsAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn embedder_from_env() -> anyhow::Result<std::sync::Arc<dyn TextEmbedder>> {
-    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
-        Ok(std::sync::Arc::new(FakeEmbedder))
-    } else {
-        Ok(std::sync::Arc::new(E5Embedder::load().map_err(|e| {
-            anyhow::anyhow!(
-                "loading the real text embedder failed: {e}\n\
-                 run `just models` and `cargo xtask fetch-onnxruntime` first, \
-                 or set MAGI_FAKE_EMBEDDER=1 to index/search with the fake one"
-            )
-        })?))
-    }
-}
-
-/// Real OCR unless the fake embedder is on (tests stay deterministic and
-/// model-free). Missing OCR models are not fatal: images just get no
-/// recognized text.
-fn ocr_from_env() -> std::sync::Arc<dyn OcrEngine> {
-    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
-        return std::sync::Arc::new(NoOcr);
-    }
-    match PaddleOcr::load() {
-        Ok(ocr) => std::sync::Arc::new(ocr),
-        Err(e) => {
-            eprintln!("warning: OCR unavailable ({e}); images will be indexed without text");
-            std::sync::Arc::new(NoOcr)
-        }
-    }
-}
-
-/// The fake one under `MAGI_FAKE_EMBEDDER=1`; otherwise SigLIP, which loads
-/// nothing until the first image or query (and degrades if its models are
-/// missing).
-fn image_embedder_from_env() -> std::sync::Arc<dyn ImageEmbedder> {
-    if std::env::var("MAGI_FAKE_EMBEDDER").as_deref() == Ok("1") {
-        std::sync::Arc::new(FakeImageEmbedder)
-    } else {
-        std::sync::Arc::new(SigLipEmbedder::new())
-    }
-}
-
 fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(paths::data_dir())?;
     let mut conn = db::open(&db_path())?;
@@ -319,216 +273,3 @@ fn index_cmd(root: PathBuf) -> anyhow::Result<()> {
     );
     Ok(())
 }
-
-fn daemon_cmd(stats: bool) -> anyhow::Result<()> {
-    std::fs::create_dir_all(paths::data_dir())?;
-    let config = config::load()?;
-    let engine = Engine::start(&config, &db_path(), load_components(&config.features))?;
-    let stop = Arc::new(AtomicBool::new(false));
-    ctrlc::set_handler({
-        let stop = stop.clone();
-        move || stop.store(true, Ordering::SeqCst)
-    })?;
-
-    let events = engine.subscribe();
-    let started = Instant::now();
-    let mut last: Option<IndexStatus> = None;
-    let mut print = |status: &IndexStatus| {
-        if last.as_ref() == Some(status) {
-            return;
-        }
-        print_status(started.elapsed(), status);
-        if last.as_ref().is_none_or(|l| l.roots != status.roots) {
-            print_roots(&status.roots);
-        }
-        last = Some(status.clone());
-    };
-    print(&engine.status()?);
-    let mut sampler = stats.then(Sampler::new).transpose()?;
-    while !stop.load(Ordering::SeqCst) {
-        if let Ok(status) = events.recv_timeout(Duration::from_millis(500)) {
-            print(&status);
-        }
-        if let Some(sampler) = sampler.as_mut() {
-            sampler.tick();
-        }
-    }
-    println!("stopping...");
-    engine.shutdown();
-    println!("stopped");
-    Ok(())
-}
-
-fn print_status(elapsed: Duration, s: &IndexStatus) {
-    println!(
-        "[{:>6}s] {:<8}  queued {}  indexed {}  skipped {}  errors {}{}",
-        elapsed.as_secs(),
-        format!("{:?}", s.state).to_lowercase(),
-        s.queued,
-        s.indexed,
-        s.skipped,
-        s.errors,
-        s.current_file
-            .as_deref()
-            .map(|f| format!("  {f}"))
-            .unwrap_or_default()
-    );
-}
-
-fn print_roots(roots: &[RootStatus]) {
-    for root in roots {
-        let enabled = if root.enabled { "" } else { " (disabled)" };
-        println!(
-            "  root {} {}: {}{enabled}, {} indexed",
-            root.id, root.path, root.status, root.indexed
-        );
-    }
-}
-
-/// Prints this process's CPU, resident and private memory once a minute (`--stats`),
-/// for the SPEC.md §7 M5 idle-CPU benchmark. CPU is averaged over the minute;
-/// 100% is one full core.
-struct Sampler {
-    sys: System,
-    pid: Pid,
-    next: Instant,
-}
-
-impl Sampler {
-    const EVERY: Duration = Duration::from_secs(60);
-
-    fn new() -> anyhow::Result<Self> {
-        let pid = sysinfo::get_current_pid().map_err(|e| anyhow::anyhow!(e))?;
-        let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-        Ok(Self {
-            sys,
-            pid,
-            next: Instant::now() + Self::EVERY,
-        })
-    }
-
-    fn tick(&mut self) {
-        if Instant::now() < self.next {
-            return;
-        }
-        self.next += Self::EVERY;
-        self.sys
-            .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
-        if let Some(p) = self.sys.process(self.pid) {
-            // On Windows sysinfo's `virtual_memory` is `PrivateUsage`: unlike
-            // the working set, it doesn't drop when Windows trims pages.
-            // Elsewhere it's the virtual size, so read it only on Windows.
-            println!(
-                "stats: cpu {:.2}% of one core, rss {} MB, private {} MB",
-                p.cpu_usage(),
-                p.memory() / (1024 * 1024),
-                p.virtual_memory() / (1024 * 1024)
-            );
-        }
-    }
-}
-
-/// Frees the text model and its shared tokenizer as soon as the query is
-/// embedded, so they aren't still resident while the SigLIP text tower and
-/// its Gemma tokenizer load (NFR-12: ~490 MB off the peak). One-shot CLI
-/// only; a long-lived process keeps them cached.
-struct OneShotQuery<'a>(&'a dyn TextEmbedder);
-
-impl TextEmbedder for OneShotQuery<'_> {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-    fn dim(&self) -> usize {
-        self.0.dim()
-    }
-    fn embed_passages(&self, texts: &[&str]) -> magi_core::Result<Vec<Vec<f32>>> {
-        self.0.embed_passages(texts)
-    }
-    fn embed_query(&self, text: &str) -> magi_core::Result<Vec<f32>> {
-        let v = self.0.embed_query(text);
-        self.0.unload_if_idle(Duration::ZERO);
-        magi_core::embed::manager::unload_text_tokenizer_if_idle(Duration::ZERO);
-        v
-    }
-}
-
-/// The terminal shows highlights as `[term]`.
-fn show(snippet: &str) -> String {
-    use magi_core::search::fts::{HIGHLIGHT_END, HIGHLIGHT_START};
-    snippet
-        .replace(HIGHLIGHT_START, "[")
-        .replace(HIGHLIGHT_END, "]")
-}
-
-fn search_cmd(
-    query: &str,
-    mode: &str,
-    limit: u32,
-    rerank: Option<&std::path::Path>,
-) -> anyhow::Result<()> {
-    let conn = db::open(&db_path())?;
-    match mode {
-        "fts" => {
-            let hits = search_fts(&conn, query, limit)?;
-            if hits.is_empty() {
-                println!("no results");
-            }
-            for hit in hits {
-                println!("{}\t{}", hit.path.display(), show(&hit.snippet));
-            }
-        }
-        "hybrid" => {
-            let Components { text, image, .. } = load_components(&config::load()?.features);
-            let Some(embedder) = text else {
-                anyhow::bail!(
-                    "search by meaning is not installed; run: magi-cli features enable meaning"
-                );
-            };
-            let mut hits = magi_core::search::hybrid_search(
-                &conn,
-                Some(&OneShotQuery(embedder.as_ref())),
-                image.as_deref(),
-                query,
-                limit,
-            )?;
-            if let Some(dir) = rerank {
-                // As the app would: the reranker is built after the query
-                // is embedded, then reorders the results it was given.
-                // `MAGI_SPIKE_UNLOAD_SIGLIP`: free SigLIP's sessions first.
-                if std::env::var_os("MAGI_SPIKE_UNLOAD_SIGLIP").is_some()
-                    && let Some(image) = &image
-                {
-                    image.unload_if_idle(Duration::ZERO);
-                }
-                let model = magi_core::search::rerank::CrossEncoder::load(dir)?;
-                let docs = hits
-                    .iter()
-                    .map(|h| magi_core::search::rerank::file_text(&conn, h.file_id))
-                    .collect::<magi_core::Result<Vec<_>>>()?;
-                let scores = model.score(query, &docs)?;
-                for (hit, score) in hits.iter_mut().zip(scores) {
-                    hit.score = f64::from(score);
-                }
-                hits.sort_by(|a, b| b.score.total_cmp(&a.score));
-            }
-            if hits.is_empty() {
-                println!("no results");
-            }
-            for hit in hits {
-                println!(
-                    "{}\t{:.4}\t{:?}\t{}",
-                    hit.path.display(),
-                    hit.score,
-                    hit.match_sources,
-                    show(&hit.snippet)
-                );
-            }
-        }
-        other => anyhow::bail!("unsupported search mode {other:?}; use \"fts\" or \"hybrid\""),
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests;

@@ -149,8 +149,8 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
     let mut conn = db::open(&db_path)?;
     let root = db::roots::add(&conn, &corpus_dir)?;
 
-    let embedder = crate::embedder_from_env()?;
-    let image_embedder = crate::image_embedder_from_env();
+    let embedder = crate::from_env::embedder_from_env()?;
+    let image_embedder = crate::from_env::image_embedder_from_env();
     let options = IndexRootOptions::from_config(&config::IndexingConfig::default())?;
     let summary = index_root(
         &mut conn,
@@ -159,7 +159,7 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         &options,
         &IndexContext {
             embedder: Some(embedder.clone()),
-            ocr: Some(crate::ocr_from_env()),
+            ocr: Some(crate::from_env::ocr_from_env()),
             image_gate: Default::default(),
             image_embedder: Some(image_embedder.clone()),
         },
