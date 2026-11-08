@@ -1289,8 +1289,14 @@ corpus's file names and would strip the name match from a real `book.pdf`.
 The shipped rule also keeps two cases the measured prototype lost: words spelled
 in hex letters in a name with no digits (`dad.jpg`) and non-Latin words under
 three characters (`报告.pdf`). Its numbers match the prototype on all three
-corpora. Latency was not re-measured; the filter is a string check per fetched
-row.
+corpora.
+
+**Latency** (`just bench`, 100k chunks, three alternating `main` / branch pairs,
+warm ms, the machine under some other load): `main` p50 247.5 / 247.1 / 245.1,
+p95 300.0 / 289.1 / 291.0; this branch, fold and copies included, p50 246.8 /
+245.6 / 246.0, p95 294.7 / 276.4 / 294.6. No slowdown. A single bench run just
+after a compile read p95 341.6, and earlier runs built back to back reached 825,
+so compare alternating binaries. NFR-2 has little headroom on either side.
 
 ## Not yet done
 
