@@ -21,7 +21,7 @@ Open only the row matching your task. Do not read `docs/SPEC.md` or `docs/progre
 | Tray, hotkey, single-instance  | `apps/desktop/src/{tray,hotkey,instance}.rs`                | ADR-0011                                                            |
 | Packaging, release             | `packager.json`, `.github/workflows/`, `xtask/`             | ADR-0012; `docs/CHANGELOG.md`                                       |
 | Performance, memory            | n/a                                                         | `docs/benchmarks.md`, `docs/archive/perf-investigation.md`          |
-| Search quality                 | `eval/` (`queries.jsonl`), `crates/magi-cli`                | `docs/eval.md`                                                      |
+| Search quality, ranking changes | `eval/` (`queries.jsonl`), `crates/magi-cli`, `xtask/src/eval_diff.rs` | `eval/README.md` "Adopting a ranking change"; `docs/eval.md` |
 | Manual QA per OS               | n/a                                                         | `docs/qa-checklist.md`                                              |
 
 Current milestone status: the last `##` sections of `docs/progress.md` (`grep -n '^## ' docs/progress.md`, then read the tail). SPEC §7 (milestone roadmap) is only for starting a new milestone.

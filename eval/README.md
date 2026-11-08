@@ -1,5 +1,20 @@
 # Search-quality eval
 
+## Adopting a ranking change
+
+1. On the base commit: `just eval-all before`.
+2. On the change: `just eval-all after`. A run takes 3-4 minutes per corpus.
+3. `just eval-diff before after` prints the buckets that moved and every drop.
+
+A change is adopted when overall MRR improves and no bucket regresses on
+recall@5, recall@10 or MRR, on any corpus, `fresh` queries included. `kw` and
+`cross` matter most. Only the project owner grants an exception, and it is
+recorded with its numbers in `docs/eval.md`. Results go in `docs/eval.md`
+whether the change is adopted or not. `eval-diff` compares only the corpora
+present in both runs; the summary says how many, and the rule needs all three.
+
+## Query file format
+
 `queries.jsonl`: one JSON object per line, `{"query", "lang", "expected", "notes"}`.
 
 - `query` — the search string.

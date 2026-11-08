@@ -50,6 +50,15 @@ eval:
 eval-random names="random_names":
     cargo run -p magi-cli --release -- eval eval/{{names}}.jsonl --corpus fixtures/{{names}}
 
+# Run every eval on the current code and save the reports as target/eval/<run>/
+eval-all run:
+    cargo build --release -p magi-cli
+    cargo run -p xtask --release -- eval-all {{run}}
+
+# What moved between two eval-all runs, and every regression (eval/README.md)
+eval-diff before after:
+    cargo run -p xtask --release -- eval-diff {{before}} {{after}}
+
 # Run the 100k-synthetic-chunk NFR-2/NFR-3 search-latency benchmark
 bench:
     cargo run -p xtask --release -- bench-corpus

@@ -2,6 +2,7 @@
 //! bench-corpus, stage-libs, licenses (SPEC.md §5.1).
 
 mod bench_corpus;
+mod eval_diff;
 mod licenses;
 
 use std::fs;
@@ -348,10 +349,15 @@ fn main() -> Result<()> {
         Some("bench-corpus") => bench_corpus::bench_corpus(),
         Some("stage-libs") => stage_libs(),
         Some("licenses") => licenses::licenses(),
+        Some("eval-all") => eval_diff::eval_all(args.next().as_deref()),
+        Some("eval-diff") => {
+            let before = args.next();
+            eval_diff::eval_diff(before.as_deref(), args.next().as_deref())
+        }
         Some(other) => bail!("unknown xtask command: {other}"),
         None => {
             bail!(
-                "usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus|stage-libs|licenses>"
+                "usage: cargo xtask <fetch-pdfium|fetch-onnxruntime|fetch-models|bench-corpus|stage-libs|licenses|eval-all|eval-diff>"
             )
         }
     }
