@@ -1272,8 +1272,9 @@ recall@10 / MRR, before -> after (the named corpus does not change):
 
 **Adopted as an exception to "no bucket regresses".** `img2` MRR falls 0.03 to
 0.04 with its recall unchanged, and one `img` query on random names leaves the
-top 10 ("a hiking trail along a grassy ridge"). The cause of the `img2` drop was
-not established. Accepted because the gain is on the worst bucket (`cross`).
+top 10 ("a hiking trail along a grassy ridge"). The fresh photo bucket `f-img2`
+(n=8) also falls on random names: recall@10 0.875 -> 0.750, MRR 0.768 -> 0.750,
+one query. The cause of the `img2` drop was not established. Accepted because the gain is on the worst bucket (`cross`).
 
 **Fold, top 30, after this change.** Answers folded stay at 0 (0/189 random,
 0/189 realistic; named unchanged). Folded per list: positives 4.2 -> 17.2
