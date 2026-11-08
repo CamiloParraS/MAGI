@@ -2642,3 +2642,7 @@ Passed the eval rule; deferred by the owner (ADR-0013, "Why deferred"). The ship
 ## Release v0.1.2 (2026-11-06)
 
 `release.yml` on the `v0.1.2` tag: all three package jobs, `deb-check` (the `.deb` installed on a clean `debian:bookworm`) and the draft pre-release passed. **NFR-6 (installer ≤ 80 MB, models excluded): met.** Windows NSIS 17.8 MB, macOS `.dmg` 30.7 MB, `.deb` 33.3 MB, AppImage 31.4 MB. Clean-machine install and the network check are still to do, on the owner's second machine.
+
+## Weak results folded, identical files collapsed (2026-11-08)
+
+Meaning-only text results under cosine 0.80 fold under "Weaker matches", and byte-identical files become one result with "+N copies". Host API: `SearchResult.strength` and `copies`. 0 of 195 / 184 / 188 found answers folded at the app's 30 results, 4-11 of 30 results folded per query (`docs/eval.md`). Function-word filtering measured no change and was not kept. Not yet checked by eye in the running app.

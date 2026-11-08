@@ -9,6 +9,16 @@ pub const STRINGS: Strings = Strings {
     example_query: "condiciones de renovación del contrato",
     try_example: "Prueba “{q}”",
     no_match: "Ningún archivo coincide con “{q}”.",
+    weaker_matches: Plural {
+        one: "{n} coincidencia más débil",
+        other: "{n} coincidencias más débiles",
+    },
+    weaker_hide: "Ocultar coincidencias más débiles",
+    nothing_close: "No se encontró nada muy relacionado.",
+    other_copies: Plural {
+        one: "+{n} copia",
+        other: "+{n} copias",
+    },
     search_failed: "No se pudo buscar en el índice. Reintentando…",
     search_still_failing: "La búsqueda sigue fallando. Tus archivos están bien; quizá el índice necesite empezar de nuevo.",
     search_cause_starting: "El motor de búsqueda todavía está arrancando.",

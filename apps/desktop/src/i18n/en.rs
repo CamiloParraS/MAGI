@@ -9,6 +9,16 @@ pub const STRINGS: Strings = Strings {
     example_query: "contract renewal terms",
     try_example: "Try “{q}”",
     no_match: "No files match “{q}”.",
+    weaker_matches: Plural {
+        one: "{n} weaker match",
+        other: "{n} weaker matches",
+    },
+    weaker_hide: "Hide weaker matches",
+    nothing_close: "Nothing closely related found.",
+    other_copies: Plural {
+        one: "+{n} copy",
+        other: "+{n} copies",
+    },
     search_failed: "Couldn't search the index. Trying again…",
     search_still_failing: "Search is still failing. Your files are fine; the index may need a fresh start.",
     search_cause_starting: "The search engine is still starting.",

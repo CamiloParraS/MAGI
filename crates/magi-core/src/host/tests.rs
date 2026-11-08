@@ -25,6 +25,7 @@ fn a_hit_becomes_a_result_without_the_database() {
         snippet: "IMG_1.jpg".into(),
         match_sources,
         page: None,
+        copies: Vec::new(),
         text_similarity: None,
         image_similarity: None,
     };

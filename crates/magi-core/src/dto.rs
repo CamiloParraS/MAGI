@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::roots::{Health, Root};
 use crate::features::Feature;
+use crate::search::strength::Strength;
 
 /// Whether a feature's download is on disk (ADR-0010). Independent of
 /// `FeatureStatus::enabled`.
@@ -376,6 +377,11 @@ pub struct SearchResult {
     /// Unix milliseconds.
     pub modified_at: i64,
     pub match_sources: Vec<MatchSource>,
+    /// `Weak` results come last; the UI folds them.
+    pub strength: Strength,
+    /// Paths of other indexed files with the same bytes, hidden behind this
+    /// result.
+    pub copies: Vec<String>,
 }
 
 /// What the search window's detail pane adds for the selected result

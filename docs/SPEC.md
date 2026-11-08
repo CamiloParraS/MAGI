@@ -644,7 +644,8 @@ Rules:
 4. **Fuse** with Reciprocal Rank Fusion: `score = Σ w_i / (60 + rank_i)`. Default weights: BM25 1.0, text 1.0, image 1.1 (was 0.8; see `IMAGE_WEIGHT`). Make them configurable internally, not in the UI.
 5. **Boosts:** filename-token overlap (×1.2 max) and mild recency (≤ ×1.1 for files modified in the last 30 days).
 6. **Snippet:** use the best-matching chunk. For BM25 hits, use FTS5 `snippet()` with highlight markers. For vector-only hits, show the chunk's first ~200 characters. OCR snippets are labeled "Text in image"; QR snippets "QR code".
-7. Return the top `max_results` files.
+7. **Copies:** a result whose `content_hash` a better-ranked result has is folded into that result's `copies`.
+8. Return the top `max_results` files, strong results first. A result found by text meaning alone with a cosine under `TEXT_STRONG_COSINE` (0.80, e5) is `weak`: the UI folds it under "Weaker matches" (docs/eval.md). Results are never dropped for being weak.
 
 ### 5.7 Host API (UI → `magi-core`)
 
@@ -663,7 +664,7 @@ The desktop app calls `magi-core::host::Host` directly; there is no IPC layer or
 | `features_status` / `set_feature_enabled(feature, enabled)` / `download_feature(feature)` / `cancel_download` / `remove_download(feature)` | Search features (ADR-0010). → `FeatureStatus { feature: meaning\|image_text\|image_visual, enabled, download_size, install: NotInstalled\|Downloading{bytes,total}\|Installed{size_bytes}\|Failed{code}, backfill?: {done,total} }`. `code`: `DownloadNetworkError\|ChecksumMismatch\|DiskFull\|PermissionDenied\|WriteFailed`. Cancel returns to `NotInstalled`. |
 | `clear_index`                                                                                                                              | Empties the index (files, chunks, vectors, thumbnails, backfill counters), keeps the DB file, roots, config and models, then restarts indexing                                                                                                                                                                                                                    |
 
-`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] (byte offsets into text) }, page?, thumb_path?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[] }`. `thumb_path` is a path inside the thumbnail cache; the UI renders it with GPUI's `img()`. `modified_at` is unix milliseconds.
+`SearchResult { file_id, path, file_name, kind, score, snippet?: { text, highlights: [start,end][] (byte offsets into text) }, page?, thumb_path?, modified_at, match_sources: ("keyword"|"semantic"|"visual"|"ocr"|"qr"|"filename")[], strength: "strong"|"weak", copies: string[] }`. Weak results come after strong ones; `copies` are the paths of indexed files with identical bytes. `thumb_path` is a path inside the thumbnail cache; the UI renders it with GPUI's `img()`. `modified_at` is unix milliseconds.
 
 **Errors:** every command fails with `ErrorCode`, a stable code plus parameters (`{ code, ...params }`): `RootNotFound{path}`, `NestedRoot{path,conflicts_with}`, `RootAlreadyExists{path}`, `RootIdNotFound{id}`, `FileIdNotFound{file_id}`, `UnknownFeature{name}`, `DownloadInProgress{feature}`, `InvalidSetting{field}`, `InvalidGlob{glob}`, `EngineStarting` (the engine is starting or restarting; retry shortly), `Internal{detail}` (detail is for logs only).
 

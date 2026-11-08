@@ -23,6 +23,7 @@ use crate::embed::manager::{ModelManifest, UreqFetcher, models_root};
 use crate::engine::{Engine, EngineHandle};
 use crate::error::{Error, Result};
 use crate::features::{Components, Feature, Features, load_components};
+use crate::search::strength::{fold_strength, strong_first};
 use crate::search::{QueryVectors, SearchHit, search_with};
 
 pub enum HostEvent {
@@ -197,7 +198,8 @@ impl Host {
             components.image.as_deref(),
             &request.query,
         )?;
-        let hits = search_with(&lock(&self.inner.reader), &vectors, &request.query, limit)?;
+        let mut hits = search_with(&lock(&self.inner.reader), &vectors, &request.query, limit)?;
+        strong_first(&mut hits);
         Ok(SearchResponse {
             results: hits.into_iter().map(SearchResult::from).collect(),
             took_ms: started.elapsed().as_millis() as u64,
@@ -445,6 +447,7 @@ fn clear(db_path: &std::path::Path) -> Result<()> {
 impl From<SearchHit> for SearchResult {
     fn from(hit: SearchHit) -> Self {
         let visual_only = hit.match_sources == [MatchSource::Visual];
+        let strength = fold_strength(&hit);
         SearchResult {
             file_id: hit.file_id,
             path: hit.path.to_string_lossy().into_owned(),
@@ -460,6 +463,12 @@ impl From<SearchHit> for SearchResult {
             }),
             modified_at: hit.mtime_ns / 1_000_000,
             match_sources: hit.match_sources,
+            strength,
+            copies: hit
+                .copies
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
         }
     }
 }

@@ -1,5 +1,10 @@
 # 0003: Say "nothing closely related" without hiding results
 
+Update 2026-11-08: the fold shipped with a conservative rule (meaning-only
+text under cosine 0.80; `docs/eval.md`). The "Nothing closely related" line
+shows only when every result is weak, which no eval `neg` query reaches, so
+what follows about a signal that separates still holds.
+
 Status: blocked on a shippable signal (2026-11-05). No cosine signal
 separates absent answers from weak right ones (`docs/eval.md`, "Precision").
 A cross-encoder's logit does for text (ADR-0013: threshold -4 labels

@@ -14,15 +14,17 @@ use std::path::{Path, PathBuf};
 
 use magi_core::index::pipeline::{IndexContext, IndexRootOptions, index_root};
 use magi_core::search::fts::search_fts;
-use magi_core::search::strength::Scales;
+use magi_core::search::strength::{Scales, strong_first};
 use magi_core::search::vector::{search_vector_image, search_vector_text};
 use magi_core::search::zfusion::{ZFusionParams, search_zscore, strong_count};
-use magi_core::search::{FileHit, QueryVectors};
+use magi_core::search::{FileHit, QueryVectors, SearchHit};
 use magi_core::{config, db, search};
-use precision::Judged;
+use precision::{FoldTally, Judged};
 use serde::Deserialize;
 
 const FETCH_LIMIT: u32 = 10;
+/// `ui.max_results`' default: the list the fold is measured on.
+const APP_RESULTS: u32 = 30;
 /// Files fetched per list when explaining a miss: past the 100 hybrid reads,
 /// so "beyond 100" and "not found" differ. Corpora here are ~120 files.
 const DIAGNOSE_DEPTH: u32 = 500;
@@ -102,6 +104,16 @@ fn relative_slash_path(path: &Path, corpus_dir: &Path) -> String {
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// How the eval names a hit: an expected file collapsed into this hit as an
+/// identical copy counts as found, since the user sees the same file.
+fn hit_path(hit: &SearchHit, corpus_dir: &Path, expected: &[String]) -> String {
+    hit.copies
+        .iter()
+        .map(|copy| relative_slash_path(copy, corpus_dir))
+        .find(|copy| expected.contains(copy))
+        .unwrap_or_else(|| relative_slash_path(&hit.path, corpus_dir))
 }
 
 /// `expected`'s rank in one input list as `"<rank> (<chunk source>)"`, or
@@ -189,6 +201,8 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         let mut fresh_by_lang: BTreeMap<String, Accum> = BTreeMap::new();
         let mut folds = FoldStats::default();
         let mut judged: Vec<Judged> = Vec::new();
+        let mut fold = FoldTally::default();
+        let mut displayed = Accum::default();
 
         for q in &queries {
             // An ignored hit must not cost the query a top-10 slot.
@@ -235,10 +249,23 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
             let scores: Vec<f64> = hits.iter().map(|h| h.score).collect();
             let hit_paths: Vec<String> = hits
                 .iter()
-                .map(|h| relative_slash_path(&h.path, &root.path))
+                .map(|h| hit_path(h, &root.path, &q.expected))
                 .collect();
 
             let rank = first_match_rank(&hit_paths, &q.expected, &q.ignore);
+            if mode == Mode::Rrf {
+                let mut shown = search::search_with(&conn, &vectors, &q.query, APP_RESULTS)?;
+                strong_first(&mut shown);
+                let paths: Vec<String> = shown
+                    .iter()
+                    .map(|h| hit_path(h, &root.path, &q.expected))
+                    .collect();
+                let expected_at = paths.iter().position(|p| q.expected.contains(p));
+                fold.add(&shown, expected_at, q.is_neg(), q.fresh);
+                if !q.is_neg() {
+                    displayed.add(first_match_rank(&paths, &q.expected, &q.ignore));
+                }
+            }
             if fused {
                 let sample = Scales::sample(&conn, &vectors)?;
                 let fetched = Scales::fetched(&conn, &vectors)?;
@@ -298,6 +325,10 @@ pub fn eval_cmd(queries_path: PathBuf, corpus_dir: PathBuf) -> anyhow::Result<()
         fresh.report("fresh");
         for (lang, acc) in &fresh_by_lang {
             acc.report(&format!("f-{lang}"));
+        }
+        if mode == Mode::Rrf {
+            displayed.report("as shown");
+            fold.report(APP_RESULTS);
         }
         if matches!(mode, Mode::Rrf | Mode::ZScore(_)) {
             folds.report();

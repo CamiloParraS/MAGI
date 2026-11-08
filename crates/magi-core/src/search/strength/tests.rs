@@ -22,6 +22,7 @@ fn hit(match_sources: Vec<MatchSource>, text: Option<f64>, image: Option<f64>) -
         page: None,
         text_similarity: text,
         image_similarity: image,
+        copies: Vec::new(),
     }
 }
 
@@ -163,4 +164,30 @@ fn the_sample_is_spread_over_the_table_and_scores_like_the_knn() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn only_a_meaning_match_below_the_floor_folds() {
+    let at = |sources, text, image| fold_strength(&hit(sources, text, image));
+    let semantic = || vec![MatchSource::Semantic];
+    assert_eq!(at(semantic(), Some(0.79), None), Strength::Weak);
+    assert_eq!(at(semantic(), Some(0.80), None), Strength::Strong);
+    // Its words, or a visual match that passed IMAGE_MIN_COSINE, keep it up.
+    let words = vec![MatchSource::Keyword, MatchSource::Semantic];
+    assert_eq!(at(words, Some(0.1), None), Strength::Strong);
+    assert_eq!(at(semantic(), Some(0.1), Some(0.11)), Strength::Strong);
+    // Nothing to judge by is not a reason to hide it.
+    assert_eq!(at(vec![], None, None), Strength::Strong);
+}
+
+#[test]
+fn strong_results_move_ahead_and_each_group_keeps_its_order() {
+    let at = |id, cosine| SearchHit {
+        file_id: id,
+        ..hit(vec![MatchSource::Semantic], Some(cosine), None)
+    };
+    let mut hits = vec![at(1, 0.70), at(2, 0.90), at(3, 0.75), at(4, 0.85)];
+    strong_first(&mut hits);
+    let order: Vec<i64> = hits.iter().map(|h| h.file_id).collect();
+    assert_eq!(order, vec![2, 4, 1, 3]);
 }

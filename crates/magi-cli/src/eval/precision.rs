@@ -8,7 +8,7 @@
 //!   found but labelled weak (folded). This is the number to keep near zero.
 
 use magi_core::search::SearchHit;
-use magi_core::search::strength::{Scale, Scales, Strength, Thresholds, strength};
+use magi_core::search::strength::{Scale, Scales, Strength, Thresholds, fold_strength, strength};
 
 const TEXT_Z: &[f64] = &[1.0, 1.5, 2.0, 2.5, 3.0, 3.5];
 const IMAGE_Z: &[f64] = &[2.0, 2.5, 3.0, 3.5, 4.0, 5.0];
@@ -76,6 +76,70 @@ fn tally(records: &[Judged], scales: impl Fn(&Judged) -> Scales, t: &Thresholds)
         }
     }
     tally
+}
+
+/// What the shipped fold does to lists of the app's default length.
+#[derive(Default)]
+pub struct FoldTally {
+    positives: usize,
+    positive_results: usize,
+    positive_weak: usize,
+    found: usize,
+    answer_folded: usize,
+    fresh_found: usize,
+    fresh_answer_folded: usize,
+    negs: usize,
+    neg_results: usize,
+    neg_weak: usize,
+    neg_all_weak: usize,
+}
+
+impl FoldTally {
+    pub fn add(&mut self, hits: &[SearchHit], expected_at: Option<usize>, neg: bool, fresh: bool) {
+        let weak = hits
+            .iter()
+            .filter(|h| fold_strength(h) == Strength::Weak)
+            .count();
+        if neg {
+            self.negs += 1;
+            self.neg_results += hits.len();
+            self.neg_weak += weak;
+            self.neg_all_weak += usize::from(weak == hits.len());
+            return;
+        }
+        self.positives += 1;
+        self.positive_results += hits.len();
+        self.positive_weak += weak;
+        if let Some(i) = expected_at {
+            let folded = fold_strength(&hits[i]) == Strength::Weak;
+            self.found += 1;
+            self.answer_folded += usize::from(folded);
+            if fresh {
+                self.fresh_found += 1;
+                self.fresh_answer_folded += usize::from(folded);
+            }
+        }
+    }
+
+    pub fn report(&self, limit: u32) {
+        let per = |total: usize, n: usize| total as f64 / n.max(1) as f64;
+        println!(
+            "  shipped fold, top {limit}: positives {:.1} results/query, {:.1} folded; answer folded {}/{} (fresh {}/{})",
+            per(self.positive_results, self.positives),
+            per(self.positive_weak, self.positives),
+            self.answer_folded,
+            self.found,
+            self.fresh_answer_folded,
+            self.fresh_found,
+        );
+        println!(
+            "  shipped fold, top {limit}: neg {:.1} results/query, {:.1} folded; whole list folded {}/{}",
+            per(self.neg_results, self.negs),
+            per(self.neg_weak, self.negs),
+            self.neg_all_weak,
+            self.negs,
+        );
+    }
 }
 
 /// The neg bucket's list sizes, then the threshold sweep for both scales.

@@ -1209,6 +1209,47 @@ training data under non-commercial terms. If it is revisited, the design
 and plan are ADR-0013's option 3 and `docs/archive/0004-ship-text-reranker.md`.
 The model is not in `models/manifest.toml`.
 
+## 2026-11-08: weak results folded, identical files collapsed
+
+Release build, real models, fresh DB. `magi-cli eval` now prints what the
+shipped rule does to lists of the app's default length (30), and an `as shown`
+row: the graded order with weak results moved behind strong ones.
+
+**The fold (shipped).** A result found by text meaning alone with a cosine
+under 0.80 is folded under "Weaker matches". It is decided after fusion, so
+ranking does not change; the 2026-10-09 floor on the list itself cost recall
+because photos need their deep text-vector ranks.
+
+| corpus (positives found) | folded of 30, positives | folded of 30, `neg` | answers folded (fresh) | whole `neg` list folded |
+| --- | --: | --: | --: | --: |
+| named (195) | 11.3 | 11.2 | 0 (0/31) | 0/18 |
+| random names (184) | 4.2 | 1.2 | 0 (0/28) | 0/18 |
+| realistic (188) | 8.3 | 7.4 | 0 (0/29) | 0/18 |
+
+No right answer in the top 30 is folded, fresh queries included. MRR as shown
+rises by 0.001 to 0.002, and recall does not change. It shortens lists but
+cannot say "nothing found": no `neg` list folds whole, so the label of
+docs/issues/0003 stays waiting for a signal that separates. It folds least
+with hex names, where the filename chunk's vector scores high for anything.
+
+**Identical files (shipped).** Files with the same `content_hash` become one
+result. Named corpus: MRR 0.897 -> 0.905 and `img2` MRR 0.929 -> 0.954, because
+`local/` holds copies such as `pizza - copia.jpg`; recall unchanged. The other
+two corpora have no copies and do not change. A query whose expected file was
+collapsed counts as found, since the same file is on screen.
+
+**Function words: rejected.** Two throwaway switches, each alone and together,
+on all three corpora: dropping English and Spanish function words from the
+keyword query and from `filename_boost`. Every recall and MRR figure was
+identical to the unchanged code, so neither was kept.
+
+**Latency** (`just bench`, 100k chunks, alternating binaries, warm ms):
+`main` p50 245.9 / 238.7, p95 280.5 / 275.7; this branch p50 234.4 / 238.4, p95
+260.2 / 363.3. The 363.3 run had a single 1,800 ms query and is unexplained; the
+earlier branch runs were 285.5 and 290.1 (the first straight after a build).
+`main` itself sits nearer the 300 ms limit than the 241 ms recorded on
+2026-11-05, so NFR-2 has less headroom than that entry says.
+
 ## Not yet done
 
 - A larger, messier corpus. No longer the blocker for M3 item 4 — the

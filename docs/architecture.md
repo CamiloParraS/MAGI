@@ -161,6 +161,15 @@ already says so. `magi-cli search --mode hybrid` and `index`
 (which needs an embedder — set `MAGI_FAKE_EMBEDDER=1` to skip the model)
 exercise this path from the CLI.
 
+After ranking, `search::copies::collapse` folds byte-identical files (same
+`files.content_hash`) into the best-ranked one's `copies`; it ranks twice
+`limit` first so the list still fills. `Host::search` then applies
+`search::strength::strong_first`, and `SearchResult.strength` says which
+results the UI folds under "Weaker matches". Only a result found by text
+meaning alone below `TEXT_STRONG_COSINE` (0.80) is weak, decided after fusion
+because a floor on the list itself costs photos their deep text-vector ranks
+(docs/eval.md). The floor is calibrated to e5; recalibrate it with the model.
+
 ## Chunking
 
 `chunk::chunk_text` is token-aware (SPEC.md §7 M3): it splits on word

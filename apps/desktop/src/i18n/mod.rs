@@ -42,6 +42,13 @@ pub struct Strings {
     pub intro: Plural,
     /// `{q}` is the query.
     pub no_match: &'static str,
+    /// The fold under the good results: `{n}` weaker ones behind it.
+    pub weaker_matches: Plural,
+    pub weaker_hide: &'static str,
+    /// Above the fold when every result is in it.
+    pub nothing_close: &'static str,
+    /// Beside a result: `{n}` identical files elsewhere.
+    pub other_copies: Plural,
     /// A query worth trying in the empty window, and its button (`{q}`).
     pub example_query: &'static str,
     pub try_example: &'static str,

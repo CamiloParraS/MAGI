@@ -1,10 +1,9 @@
-//! Strong and weak results, as proposed by docs/issues/0003: a weak result
-//! would be folded under "Weaker matches", and a list with no strong result
-//! headed "Nothing closely related found". Measured by `magi-cli eval`, not
-//! on the product path: no threshold separated the eval's `neg` queries from
-//! weak right answers (docs/eval.md, 2026-11-05 "Precision").
+//! Strong and weak results (docs/issues/0003): a weak result is folded under
+//! "Weaker matches". [`fold_strength`] is the rule the product uses.
 //!
-//! A result is strong when keyword search found it (every query word is in
+//! The rest is measuring code for `magi-cli eval`: no z-score threshold
+//! separated the eval's `neg` queries from weak right answers (docs/eval.md,
+//! 2026-11-05 "Precision"). There, a result is strong when keyword search found it (every query word is in
 //! the file, or its name), or when its cosine stands out from this query's
 //! own distribution: `z = (cosine - mean) / deviation` over a fixed sample of
 //! the table (the scale), with a stricter threshold for images, because
@@ -127,6 +126,30 @@ pub fn strength(hit: &SearchHit, scales: &Scales, thresholds: &Thresholds) -> St
     } else {
         Strength::Weak
     }
+}
+
+/// Least e5 cosine that keeps a meaning-only result out of the fold: the
+/// highest floor at which no right answer in the eval's top 10 was weak, on
+/// any corpus (docs/eval.md). Tied to the text model: recalibrate with it.
+pub const TEXT_STRONG_COSINE: f64 = 0.80;
+
+/// Whether `hit` shows or folds. Only a result found by text meaning alone,
+/// below [`TEXT_STRONG_COSINE`], is weak; the visual list has its own floor
+/// before fusion. Decided after ranking on purpose: a floor on the list
+/// itself costs photos the deep text-vector ranks RRF lifts them with.
+pub fn fold_strength(hit: &SearchHit) -> Strength {
+    let meaning_only =
+        !hit.match_sources.contains(&MatchSource::Keyword) && hit.image_similarity.is_none();
+    match hit.text_similarity {
+        Some(cosine) if meaning_only && cosine < TEXT_STRONG_COSINE => Strength::Weak,
+        _ => Strength::Strong,
+    }
+}
+
+/// Moves weak results behind strong ones, each group in its ranked order, so
+/// the fold is one contiguous tail.
+pub fn strong_first(hits: &mut [SearchHit]) {
+    hits.sort_by_key(|hit| fold_strength(hit) == Strength::Weak);
 }
 
 /// Cosines of `embedding` against a fixed sample of about `n` rows of

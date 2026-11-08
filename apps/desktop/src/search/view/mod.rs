@@ -445,7 +445,7 @@ impl SearchView {
     fn select(&mut self, delta: isize, cx: &mut Context<Self>) {
         self.state.select(delta);
         if let Some(ix) = self.state.selected_index() {
-            self.scroll.scroll_to_item(ix);
+            self.scroll.scroll_to_item(self.state.list_item(ix));
         }
         cx.notify();
     }

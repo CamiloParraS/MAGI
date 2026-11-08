@@ -1,6 +1,7 @@
 //! Hybrid search orchestration (FTS + text vector + image vector, fused
 //! with RRF), per SPEC.md §5.6.
 
+mod copies;
 pub mod fts;
 pub mod fuse;
 pub mod rerank;
@@ -56,6 +57,8 @@ pub struct SearchHit {
     pub text_similarity: Option<f64>,
     /// Cosine from the visual list, when it found the file.
     pub image_similarity: Option<f64>,
+    /// Other indexed files with the same bytes, folded into this hit.
+    pub copies: Vec<PathBuf>,
 }
 
 /// One file's best-matching chunk from a single ranked source. Every ranked
@@ -226,6 +229,7 @@ pub(crate) fn boost_and_assemble(
                 page: hit.page,
                 text_similarity: vector.and_then(|h| h.similarity),
                 image_similarity: image.and_then(|h| h.similarity),
+                copies: Vec::new(),
             })
         })
         .collect();
@@ -318,13 +322,15 @@ pub fn search_with(
         None => Vec::new(),
     };
 
-    Ok(rank_and_boost(
+    // Extra hits, so collapsing copies still fills the list.
+    let ranked = rank_and_boost(
         query,
         &fts_hits,
         &vector_hits,
         &image_hits,
-        limit,
-    ))
+        limit.saturating_mul(2),
+    );
+    copies::collapse(conn, ranked, limit)
 }
 
 #[cfg(test)]

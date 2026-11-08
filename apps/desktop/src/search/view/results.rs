@@ -178,13 +178,14 @@ impl SearchView {
                     .into_any_element(),
             );
         }
-        let results = state.results();
+        let results = state.shown();
+        let weak = state.weak_count();
         // Kept while typing, so its fade does not replay on every keystroke.
         let hint = (!self.dimmed())
-            .then(|| hint(results.len(), &live.features, &live.dismissed))
+            .then(|| hint(state.results().len(), &live.features, &live.dismissed))
             .flatten()
             .map(|h| self.hint(h, p, cx));
-        if results.is_empty() {
+        if state.results().is_empty() {
             if state.is_loading() {
                 return None;
             }
@@ -244,6 +245,44 @@ impl SearchView {
                     None => row.into_any_element(),
                 })
         });
+        let strong = state.strong_count();
+        let mut rows: Vec<AnyElement> = rows.collect();
+        if weak > 0 {
+            // Between the groups, so an open fold reads as a divider.
+            let label = match state.weak_open() {
+                true => s.weaker_hide.to_string(),
+                false => lang.plural(&s.weaker_matches, weak as u64),
+            };
+            let toggle = Button::new("weaker-matches")
+                .cursor_pointer()
+                .ghost()
+                .small()
+                .label(label)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.state.toggle_weak();
+                    cx.notify();
+                }));
+            rows.insert(
+                strong,
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .px(px(7.))
+                    .py(px(4.))
+                    .when(strong == 0, |d| {
+                        d.child(
+                            div()
+                                .px(px(6.))
+                                .pb(px(4.))
+                                .text_color(p.mute)
+                                .child(s.nothing_close),
+                        )
+                    })
+                    .child(toggle)
+                    .into_any_element(),
+            );
+        }
         let list = div()
             .id("results")
             .role(Role::ListBox)
@@ -324,6 +363,18 @@ fn row(
             " · {}",
             s.page.replace("{n}", &lang.number(n.max(0) as u64))
         ))
+    });
+    // Other files with the same bytes: which ones is in the tooltip.
+    let copies = (!r.copies.is_empty()).then(|| {
+        let paths: SharedString = r.copies.join("\n").into();
+        div()
+            .id(("copies", ix))
+            .flex_none()
+            .ml_2()
+            .text_xs()
+            .text_color(p.mute)
+            .tooltip(move |window, cx| Tooltip::new(paths.clone()).build(window, cx))
+            .child(lang.plural(&s.other_copies, r.copies.len() as u64))
     });
     // The same detail whether selected or not, so the list does not change
     // height as the selection moves. A snippet leaves no room for the path,
@@ -429,6 +480,7 @@ fn row(
                         .min_w_0()
                         .child(div().truncate().child(r.file_name.clone()))
                         .children(page)
+                        .children(copies)
                         .children(folder),
                 )
                 .child(detail),
