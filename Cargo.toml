@@ -6,7 +6,7 @@ members = ["crates/magi-core", "crates/magi-cli", "apps/desktop", "xtask"]
 edition = "2024"
 license = "MIT"
 publish = false
-version = "0.1.2"
+version = "0.2.0"
 
 [workspace.dependencies]
 # Centralize ALL shared dependency versions here; member crates use `dep = { workspace = true }`.

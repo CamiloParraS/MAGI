@@ -4,8 +4,14 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
-### 0.1.2 (test build)
+### 0.2.0 (test build)
 
+- **Ask Magi (optional, needs a Magi account):** ask a question in plain
+  words and get an answer that cites your files. Open it from the search
+  window, the tray, or Alt+Enter. Nothing is sent until you sign in and send
+  a question; the first time, a card says what is sent. Sign in, sign out
+  and delete your account from Settings › Account. Signed out, Magi makes no
+  connection other than model downloads (ADR-0014).
 - **Detail pane (optional):** Settings › Appearance › Search window layout ›
   List and preview shows the selected result beside the list, with its page
   or thumbnail, why it matched, and Open / Show in folder.

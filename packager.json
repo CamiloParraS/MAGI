@@ -1,7 +1,7 @@
 {
   "name": "magi",
   "productName": "Magi",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "identifier": "dev.magi.magi",
   "description": "Local, on-device semantic file search",
   "publisher": "Camilo Parra",
