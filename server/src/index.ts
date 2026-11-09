@@ -1,22 +1,22 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { handleDeleteAccount } from "./account";
+import { handleAsk, json, type ChatMessage } from "./ask";
+import { keepAlive } from "./keepalive";
+import type { Usage } from "./usage-do";
+
+export { Usage } from "./usage-do";
 
 export interface Env {
   SUPABASE_URL: string;
-  MODEL: string;
+  SUPABASE_SERVICE_KEY: string;
   OPENROUTER_API_KEY: string;
+  MODEL: string;
+  USAGE: DurableObjectNamespace<Usage>;
 }
 
-// Day-1 spike: verify a Supabase token, make one zero-retention model call.
-// Limits, size caps, refunds and the final response shape come on Nov 10.
+// No console output anywhere: bodies must never reach a log.
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 async function verify(request: Request, env: Env): Promise<string | null> {
   const header = request.headers.get("authorization") ?? "";
@@ -25,60 +25,79 @@ async function verify(request: Request, env: Env): Promise<string | null> {
   const base = `${env.SUPABASE_URL}/auth/v1`;
   jwks ??= createRemoteJWKSet(new URL(`${base}/.well-known/jwks.json`));
   try {
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer: base,
-      audience: "authenticated",
-    });
+    const { payload } = await jwtVerify(token, jwks, { issuer: base, audience: "authenticated" });
     return typeof payload.sub === "string" ? payload.sub : null;
   } catch {
     return null;
   }
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (request.method !== "POST" || url.pathname !== "/ask") {
-      return json({ error: "not_found" }, 404);
-    }
-    const account = await verify(request, env);
-    if (!account) return json({ error: "unauthorized" }, 401);
-
-    let body: { question?: string };
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "bad_request" }, 400);
-    }
-
-    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+async function llm(env: Env, messages: ChatMessage[], maxTokens: number): Promise<string | null> {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(25_000),
       body: JSON.stringify({
         model: env.MODEL,
-        max_tokens: 300,
+        max_tokens: maxTokens,
         response_format: { type: "json_object" },
         provider: { zdr: true, data_collection: "deny" },
-        messages: [
-          { role: "system", content: 'Reply with JSON: {"answer": string}.' },
-          { role: "user", content: String(body.question ?? "").slice(0, 500) },
-        ],
+        messages,
       }),
     });
-    if (!upstream.ok) return json({ error: "upstream", status: upstream.status }, 502);
+    if (!res.ok) return null;
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content ?? null;
+  } catch {
+    return null;
+  }
+}
 
-    const data = (await upstream.json()) as {
-      choices?: { message?: { content?: string } }[];
-      usage?: unknown;
-    };
-    // `usage` is returned only for the day-1 cost check; drop it on Nov 10.
-    return json({
-      account,
-      content: data.choices?.[0]?.message?.content ?? null,
-      usage: data.usage ?? null,
+async function deleteUser(env: Env, id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      },
     });
+    return res.ok || res.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const { pathname } = new URL(request.url);
+    // US placement for the one Durable Object that holds the counts.
+    const usage = env.USAGE.get(env.USAGE.idFromName("global"), { locationHint: "enam" });
+    const verifyReq = (r: Request) => verify(r, env);
+
+    if (request.method === "POST" && pathname === "/ask") {
+      return handleAsk(request, {
+        verify: verifyReq,
+        usage: {
+          reserve: (a, d, pa, g) => usage.reserve(a, d, pa, g),
+          refund: (a, d) => usage.refund(a, d),
+        },
+        llm: (m, t) => llm(env, m, t),
+        now: () => new Date(),
+      });
+    }
+    if (request.method === "DELETE" && pathname === "/account") {
+      return handleDeleteAccount(request, {
+        verify: verifyReq,
+        deleteUser: (id) => deleteUser(env, id),
+        deleteUsage: (id) => usage.deleteAccount(id),
+      });
+    }
+    return json({ error: "not_found" }, 404);
+  },
+
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    await keepAlive(env);
   },
 };
