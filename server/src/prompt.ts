@@ -46,8 +46,11 @@ export function parseModelOutput(
   const { answer, cited } = value as { answer?: unknown; cited?: unknown };
   if (typeof answer !== "string" || answer.trim() === "") return null;
   const allowed = new Set(sentIds);
+  // Ids are sent as "1", "2", ...; models often cite them back as bare numbers.
+  const asId = (c: unknown) =>
+    typeof c === "string" ? c : Number.isInteger(c) ? String(c) : null;
   const ids = Array.isArray(cited)
-    ? [...new Set(cited.filter((c): c is string => typeof c === "string" && allowed.has(c)))]
+    ? [...new Set(cited.map(asId).filter((c): c is string => c !== null && allowed.has(c)))]
     : [];
   return { answer: answer.trim().slice(0, 4000), cited: ids };
 }

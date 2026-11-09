@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{AskView, COLUMN};
-use crate::ask::{Answer, Source, Turn, TurnState, blocked_text, problem_text};
+use crate::ask::{Answer, Source, Turn, TurnState, ai_note, blocked_text, problem_text};
 use crate::i18n::{Lang, Strings};
 use crate::search::highlight::one_line;
 use crate::theme::{self, Palette};
@@ -364,7 +364,7 @@ impl AskView {
                 )
             })
             .when(gone, |d| d.child(warn_note(p, s.ask_file_gone).mt(px(8.))))
-            .child(note(p).mt(px(10.)).child(s.ask_written_by_ai))
+            .child(note(p).mt(px(10.)).child(ai_note(answer, s)))
     }
 
     /// Under the chat: the disclosure the first time, then the box with the

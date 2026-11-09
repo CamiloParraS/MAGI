@@ -48,7 +48,7 @@ use gpui_kit::component::select::SelectState;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::*;
 use magi_core::config::{IndexingConfig, Language, TransparencyMode, UiConfig};
-use magi_core::dto::{ErrorCode, FileError};
+use magi_core::dto::FileError;
 use magi_core::features::Feature;
 use magi_core::host::Host;
 use magi_core::platform::BackdropSupport;
@@ -154,7 +154,7 @@ pub struct SettingsView {
     errors_listed: Option<u64>,
     /// The last change that failed and where, until the next change or a
     /// section switch.
-    error: Option<(Field, ErrorCode)>,
+    error: Option<(Field, crate::settings::Failure)>,
     /// The text field whose change just saved, for a moment: those save on
     /// Enter, blur or Save and show nothing else.
     saved: Option<Field>,

@@ -40,9 +40,9 @@ impl SettingsView {
             None => {
                 self.error = Some((
                     Field::MaxSize,
-                    ErrorCode::InvalidSetting {
+                    crate::settings::Failure::Engine(ErrorCode::InvalidSetting {
                         field: MAX_SIZE_FIELD.into(),
-                    },
+                    }),
                 ));
                 cx.notify();
             }

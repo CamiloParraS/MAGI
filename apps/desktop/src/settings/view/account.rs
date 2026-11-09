@@ -3,7 +3,9 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Disableable as _, Sizable as _, WindowExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
@@ -104,6 +106,7 @@ impl SettingsView {
                             .ghost()
                             .small()
                             .label(s.account_sign_out)
+                            .when(self.is_busy(Field::SignOut), |b| b.icon(Spinner::new()))
                             .loading(self.is_busy(Field::SignOut))
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -128,6 +131,9 @@ impl SettingsView {
                                 .danger()
                                 .small()
                                 .label(s.account_delete)
+                                .when(self.is_busy(Field::DeleteAccount), |b| {
+                                    b.icon(Spinner::new())
+                                })
                                 .loading(self.is_busy(Field::DeleteAccount))
                                 .disabled(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {

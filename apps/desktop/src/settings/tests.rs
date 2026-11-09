@@ -436,3 +436,15 @@ fn image_features_need_the_images_type() {
     };
     assert!(!images_needed(&no_images, &[off]));
 }
+
+#[test]
+fn an_ask_magi_failure_says_what_went_wrong_not_that_a_change_failed() {
+    use magi_core::ask::AskError;
+    for lang in [Lang::En, Lang::Es] {
+        let s = lang.strings();
+        let network = Failure::from(&magi_core::Error::Ask(AskError::Network("dns".into())));
+        assert_eq!(failure_text(&network, s), s.ask_err_network);
+        let engine = Failure::from(&magi_core::Error::EngineStarting);
+        assert_eq!(failure_text(&engine, s), s.engine_starting);
+    }
+}

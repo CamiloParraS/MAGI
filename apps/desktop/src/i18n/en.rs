@@ -307,6 +307,7 @@ pub const STRINGS: Strings = Strings {
     ask_send: "Send",
     ask_asking: "Asking…",
     ask_written_by_ai: "Written by AI from your excerpts. Check the cited files.",
+    ask_written_by_ai_uncited: "Written by AI from your excerpts.",
     ask_used: "{used} of {limit} questions today",
     ask_limit_title: "That's all {n} questions for today",
     ask_limit_everyone_title: "Magi has reached today's limit for everyone",

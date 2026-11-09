@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use super::{Field, SettingsView};
 use crate::i18n::Strings;
-use crate::settings::error_text;
+use crate::settings::failure_text;
 use crate::theme::{self, Palette};
 use crate::ui::{note, row, row_icon, saved_note, warn_note};
 
@@ -28,7 +28,7 @@ impl SettingsView {
             .as_ref()
             .filter(|(f, _)| *f == field)
             .map(|(_, error)| {
-                let text = error_text(error, s);
+                let text = failure_text(error, s);
                 let id = SharedString::from(format!("problem-{field:?}-{text}"));
                 theme::fade_in(warn_note(p, text), id)
             })

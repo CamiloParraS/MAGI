@@ -4,12 +4,12 @@
 use gpui_kit::component::select::SelectEvent;
 use gpui_kit::*;
 use magi_core::config::Config;
-use magi_core::dto::ErrorCode;
 use magi_core::host::Host;
 
 use super::choices::{Choice, Dropdown};
 use super::{Field, SAVED_FOR, Section, SettingsView};
 use crate::app::AppEvent;
+use crate::settings::Failure;
 
 impl SettingsView {
     /// Saves `patch(choice)` when a dropdown confirms a choice.
@@ -60,7 +60,7 @@ impl SettingsView {
                 }
                 view.error = done.err().map(|error| {
                     tracing::warn!(%error, ?field, "a change failed");
-                    (field, ErrorCode::from(&error))
+                    (field, Failure::from(&error))
                 });
                 if view.section == Section::Index {
                     view.load_unreadable(cx);
@@ -116,7 +116,7 @@ impl SettingsView {
             }
             Err(error) => {
                 tracing::warn!(%error, "a settings change failed");
-                self.error = Some((field, ErrorCode::from(&error)));
+                self.error = Some((field, Failure::from(&error)));
             }
         }
         // The controls show what is saved: the rounded amount, or the old

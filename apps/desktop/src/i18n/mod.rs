@@ -371,6 +371,7 @@ pub struct Strings {
     pub ask_send: &'static str,
     pub ask_asking: &'static str,
     pub ask_written_by_ai: &'static str,
+    pub ask_written_by_ai_uncited: &'static str,
     /// `{used}` and `{limit}` are counts.
     pub ask_used: &'static str,
     /// `{n}` is the daily limit.

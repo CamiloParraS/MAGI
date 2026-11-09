@@ -62,6 +62,14 @@ describe("handleAsk", () => {
     expect(((await (await ask(good)).json()) as { cited: string[] }).cited).toEqual(["a"]);
   });
 
+  it("keeps cited ids the model wrote as numbers", async () => {
+    const { ask } = setup({
+      llm: async () => JSON.stringify({ answer: "x", cited: [1, "2", 2, 3, 1.5] }),
+    });
+    const body = { question: "q?", sources: [src("1"), src("2")] };
+    expect(((await (await ask(body)).json()) as { cited: string[] }).cited).toEqual(["1", "2"]);
+  });
+
   it("accepts the size boundaries", async () => {
     const { ask } = setup();
     const body = {

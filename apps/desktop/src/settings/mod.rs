@@ -216,6 +216,30 @@ pub fn download_error_label(code: DownloadError, s: &Strings) -> &'static str {
     }
 }
 
+/// A failed change: an engine error, or an Ask Magi one (signing out,
+/// deleting the account) said in the Ask window's words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    Engine(ErrorCode),
+    Ask(crate::ask::Problem),
+}
+
+impl From<&magi_core::Error> for Failure {
+    fn from(error: &magi_core::Error) -> Self {
+        match error {
+            magi_core::Error::Ask(error) => Self::Ask(crate::ask::problem_of(error)),
+            other => Self::Engine(ErrorCode::from(other)),
+        }
+    }
+}
+
+pub fn failure_text(failure: &Failure, s: &Strings) -> String {
+    match failure {
+        Failure::Engine(error) => error_text(error, s),
+        Failure::Ask(problem) => crate::ask::problem_text(*problem, s).into(),
+    }
+}
+
 /// Why a settings change failed, for the user.
 pub fn error_text(error: &ErrorCode, s: &Strings) -> String {
     match error {

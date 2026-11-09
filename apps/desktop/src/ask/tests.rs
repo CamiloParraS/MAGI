@@ -486,3 +486,23 @@ fn the_same_account_again_changes_nothing() {
     model.finished(out.generation, Ok(answer(&[])));
     assert!(matches!(model.turns()[0].state, TurnState::Answered(_)));
 }
+
+#[test]
+fn an_answer_that_cites_nothing_does_not_point_at_cited_files() {
+    for lang in [Lang::En, Lang::Es] {
+        let s = lang.strings();
+        let none = Answer {
+            text: "x".into(),
+            cited: vec![],
+            used: 1,
+            limit: 20,
+        };
+        let some = Answer {
+            cited: vec![0],
+            ..none.clone()
+        };
+        assert_eq!(ai_note(&some, s), s.ask_written_by_ai);
+        assert_eq!(ai_note(&none, s), s.ask_written_by_ai_uncited);
+        assert_ne!(s.ask_written_by_ai, s.ask_written_by_ai_uncited);
+    }
+}

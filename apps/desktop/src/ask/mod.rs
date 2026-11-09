@@ -170,6 +170,15 @@ pub fn blocked_text(blocked: Blocked, has_sources: bool, s: &Strings) -> Option<
     }
 }
 
+/// The note under an answer: it points at the cited files only when there
+/// are some.
+pub fn ai_note(answer: &Answer, s: &Strings) -> &'static str {
+    match answer.cited.is_empty() {
+        true => s.ask_written_by_ai_uncited,
+        false => s.ask_written_by_ai,
+    }
+}
+
 /// An answer, numbered against what its turn sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
