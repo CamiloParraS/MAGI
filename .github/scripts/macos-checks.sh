@@ -324,15 +324,17 @@ ask_names() {
 }
 ask_open() { ask_names | grep -q "Ask Magi"; }
 config_has() { grep -q "$1" "$MAGI_CONFIG_DIR/config.toml"; }
-# The bar's main button, which is the rightmost, from the window's corner.
-ask_click_primary() {
+# The dock's send arrow, measured from the window's bottom-right corner
+# (it sits 45 pt in and 36 pt up). The search query is already in the box,
+# and the first question also saves the disclosure as accepted.
+ask_click_send() {
   local ax ay aw ah
   read -r ax ay aw ah <<<"$(osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
   set {x, y} to position of window \"Ask Magi\"
   set {w, h} to size of window \"Ask Magi\"
   return (x as text) & \" \" & (y as text) & \" \" & (w as text) & \" \" & (h as text)
 end tell" 2>/dev/null || echo "")"
-  [ -n "${ah:-}" ] && cliclick "c:$((ax + aw - 50)),$((ay + ah - 24))"
+  [ -n "${ah:-}" ] && cliclick "c:$((ax + aw - 45)),$((ay + ah - 36))"
 }
 
 launch
@@ -350,16 +352,13 @@ if wait_for 10 ask_open; then
     cliclick "t:$MAGI_ASK_TEST_EMAIL" kp:tab "t:$MAGI_ASK_TEST_PASSWORD" kp:return
     if wait_for 30 config_has signed_in_as; then
       shot "12-ask-disclosure"
-      ask_click_primary
+      ask_click_send
       if wait_for 10 config_has "disclosed = true"; then
-        sleep 2
-        shot "13-ask-preview"
-        cliclick kp:return
         sleep 25
-        shot "14-ask-answer"
-        record "row 28 Ask Magi flow" unknown "signed in and accepted the disclosure; grade 14-ask-answer.png by eye"
+        shot "13-ask-answer"
+        record "row 28 Ask Magi flow" unknown "signed in, asked, disclosure saved; grade 13-ask-answer.png by eye"
       else
-        record "row 28 Ask Magi flow" fail "signed in, but the disclosure was not saved as accepted"
+        record "row 28 Ask Magi flow" fail "signed in, but sending the first question did not save the disclosure (see 12-ask-disclosure.png)"
       fi
     else
       record "row 28 Ask Magi flow" fail "not signed in after 30 s (a keychain prompt may block this runner)"
