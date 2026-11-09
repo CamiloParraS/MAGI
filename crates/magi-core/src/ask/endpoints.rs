@@ -5,11 +5,9 @@ use super::AskError;
 
 const SUPABASE_URL: &str = "https://aklgszmriarobrlkrzcd.supabase.co";
 /// The publishable key (`sb_publishable_...`) or the legacy anon key.
-// TODO(owner): fill in before release. Empty means Ask Magi reports NotConfigured.
-const SUPABASE_ANON_KEY: &str = "";
+const SUPABASE_ANON_KEY: &str = "sb_publishable_AVnDnk6l6GlRMxoTSLR4iQ_SblqIzxu";
 /// The deployed Worker, `https://magi-ask.<subdomain>.workers.dev`.
-// TODO(owner): fill in before release.
-const WORKER_URL: &str = "";
+const WORKER_URL: &str = "https://magi-ask.juanparracsfn.workers.dev";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
