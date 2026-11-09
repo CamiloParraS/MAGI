@@ -4,6 +4,20 @@ fn day(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).unwrap()
 }
 
+/// ADR-0014: "nothing leaves" holds only with its condition beside it, and a
+/// note about downloads must not promise more than downloads.
+#[test]
+fn the_privacy_copy_keeps_the_condition_ask_magi_added() {
+    for lang in [Lang::En, Lang::Es] {
+        let s = lang.strings();
+        assert!(s.ob_privacy.contains("Ask Magi"), "{lang:?}");
+        assert_eq!(s.ob_features_note, s.features_note, "{lang:?}");
+        for promise in ["Nothing else", "nothing is sent", "Nada más", "no se envía"] {
+            assert!(!s.features_note.contains(promise), "{lang:?}: {promise}");
+        }
+    }
+}
+
 #[test]
 fn system_resolves_any_spanish_locale_to_spanish() {
     use Language::*;

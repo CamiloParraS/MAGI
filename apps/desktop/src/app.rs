@@ -13,6 +13,8 @@ use magi_core::config::{Onboarding, UiConfig};
 use magi_core::dto::PauseReason;
 use magi_core::host::{Host, HostEvent, HostPaths};
 
+use crate::ask;
+use crate::ask::view::AskView;
 use crate::hotkey::{self, Hotkey};
 use crate::i18n::Lang;
 use crate::live::Live;
@@ -25,6 +27,7 @@ use crate::ui::SCAN_EXIT;
 use assets::AppAssets;
 use start_failure::show_start_failure;
 use windows::activate;
+pub use windows::{AskSlot, show_ask};
 
 pub enum AppEvent {
     /// A plain launch: onboarding until it is done (FR-10), else search,
@@ -35,6 +38,9 @@ pub enum AppEvent {
     /// Open the settings window, or bring it forward (the search window's
     /// gear).
     Settings,
+    /// Ask about what is on screen: open the Ask window, or give the open
+    /// one these contents.
+    Ask(ask::Request),
     /// `magi --onboarding`: onboarding again from its first step (a reset
     /// for trying it; folders and features stay).
     Onboarding,
@@ -89,6 +95,7 @@ pub fn run(
         magi_core::platform::hide_dock_icon();
         cx.set_window_appearance(theme::chrome(&ui.theme));
         SearchView::bind_keys(cx);
+        AskView::bind_keys(cx);
         onboarding::bind_keys(cx);
         // `with_animation` then renders each animation's static state.
         cx.set_reduce_motion(magi_core::platform::reduce_motion());
@@ -101,6 +108,8 @@ pub fn run(
         .inspect_err(|error| tracing::warn!(%error, "no hotkey; `magi --toggle` still works"))
         .ok();
         let mut live = Live::new(Lang::current(ui.language), ui.theme.clone());
+        // From the config alone: no keychain read and no request.
+        live.account = host.account_state().unwrap_or_default();
         // Wayland may refuse the hotkey manager outright; settings then says
         // to bind `magi --toggle` in the desktop (SPEC.md §6.3).
         if hotkey.is_none() && magi_core::platform::is_wayland() {
@@ -130,6 +139,7 @@ pub fn run(
             window: None,
             settings: None,
             onboarding: None,
+            ask: None,
             events: tx.clone(),
             hotkey,
             tray,
@@ -154,6 +164,7 @@ struct Shell {
     window: Option<AnyWindowHandle>,
     settings: Option<AnyWindowHandle>,
     onboarding: Option<AnyWindowHandle>,
+    ask: AskSlot,
     /// For windows that report back to the shell (settings).
     events: Events,
     hotkey: Option<Hotkey>,
@@ -277,6 +288,10 @@ impl Shell {
                 if !activate(self.settings, cx) {
                     self.open_settings(cx);
                 }
+            }
+            AppEvent::Ask(request) => {
+                let backdrop = self.backdrop();
+                show_ask(&mut self.ask, &self.host, &self.live, backdrop, request, cx);
             }
             AppEvent::Tray(TrayAction::TogglePause) => {
                 let (host, paused) = (self.host.clone(), self.paused);

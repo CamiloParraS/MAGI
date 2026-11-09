@@ -32,6 +32,12 @@ gpui_kit::assets::icon_assets!(
         ScanEye,
         // The detail pane's tag for a QR match.
         ScanQrCode,
+        // Ask Magi: the entry points, then the chat's send, retry and
+        // disclosure.
+        MessageCircleQuestionMark,
+        ArrowUp,
+        RotateCcw,
+        ShieldCheck,
         // Keycaps (onboarding).
         ArrowBigUp,
         ChevronUp,

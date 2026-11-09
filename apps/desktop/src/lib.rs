@@ -2,6 +2,7 @@
 //! `magi_core::host::Host`. No business logic lives here.
 
 pub mod app;
+pub mod ask;
 pub mod hotkey;
 pub mod i18n;
 pub mod instance;

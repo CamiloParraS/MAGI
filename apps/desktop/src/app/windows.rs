@@ -1,17 +1,89 @@
-//! Opening, closing and bringing forward the app's three windows.
+//! Opening, closing and bringing forward the app's windows.
 
 use std::time::Instant;
 
 use gpui_kit::*;
+use magi_core::host::Host;
 
 use super::Shell;
+use crate::ask::Request;
+use crate::ask::view::{self as ask, AskView};
 use crate::live::Live;
 use crate::onboarding::{self, OnboardingView};
 use crate::search::view::{self, Opening, SearchView};
 use crate::settings::view::{self as settings, SettingsView};
-use crate::theme;
+use crate::theme::{self, Backdrop};
+
+/// The Ask window, while one is open. The view is weak so that closing the
+/// window ends it.
+pub type AskSlot = Option<(AnyWindowHandle, WeakEntity<AskView>)>;
+
+/// One Ask window at a time, like Settings: an open one takes `request` in
+/// place of what it held; otherwise a new one opens.
+pub fn show_ask(
+    slot: &mut AskSlot,
+    host: &Host,
+    live: &Entity<Live>,
+    backdrop: Backdrop,
+    request: Request,
+    cx: &mut App,
+) {
+    if let Some((handle, view)) = slot.as_ref()
+        && let Some(view) = view.upgrade()
+    {
+        let reused = handle.update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| view.replace(request.clone(), window, cx));
+            window.activate_window();
+        });
+        if reused.is_ok() {
+            cx.activate(true);
+            return;
+        }
+    }
+    let options = WindowOptions {
+        titlebar: Some(TitlebarOptions {
+            title: Some(live.read(cx).lang.strings().ask_magi.into()),
+            ..Default::default()
+        }),
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            ask::fit_to(
+                cx.primary_display()
+                    .map(|display| display.visible_bounds().size),
+            ),
+            cx,
+        ))),
+        window_min_size: Some(ask::MIN_SIZE),
+        focus: true,
+        show: true,
+        window_background: theme::window_background(backdrop),
+        ..Default::default()
+    };
+    let (host, live) = (host.clone(), live.clone());
+    match gpui_kit::open_window(options, cx, move |window, cx| {
+        cx.new(|cx| AskView::new(host, live, backdrop, request, window, cx))
+    }) {
+        Ok((handle, view)) => {
+            if matches!(backdrop, Backdrop::Blurred { .. }) {
+                clear_root_background(handle, cx);
+            }
+            cx.activate(true);
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            *slot = Some((handle, view.downgrade()));
+        }
+        Err(error) => tracing::error!(%error, "could not open the Ask window"),
+    }
+}
 
 impl Shell {
+    pub(super) fn backdrop(&self) -> Backdrop {
+        theme::backdrop(
+            self.ui.transparency_mode,
+            self.ui.transparency_intensity,
+            magi_core::platform::backdrop_support(),
+        )
+    }
+
     /// GPUI cannot hide a window on Windows (`cx.hide()` is a no-op there),
     /// so the search window is closed and reopened instead (ADR-0011).
     pub(super) fn close_window(&mut self, cx: &mut App) -> bool {
@@ -22,11 +94,7 @@ impl Shell {
 
     /// A normal window with the search window's background (SPEC M6).
     pub(super) fn open_settings(&mut self, cx: &mut App) {
-        let backdrop = theme::backdrop(
-            self.ui.transparency_mode,
-            self.ui.transparency_intensity,
-            magi_core::platform::backdrop_support(),
-        );
+        let backdrop = self.backdrop();
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
                 title: Some(self.live.read(cx).lang.strings().settings.into()),
@@ -94,11 +162,7 @@ impl Shell {
             at: Instant::now(),
             teach: (teach && self.hotkey.is_some()).then(|| self.ui.hotkey.clone()),
         };
-        let backdrop = theme::backdrop(
-            self.ui.transparency_mode,
-            self.ui.transparency_intensity,
-            magi_core::platform::backdrop_support(),
-        );
+        let backdrop = self.backdrop();
         // Multi-monitor: the display under the cursor, else the primary.
         let display = magi_core::platform::display_under_cursor().map(DisplayId::from);
         let full = Bounds::centered(display, size(view::WIDTH, view::MAX_HEIGHT), cx);

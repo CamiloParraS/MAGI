@@ -190,6 +190,16 @@ impl SearchState {
         &self.results
     }
 
+    /// What Ask Magi may ask about: the results on screen for the text in
+    /// the box. Folded weak results ("Nothing close") and a list left over
+    /// from older text while a new search runs are not.
+    pub fn askable(&self) -> &[SearchResult] {
+        match self.loading {
+            true => &[],
+            false => self.shown(),
+        }
+    }
+
     /// The results on screen: the strong ones, then the weak ones when open.
     pub fn shown(&self) -> &[SearchResult] {
         let end = match self.weak_open {
@@ -298,6 +308,21 @@ mod tests {
             }),
         );
         s
+    }
+
+    #[test]
+    fn only_results_on_screen_can_be_asked_about() {
+        // "Nothing close": every result is folded away.
+        let mut s = folded(0, 3);
+        assert!(s.askable().is_empty());
+        s.toggle_weak();
+        assert_eq!(s.askable().len(), 3);
+        // Folded weak results are not sent with the strong ones.
+        assert_eq!(folded(2, 3).askable().len(), 2);
+        // While a new query is out, the old list is not what was asked.
+        let mut s = folded(2, 0);
+        s.set_query("rent car");
+        assert!(s.askable().is_empty());
     }
 
     #[test]

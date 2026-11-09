@@ -65,6 +65,9 @@ impl SettingsView {
                 if view.section == Section::Index {
                     view.load_unreadable(cx);
                 }
+                if matches!(field, Field::SignOut | Field::DeleteAccount) {
+                    view.refresh_account(cx);
+                }
                 cx.notify();
             });
         })

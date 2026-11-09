@@ -287,7 +287,9 @@ impl SearchView {
                 // A fixed height, so the window does not resize as the
                 // selection moves through results of different detail.
                 true => list.w(SPLIT_LIST_WIDTH).flex_none().h_full(),
-                false => list.max_h(LIST_MAX_HEIGHT),
+                // The whole width: in the row beside no pane, a list sized
+                // to its content left an empty strip on the right.
+                false => list.flex_1().min_w_0().max_h(LIST_MAX_HEIGHT),
             })
             .children(rows)
             .map(|list| match dimmed {

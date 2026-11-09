@@ -22,9 +22,13 @@
 //! Index: counts from the status, pause and rescan, the files that could
 //! not be read, and clearing the index.
 //!
+//! Account: signing in to Ask Magi (the same form as the Ask window), who is
+//! signed in, signing out and deleting the account.
+//!
 //! The rail's top button opens the search window, so a change can be tried
 //! without the hotkey or the tray.
 
+mod account;
 mod appearance;
 mod choices;
 mod features;
@@ -54,6 +58,7 @@ use std::time::Instant;
 
 use super::{Roll, slider_from_intensity};
 use crate::app::Events;
+use crate::ask::view::sign_in::SignInForm;
 use crate::i18n::Lang;
 use crate::live::Live;
 use crate::theme::{self, Palette};
@@ -96,6 +101,8 @@ pub enum Field {
     Rescan,
     Clear,
     Quit,
+    SignOut,
+    DeleteAccount,
 }
 
 pub struct SettingsView {
@@ -157,6 +164,8 @@ pub struct SettingsView {
     /// Quick taps on the version label so far, and the last one's time:
     /// [`version_tap`] brings the onboarding back on the tenth.
     version_taps: (usize, Option<Instant>),
+    /// Account, signed out: the same form as the Ask window's.
+    sign_in: Entity<SignInForm>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -309,6 +318,7 @@ impl SettingsView {
             }),
         ];
         let folder_list = FolderList::open(&host);
+        let sign_in = cx.new(|cx| SignInForm::new(host.clone(), live.clone(), window, cx));
         let mut view = Self {
             host,
             live,
@@ -343,6 +353,7 @@ impl SettingsView {
             saved: None,
             busy: Vec::new(),
             version_taps: (0, None),
+            sign_in,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -392,6 +403,7 @@ impl Render for SettingsView {
             Section::General => self.general(&p, cx),
             Section::Appearance => self.appearance(&p, window, cx),
             Section::Index => self.index(&p, cx),
+            Section::Account => self.account(&p, cx),
         };
         div()
             .size_full()

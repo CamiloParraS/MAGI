@@ -18,10 +18,15 @@ use magi_core::host::Host;
 
 use super::state::{Query, SearchState};
 use crate::app::{AppEvent, Events};
+use crate::ask;
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
+use crate::ui::loading_track;
 
-actions!(magi_search, [SelectUp, SelectDown, Close, OpenSettings]);
+actions!(
+    magi_search,
+    [SelectUp, SelectDown, Close, OpenSettings, AskMagi]
+);
 
 const CONTEXT: &str = "SearchWindow";
 /// The wait after a keystroke typed while a search is still pending.
@@ -35,6 +40,7 @@ const AUTO_RETRY: Duration = Duration::from_millis(1500);
 const COPIED: Duration = Duration::from_millis(1200);
 /// The footer's copy hint, whose label becomes "Path copied".
 const COPY_KEY: &str = "secondary-c";
+const ASK_KEY: &str = "alt-enter";
 /// How long the copied row's highlight takes to fade.
 const COPY_FLASH: Duration = Duration::from_millis(600);
 pub const WIDTH: Pixels = px(820.);
@@ -104,6 +110,7 @@ impl SearchView {
             KeyBinding::new("down", SelectDown, Some(CONTEXT)),
             KeyBinding::new("escape", Close, Some(CONTEXT)),
             KeyBinding::new("secondary-,", OpenSettings, Some(CONTEXT)),
+            KeyBinding::new(ASK_KEY, AskMagi, Some(CONTEXT)),
         ]);
     }
 
@@ -180,6 +187,10 @@ impl SearchView {
 
     pub fn state(&self) -> &SearchState {
         &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut SearchState {
+        &mut self.state
     }
 
     /// Follows `ui.theme` and the OS; gpui-component's theme colors the input.
@@ -338,29 +349,6 @@ impl SearchView {
         }
     }
 
-    /// The 2 px strip under the input, always there so a search starting or
-    /// ending never moves the list. While a slow search runs, a short accent
-    /// segment sweeps along it; with reduced motion, a still bar stands in.
-    fn loading_track(&self, p: &Palette) -> Div {
-        let track = div().relative().w_full().h(px(2.)).overflow_hidden();
-        if !self.dimmed() {
-            return track;
-        }
-        let segment = div().absolute().top_0().h_full().bg(p.accent);
-        if magi_core::platform::reduce_motion() {
-            return track.child(segment.left_0().w_full().opacity(0.4));
-        }
-        track.child(
-            segment.w(relative(0.3)).with_animation(
-                "loading",
-                Animation::new(Duration::from_millis(1100))
-                    .repeat()
-                    .with_easing(ease_in_out),
-                |bar, t| bar.left(relative(t * 1.3 - 0.3)),
-            ),
-        )
-    }
-
     /// Opens (or, with `reveal`, shows in the file manager) the selected
     /// result, by `file_id` through `Host` only (SPEC.md §5.7 Security).
     fn act(&mut self, reveal: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -455,6 +443,16 @@ impl SearchView {
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, _: &mut Context<Self>) {
         let _ = self.events.try_send(AppEvent::Settings);
     }
+
+    /// Every way of asking comes here; this window closes itself when the
+    /// Ask window takes the focus.
+    fn ask(&mut self, _: &AskMagi, _: &mut Window, _: &mut Context<Self>) {
+        let results = self.state.askable();
+        if ask::can_ask(results) {
+            let request = ask::request(self.state.query(), results);
+            let _ = self.events.try_send(AppEvent::Ask(request));
+        }
+    }
 }
 
 /// Resizes the window to its content, once layout knows the height.
@@ -487,6 +485,7 @@ impl Render for SearchView {
             .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
             .capture_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::ask))
             .on_children_prepainted(fit)
             .child(
                 div()
@@ -508,7 +507,7 @@ impl Render for SearchView {
                             .child(Input::new(&self.input).appearance(false).large()),
                     )
                     .children(self.shortcut_hint(&p, cx))
-                    .child(self.loading_track(&p))
+                    .child(loading_track(&p, self.dimmed()))
                     .children(self.body(&p, cx))
                     .child(self.footer(&p, cx)),
             )

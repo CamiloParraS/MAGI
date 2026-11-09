@@ -11,8 +11,8 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::*;
 use magi_core::dto::{MatchSource, SearchResult};
 
-use super::SearchView;
 use super::results::{folder_of, local_date, short_folder};
+use super::{AskMagi, SearchView};
 use crate::search::state::shown_sources;
 use crate::search::{detail, highlight};
 use crate::theme::{self, Palette};
@@ -187,6 +187,19 @@ impl SearchView {
                             .items_center()
                             .justify_end()
                             .gap_2()
+                            .child(
+                                div().debug_selector(|| "ask-pane".into()).child(
+                                    Button::new("pane-ask")
+                                        .cursor_pointer()
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::MessageCircleQuestionMark)
+                                        .label(s.ask_magi)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.ask(&AskMagi, window, cx)
+                                        })),
+                                ),
+                            )
                             .child(
                                 Button::new("pane-reveal")
                                     .cursor_pointer()

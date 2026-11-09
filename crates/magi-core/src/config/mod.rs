@@ -168,7 +168,10 @@ pub struct UiConfig {
     /// manager); off copies its path as text.
     pub copy_as_file: bool,
     /// The search window splits into the results and a pane with the
-    /// selected one's preview and details.
+    /// selected one's preview and details. On for new installs; a config
+    /// saved before the setting existed keeps the plain list, hence the
+    /// field's own default rather than [`UiConfig::default`]'s.
+    #[serde(default)]
     pub detail_pane: bool,
     pub language: Language,
     pub transparency_mode: TransparencyMode,
@@ -185,7 +188,7 @@ impl Default for UiConfig {
             max_results: 30,
             launch_at_login: false,
             copy_as_file: true,
-            detail_pane: false,
+            detail_pane: true,
             language: Language::System,
             transparency_mode: TransparencyMode::MatchSystem,
             transparency_intensity: 0.75,

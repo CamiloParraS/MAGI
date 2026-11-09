@@ -65,6 +65,8 @@ impl SettingsView {
     pub(super) fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.theme = self.live.read(cx).theme.clone();
         self.dark = theme::sync(&self.theme, window, cx);
+        let dark = self.dark;
+        self.sign_in.update(cx, |form, _| form.set_dark(dark));
         cx.notify();
     }
 }

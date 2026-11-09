@@ -33,14 +33,16 @@ pub(super) enum Section {
     General,
     Appearance,
     Index,
+    Account,
 }
 
-pub(super) const SECTIONS: [Section; 5] = [
+pub(super) const SECTIONS: [Section; 6] = [
     Section::Folders,
     Section::Searched,
     Section::General,
     Section::Appearance,
     Section::Index,
+    Section::Account,
 ];
 
 impl Section {
@@ -51,6 +53,7 @@ impl Section {
             Self::General => s.general,
             Self::Appearance => s.appearance,
             Self::Index => s.index,
+            Self::Account => s.account,
         }
     }
 
@@ -61,6 +64,7 @@ impl Section {
             Self::General => s.blurb_general,
             Self::Appearance => s.blurb_appearance,
             Self::Index => s.blurb_index,
+            Self::Account => s.blurb_account,
         }
     }
 
@@ -71,6 +75,7 @@ impl Section {
             Self::General => IconName::Settings,
             Self::Appearance => IconName::Palette,
             Self::Index => IconName::ChartColumn,
+            Self::Account => IconName::CircleUser,
         }
     }
 }
@@ -152,7 +157,7 @@ impl SettingsView {
                     .child(s.settings),
             )
             .child(sections)
-            // A hairline marks it as an action, not a sixth section.
+            // A hairline marks it as an action, not one more section.
             .child(
                 div()
                     .mt_auto()

@@ -1,7 +1,7 @@
 //! App state every window shows besides its own: the shell keeps it
 //! current; an open window re-renders on every change.
 
-use magi_core::dto::{FeatureStatus, IndexStatus, PermissionIssue};
+use magi_core::dto::{AccountState, FeatureStatus, IndexStatus, PermissionIssue};
 use magi_core::features::Feature;
 
 use crate::i18n::Lang;
@@ -34,6 +34,9 @@ pub struct Live {
     pub search_open: bool,
     /// The last query typed; the next window opens with it selected.
     pub last_query: String,
+    /// Who is signed in to Ask Magi. Changing it in Settings or the Ask
+    /// window reaches the other one through here.
+    pub account: AccountState,
 }
 
 impl Live {
@@ -52,6 +55,7 @@ impl Live {
             hotkey_conflict: None,
             search_open: false,
             last_query: String::new(),
+            account: AccountState::default(),
         }
     }
 

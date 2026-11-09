@@ -3,11 +3,11 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{IconName, Sizable as _};
+use gpui_kit::component::{Disableable as _, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
+use super::{ASK_KEY, AskMagi, CONTEXT, COPY_FLASH, COPY_KEY, OpenSettings, SearchView};
 use crate::app::AppEvent;
 use crate::search::state::{footer_status, hidden_reason};
 use crate::theme::{Palette, Tone};
@@ -21,6 +21,29 @@ impl SearchView {
             cx.notify();
         });
         let _ = self.events.try_send(AppEvent::Settings);
+    }
+
+    /// Key first, like the hints beside it; off while there is nothing to
+    /// ask about.
+    fn ask_button(&self, idle: bool, cx: &Context<Self>) -> Div {
+        let s = self.live.read(cx).lang.strings();
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(2.))
+            .debug_selector(|| "ask-footer".into())
+            .children(Keystroke::parse(ASK_KEY).ok().map(Kbd::new))
+            .child(
+                Button::new("ask-footer")
+                    .cursor_pointer()
+                    .ghost()
+                    .xsmall()
+                    .icon(gpui_kit::assets::IconName::MessageCircleQuestionMark)
+                    .label(s.ask_magi)
+                    .disabled(idle)
+                    .on_click(cx.listener(|this, _, window, cx| this.ask(&AskMagi, window, cx))),
+            )
     }
 
     /// Always there: the settings gear, the index status (as in the tray)
@@ -70,6 +93,7 @@ impl SearchView {
         // Always shown, so they are learned in the empty window; dimmed while
         // there is no result to act on.
         let idle = self.state.results().is_empty();
+        let nothing_to_ask = !crate::ask::can_ask(self.state.askable());
         let pairs: &[(&str, &'static str)] = &[
             ("enter", s.open),
             ("secondary-enter", s.reveal),
@@ -105,6 +129,7 @@ impl SearchView {
                     })),
             )
             .child(div().flex_1().min_w_0().children(status))
+            .child(self.ask_button(nothing_to_ask, cx))
             .child(
                 keys(pairs, self.copied.is_some().then_some((self.copies, p)))
                     .when(idle, |keys| keys.opacity(0.7))

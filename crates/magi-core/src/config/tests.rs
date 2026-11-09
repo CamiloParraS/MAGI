@@ -8,10 +8,13 @@ fn copying_a_result_copies_the_file_unless_turned_off() {
 }
 
 #[test]
-fn the_detail_pane_is_off_until_turned_on() {
-    assert!(!UiConfig::default().detail_pane);
-    let on: UiConfig = toml::from_str("detail_pane = true").unwrap();
-    assert!(on.detail_pane);
+fn the_detail_pane_is_on_for_new_installs_and_saved_configs_keep_theirs() {
+    assert!(UiConfig::default().detail_pane);
+    let off: UiConfig = toml::from_str("detail_pane = false").unwrap();
+    assert!(!off.detail_pane);
+    // A config saved before the setting existed meant the plain list.
+    let old: UiConfig = toml::from_str("launch_at_login = true").unwrap();
+    assert!(!old.detail_pane);
 }
 
 #[test]

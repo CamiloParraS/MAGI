@@ -141,6 +141,29 @@ pub(crate) fn row() -> Div {
         .min_h(px(44.))
 }
 
+/// A 2 px strip that is always there, so work starting or ending never moves
+/// what is below it. While `active`, a short accent segment sweeps along it;
+/// with reduced motion, a still bar stands in.
+pub(crate) fn loading_track(p: &Palette, active: bool) -> Div {
+    let track = div().relative().w_full().h(px(2.)).overflow_hidden();
+    if !active {
+        return track;
+    }
+    let segment = div().absolute().top_0().h_full().bg(p.accent);
+    if magi_core::platform::reduce_motion() {
+        return track.child(segment.left_0().w_full().opacity(0.4));
+    }
+    track.child(
+        segment.w(relative(0.3)).with_animation(
+            "loading",
+            Animation::new(Duration::from_millis(1100))
+                .repeat()
+                .with_easing(ease_in_out),
+            |bar, t| bar.left(relative(t * 1.3 - 0.3)),
+        ),
+    )
+}
+
 /// What the engine is doing when it is not simply idle or indexing: walking
 /// the folders ("N files found") or paused (and why). One grouped row.
 pub(crate) fn status_row(status: &IndexStatus, lang: Lang, p: &Palette) -> impl IntoElement {
