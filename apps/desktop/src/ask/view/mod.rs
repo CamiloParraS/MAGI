@@ -228,7 +228,7 @@ impl AskView {
         let Outgoing {
             generation,
             question,
-            sources,
+            files,
             accept_disclosure,
         } = outgoing;
         self.scroll.scroll_to_bottom();
@@ -240,7 +240,7 @@ impl AskView {
                     if accept_disclosure && let Err(error) = host.accept_ask_disclosure() {
                         tracing::warn!(%error, "could not save the accepted disclosure");
                     }
-                    host.ask(&question, &sources)
+                    host.ask_about(&question, &files)
                 })
                 .await
                 .map_err(ask_error);

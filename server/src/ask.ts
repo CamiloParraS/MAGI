@@ -6,7 +6,9 @@ export type { ChatMessage };
 export const LIMITS = {
   question: 500,
   sources: 5,
-  sourceText: 1000,
+  sourceText: 4000,
+  // All sources together; the app sends at most this (ask/context.rs).
+  totalText: 8000,
   perAccountPerDay: 20,
   globalPerDay: 200,
   maxTokens: 400,
@@ -41,6 +43,7 @@ function parse(body: unknown): Parsed {
   if (question.length > LIMITS.question) return { status: 413, error: "question_too_long" };
   if (sources.length > LIMITS.sources) return { status: 413, error: "too_many_sources" };
   const clean: Source[] = [];
+  let total = 0;
   for (const s of sources) {
     if (typeof s !== "object" || s === null) return bad;
     const { id, file_name, text } = s as Record<string, unknown>;
@@ -48,6 +51,8 @@ function parse(body: unknown): Parsed {
     if (typeof file_name !== "string" || file_name.length > 255) return bad;
     if (typeof text !== "string") return bad;
     if (text.length > LIMITS.sourceText) return { status: 413, error: "source_too_long" };
+    total += text.length;
+    if (total > LIMITS.totalText) return { status: 413, error: "sources_too_long" };
     clean.push({ id, file_name, text });
   }
   return { question: question.trim(), sources: clean };

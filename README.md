@@ -35,8 +35,9 @@ to a Magi account, signing in and sending questions to Ask Magi. Signed out,
 Magi makes no other connection. There is no telemetry, analytics or crash
 reporting.
 
-Ask Magi is optional. Each question sends its text, short excerpts from the
-results you leave ticked and those files' names, never full paths. They pass
+Ask Magi is optional. Each question sends its text, the passages of the
+files you leave ticked that best match it (up to 8,000 characters in all) and
+those files' names, never a whole file or full paths. They pass
 through Magi's server to OpenRouter and an AI host that doesn't keep them.
 Magi's server saves none of it; it stores only your account and a daily count
 of questions.

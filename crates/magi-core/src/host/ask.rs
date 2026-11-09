@@ -2,7 +2,7 @@
 //! calls that reach the Magi server through `ask::AskService`.
 
 use super::{Host, lock};
-use crate::ask::{AskAnswer, AskError, AskSource};
+use crate::ask::{AskAnswer, AskError, AskFile, AskSource, context};
 use crate::config;
 use crate::dto::AccountState;
 use crate::error::Result;
@@ -38,6 +38,25 @@ impl Host {
         let result = self.inner.ask.ask(question, sources);
         self.forget_if_signed_out(&result)?;
         Ok(result?)
+    }
+
+    /// Like [`Host::ask`], but the text sent for each ticked file is the part
+    /// of it that best matches this question (`ask::context`), not the
+    /// snippet the search showed. Keywords alone while the engine restarts.
+    pub fn ask_about(&self, question: &str, files: &[AskFile]) -> Result<AskAnswer> {
+        let components = self
+            .inner
+            .running()
+            .map(|r| r.components)
+            .unwrap_or_default();
+        // The model call comes before the reader lock, as in `search`.
+        let query = components
+            .text
+            .as_deref()
+            .and_then(|embedder| embedder.embed_query(question).ok());
+        let sources =
+            context::sources_for(&lock(&self.inner.reader), query.as_deref(), question, files)?;
+        self.ask(question, &sources)
     }
 
     /// Deletes the account on the server, then signs out here.

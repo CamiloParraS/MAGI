@@ -7,6 +7,7 @@
 //! only when a question is asked, never at launch.
 
 mod client;
+pub mod context;
 mod endpoints;
 mod fake;
 mod service;
@@ -32,6 +33,16 @@ pub struct AskSource {
     pub id: String,
     pub file_name: String,
     pub text: String,
+}
+
+/// A file the person ticked. The text sent for it is chosen per question
+/// ([`context`]); `fallback` is what goes when the index has no text for it
+/// any more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskFile {
+    pub file_id: i64,
+    pub file_name: String,
+    pub fallback: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

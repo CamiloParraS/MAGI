@@ -188,12 +188,9 @@ fn only_ticked_sources_go_numbered_in_the_order_they_are_sent() {
     let mut model = chat(4);
     model.toggle(1);
     let out = model.start("when is rent due?").unwrap();
-    let sent: Vec<(&str, &str)> = out
-        .sources
-        .iter()
-        .map(|s| (s.id.as_str(), s.file_name.as_str()))
-        .collect();
-    assert_eq!(sent, [("1", "1.bin"), ("2", "3.bin"), ("3", "4.bin")]);
+    // Host::ask_about numbers them 1, 2, 3 in this order, like the chips.
+    let sent: Vec<&str> = out.files.iter().map(|f| f.file_name.as_str()).collect();
+    assert_eq!(sent, ["1.bin", "3.bin", "4.bin"]);
     assert_eq!(out.question, "when is rent due?");
     let turn = model.turns().last().unwrap();
     assert_eq!(turn.question, "when is rent due?");
@@ -310,7 +307,7 @@ fn a_follow_up_adds_a_turn_and_keeps_the_earlier_ones() {
     model.finished(first.generation, Ok(answer(&["1"])));
     model.toggle(0);
     let second = model.start("and the deposit?").unwrap();
-    assert_eq!(second.sources.len(), 1, "the chips as they are now");
+    assert_eq!(second.files.len(), 1, "the chips as they are now");
     model.finished(second.generation, Ok(answer(&["1"])));
     let questions: Vec<&str> = model.turns().iter().map(|t| t.question.as_str()).collect();
     assert_eq!(questions, ["rent?", "and the deposit?"]);

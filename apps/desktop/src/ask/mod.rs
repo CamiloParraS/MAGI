@@ -5,7 +5,7 @@
 pub mod view;
 
 use magi_core::Error;
-use magi_core::ask::{AskAnswer, AskError, AskSource};
+use magi_core::ask::{AskAnswer, AskError, AskFile};
 use magi_core::discovery::Kind;
 use magi_core::dto::{AccountState, SearchResult};
 
@@ -224,7 +224,9 @@ pub enum Phase {
 pub struct Outgoing {
     pub generation: u64,
     pub question: String,
-    pub sources: Vec<AskSource>,
+    /// The ticked files, in chip order. What is sent for each is chosen for
+    /// this question by `Host::ask_about`, so the numbers match the chips.
+    pub files: Vec<AskFile>,
     /// The first question: save that the disclosure above the box was seen.
     pub accept_disclosure: bool,
 }
@@ -359,16 +361,14 @@ impl AskModel {
     fn outgoing(&mut self) -> Option<Outgoing> {
         let turn = self.turns.last()?;
         self.generation += 1;
-        // Ids are the numbers shown on the chips, so one the model writes
-        // in its text still matches.
-        let sources = turn
+        // The snippet is only the fallback for a file the index lost.
+        let files = turn
             .sent
             .iter()
-            .enumerate()
-            .map(|(ix, s)| AskSource {
-                id: (ix + 1).to_string(),
+            .map(|s| AskFile {
+                file_id: s.file_id,
                 file_name: s.file_name.clone(),
-                text: s.text.clone(),
+                fallback: s.text.clone(),
             })
             .collect();
         let accept_disclosure = !self.account.disclosed;
@@ -376,7 +376,7 @@ impl AskModel {
         Some(Outgoing {
             generation: self.generation,
             question: turn.question.clone(),
-            sources,
+            files,
             accept_disclosure,
         })
     }

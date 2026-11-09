@@ -298,8 +298,8 @@ pub const STRINGS: Strings = Strings {
     ask_empty_body: "Magi responde con los fragmentos de abajo y muestra qué archivos usó.",
     ask_what_gets_sent: "Lo que se envía",
     ask_excerpts: Plural {
-        one: "{n} fragmento y su nombre de archivo. Nunca la ruta completa.",
-        other: "{n} fragmentos y sus nombres de archivo. Nunca las rutas completas.",
+        one: "Los pasajes que mejor coinciden de {n} archivo, y su nombre. Nunca la ruta completa.",
+        other: "Los pasajes que mejor coinciden de {n} archivos, y sus nombres. Nunca las rutas completas.",
     },
     ask_too_long: "Las preguntas pueden tener hasta 500 caracteres.",
     ask_tick_one: "Marca al menos un archivo para enviar.",

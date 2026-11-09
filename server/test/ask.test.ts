@@ -74,7 +74,7 @@ describe("handleAsk", () => {
     const { ask } = setup();
     const body = {
       question: "q".repeat(500),
-      sources: ["1", "2", "3", "4", "5"].map((id) => src(id, "t".repeat(1000))),
+      sources: ["1", "2"].map((id) => src(id, "t".repeat(4000))),
     };
     expect((await ask(body)).status).toBe(200);
   });
@@ -86,7 +86,12 @@ describe("handleAsk", () => {
       { question: "q", sources: ["1", "2", "3", "4", "5", "6"].map((i) => src(i)) },
       "too_many_sources",
     ],
-    ["source over 1000", { question: "q", sources: [src("a", "t".repeat(1001))] }, "source_too_long"],
+    ["source over 4000", { question: "q", sources: [src("a", "t".repeat(4001))] }, "source_too_long"],
+    [
+      "sources over 8000 together",
+      { question: "q", sources: ["1", "2", "3"].map((i) => src(i, "t".repeat(3000))) },
+      "sources_too_long",
+    ],
   ])("rejects %s with 413", async (_n, body, error) => {
     const { ask, calls } = setup();
     const res = await ask(body);

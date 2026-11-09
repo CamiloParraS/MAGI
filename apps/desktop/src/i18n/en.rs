@@ -298,8 +298,8 @@ pub const STRINGS: Strings = Strings {
     ask_empty_body: "Magi answers from the excerpts below and shows which files it used.",
     ask_what_gets_sent: "What gets sent",
     ask_excerpts: Plural {
-        one: "{n} excerpt and its file name. Never the full path.",
-        other: "{n} excerpts and their file names. Never full paths.",
+        one: "The best-matching passages of {n} file, and its name. Never the full path.",
+        other: "The best-matching passages of {n} files, and their names. Never full paths.",
     },
     ask_too_long: "Questions can be up to 500 characters.",
     ask_tick_one: "Tick at least one file to send.",
