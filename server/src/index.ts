@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { handleDeleteAccount } from "./account";
 import { handleAsk, json, type ChatMessage } from "./ask";
-import { keepAlive } from "./keepalive";
+import { keepAlive, serviceHeaders } from "./keepalive";
 import type { Usage } from "./usage-do";
 
 export { Usage } from "./usage-do";
@@ -58,10 +58,7 @@ async function deleteUser(env: Env, id: string): Promise<boolean> {
   try {
     const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
       method: "DELETE",
-      headers: {
-        apikey: env.SUPABASE_SERVICE_KEY,
-        authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(env.SUPABASE_SERVICE_KEY),
     });
     return res.ok || res.status === 404;
   } catch {
