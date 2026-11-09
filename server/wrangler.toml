@@ -1,0 +1,14 @@
+name = "magi-ask"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# Never log bodies (plan.md). Invocation logs stay off.
+[observability]
+enabled = false
+
+[vars]
+# Public values. Replace <ref> with the Supabase project ref.
+SUPABASE_URL = "https://<ref>.supabase.co"
+MODEL = "deepseek/deepseek-v4-flash"
+
+# Secret, set with: npx wrangler secret put OPENROUTER_API_KEY
