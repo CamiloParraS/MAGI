@@ -27,10 +27,19 @@ Check a download against `SHA256SUMS` on the same release.
 
 ## Privacy
 
-Magi reads only the folders you add, and never changes, moves or uploads
-anything in them. The index stays on your computer. The only network access is
-downloading the search models you choose in setup, from the addresses listed in
-`models/manifest.toml`. There is no telemetry, analytics or crash reporting.
+Magi reads only the folders you add, and never changes or moves anything in
+them. The index stays on your computer, and nothing leaves it unless you ask it
+to. The only network access is downloading the search models you choose in
+setup, from the addresses listed in `models/manifest.toml`, and, if you sign in
+to a Magi account, signing in and sending questions to Ask Magi. Signed out,
+Magi makes no other connection. There is no telemetry, analytics or crash
+reporting.
+
+Ask Magi is optional. Each question sends its text, short excerpts from the
+results you leave ticked and those files' names, never full paths. They pass
+through Magi's server to OpenRouter and an AI host that doesn't keep them.
+Magi's server saves none of it; it stores only your account and a daily count
+of questions.
 
 ## Uninstall and remove data
 

@@ -52,6 +52,9 @@ Launch at login is the exception: it writes the real `HKCU\…\Run` key.
 | 23 | Startup failure | Isolated instance with a folder where the database should be (`mkdir $MAGI_DATA_DIR/magi.db`): "Magi couldn't start" with the error; Show log reveals `magi.log`; Quit and closing both exit. | ✅ 2026-10-05; Show log 2026-10-11 | | |
 | 24 | Onboarding setup | `--onboarding`: drag a folder from Explorer/Finder onto the drop zone, it is added (a dropped file is not); every icon draws; ⓘ opens what a feature does; the button reads "Download {size} and start", or "Start" with every feature off; light and dark, English and Spanish: no name cut off, no scrolling in the features column. | ⚠️ 2026-10-11 all but dropping a folder | | |
 | 25 | Detail pane | Settings › Appearance › Search window layout › List and preview (the drawing is framed in the accent), then reopen search: the list is on the left, the pane on the right. Arrow keys and the mouse move the pane with the selection, and the window keeps its height. A PDF shows a page chip and an image its thumbnail; a text file shows a small glyph beside its name, with no empty box. A match on the file name shows no snippet card. Open and Show in folder stay in view. The details line has type, date, pages and size. Clicking the folder and Show in folder reveal the file; Open opens it. Light and dark, English and Spanish: nothing is cut off. Off again: the old single list. | | | |
+| 26 | Alt+Enter asks | With results on screen, Alt+Enter opens the Ask window with the search text as the question; with no results it does nothing. See "Ask Magi" below. Linux: also on KDE, whose desktop may take the combination first. | ⚠️ 2026-11-09 by hand: it opened with only folded weak results (fixed, `askable`); after the fix pressed in the List layout with results, opened. With only folded results after the fix: test platform only | not run; CI step added | not run (GNOME or KDE) |
+| 27 | Every Ask entry point | Footer button and Alt+Enter with the detail pane on and off; the pane's button with it on. Each opens the window; asking again from a new search keeps one window with the new contents. | ⚠️ 2026-11-09 by hand, before the chat rework, by the owner; after it only Alt+Enter in List (scripted). Footer and pane buttons after the rework: test platform only | not run | not run |
+| 28 | Ask Magi full flow | Against the deployed server; see "Ask Magi" below. | not run | not run; CI step added | not run |
 
 ## macOS session (M6 column + M7)
 
@@ -130,8 +133,41 @@ the date in `docs/progress.md`, plus a screenshot where it says so.
 - M21. ✅ 2026-11-06 CI. Launch at login on: a "background item added" notice appears once;
   after logging out and in, Magi runs with no window.
 
-Then the M6 table above, macOS column: rows 1–7, 9–11, 13–25 (8 is
+Then the M6 table above, macOS column: rows 1–7, 9–11, 13–28 (8 is
 Linux-only; use Cmd where the table says Ctrl).
+
+## Ask Magi
+
+Say plainly in `docs/progress.md` what was run by hand and what only ran in
+CI or on the test platform. `MAGI_FAKE_ASK=1` runs the isolated instance
+against an in-process fake server, for rows 26 and 27 only: row 28 is the real
+server, with a real account and a real question.
+
+- Signed out: opening the window shows sign-in, and search works as before.
+- Sign in, or create an account, in the Ask window or in Settings › Account
+  (signed out it shows the same form); either one opens the chat. The
+  first-use disclosure shows above the box once, and not after the first
+  question.
+- The box holds the search text; the chips above it are up to 5 results with
+  text, ticked; a photo with no text is not listed. Untick one: it is not
+  cited or sent.
+- Enter sends: your question on the right, Magi's answer on the left with its
+  files as numbered chips; a chip opens its file. Count used goes up by one.
+- Ask a follow-up: a second turn under the first, the box says "Ask a
+  follow-up…".
+- Turn the network off and send: one line on that turn and Try again; turn it
+  on and retry.
+- Settings › Account: signed in as, sign out (the open Ask window returns to
+  sign-in), delete account (asks first; signing in again then fails).
+- Light and dark, English and Spanish: nothing cut off.
+
+**CI (macOS):** the "macOS checks" workflow presses Alt+Enter and, when the
+`MAGI_ASK_TEST_EMAIL` and `MAGI_ASK_TEST_PASSWORD` secrets exist, signs in and
+asks; the answer is graded from `14-ask-answer.png`. If a keychain prompt blocks
+that run, use the fake store there (`docs/issues/ask-magi/plan.md`).
+
+**Real Mac, once:** the keychain prompt and "Always Allow", which CI cannot
+show. About ten minutes.
 
 ## Hotkey conflicts
 

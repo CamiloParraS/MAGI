@@ -16,7 +16,7 @@ Find a file by what it contains or depicts, not what it is called. Magi indexes 
 
 ## Positioning
 
-Private semantic search: meaning-based retrieval over text, OCR'd text, images and QR codes, entirely on-device. Read-only on user folders, no telemetry, no analytics, no crash reporting; the only network use is the model downloads the user consents to. OS search is filename and keyword only; cloud assistants are not private.
+Private semantic search: meaning-based retrieval over text, OCR'd text, images and QR codes, with search entirely on-device. Read-only on user folders, no telemetry, no analytics, no crash reporting; nothing leaves the machine unless the user asks it to: the only network use is the model downloads the user consents to and, for a user who signs in, the optional Ask Magi questions they choose to send. OS search is filename and keyword only; cloud assistants are not private.
 
 ## Operating Context
 
@@ -40,7 +40,7 @@ Shipped releases (0.1.1) on GitHub; screenshots under `docs/screenshots/` and pe
 
 ## Product Principles
 
-1. Privacy is the product: nothing leaves the machine, nothing in the user's folders is touched, and the UI says so plainly.
+1. Privacy is the product: nothing leaves the machine unless you ask it to, nothing in the user's folders is touched, and the UI says so plainly.
 2. Recall in seconds: the path from hotkey to opened file is the primary flow; everything else stays out of its way.
 3. Search by memory, not by name: results explain why they matched (snippet, match type) so users trust fuzzy results.
 4. Light on the machine: perform on an 8 GB laptop; background work yields to the user.

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-`magi`: cross-platform desktop app for local, on-device semantic file search. Indexes user-selected folders (text, code, PDF, Office, images via OCR/QR/visual embeddings) into SQLite (FTS5 + `sqlite-vec`); hybrid keyword+vector search through a GPUI app (ADR-0011). Single process: `apps/desktop` hosts `magi-core::Engine` through `host::Host`. No network except one-time model downloads; never writes to user-selected folders.
+`magi`: cross-platform desktop app for local, on-device semantic file search. Indexes user-selected folders (text, code, PDF, Office, images via OCR/QR/visual embeddings) into SQLite (FTS5 + `sqlite-vec`); hybrid keyword+vector search through a GPUI app (ADR-0011). Single process: `apps/desktop` hosts `magi-core::Engine` through `host::Host`. No network except one-time model downloads and the optional, signed-in Ask Magi (ADR-0014); never writes to user-selected folders.
 
 ## Where to look
 
@@ -39,7 +39,7 @@ Ignore: `docs/archive/` (finished plans and superseded docs, including the froze
 ## Rules that matter most
 
 - **Work one milestone at a time, in order** (SPEC.md §7). Don't start milestone N+1 until every verification item of milestone N passes and is recorded in `docs/progress.md`.
-- **Hard constraints:** read-only on user-selected folders; index only user-selected roots; network only for model downloads listed in `models/manifest.toml`; verify or ask before using any URL, checksum, crate API or model filename; read cloud placeholders (OneDrive/iCloud/Dropbox) only by metadata, because reading content triggers a download.
+- **Hard constraints:** read-only on user-selected folders; index only user-selected roots; network only for (a) model downloads listed in `models/manifest.toml`, after consent, and (b) signing in to a Magi account or sending an Ask Magi question, each only from an explicit user action; signed out, Magi makes no other connection (ADR-0014); verify or ask before using any URL, checksum, crate API or model filename; read cloud placeholders (OneDrive/iCloud/Dropbox) only by metadata, because reading content triggers a download.
 - Rust: `cargo fmt` and `cargo clippy --all-targets --all-features -- -D warnings` clean. `unwrap()`/`expect()` only in tests or documented startup invariants. `thiserror` in library crates, `anyhow` in binaries. `tracing` for logging; `println!` only for CLI user-facing output.
 - Keep files under ~500 lines. A large `#[cfg(test)] mod tests` goes in `<module>/tests.rs` (or `tests/mod.rs` plus submodules); split a long module by concern into child modules and re-export what callers use. A file a little over is fine when it is one cohesive thing (the `i18n` string table).
 - `#[cfg(target_os = "...")]` lives only in `crates/magi-core/src/platform/`; business logic stays cfg-free.

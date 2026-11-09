@@ -314,6 +314,67 @@ else
 fi
 stop
 
+# ------------------------------------------------- Ask Magi (rows 26, 28)
+# Alt+Enter from a real search. With a test account in the
+# MAGI_ASK_TEST_EMAIL / MAGI_ASK_TEST_PASSWORD secrets it then signs in and
+# asks the deployed server, one question per run. No screenshot while the
+# email is on screen: the artifact outlives the run.
+ask_names() {
+  osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid) to get name of every window" 2>/dev/null
+}
+ask_open() { ask_names | grep -q "Ask Magi"; }
+config_has() { grep -q "$1" "$MAGI_CONFIG_DIR/config.toml"; }
+# The bar's main button, which is the rightmost, from the window's corner.
+ask_click_primary() {
+  local ax ay aw ah
+  read -r ax ay aw ah <<<"$(osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid)
+  set {x, y} to position of window \"Ask Magi\"
+  set {w, h} to size of window \"Ask Magi\"
+  return (x as text) & \" \" & (y as text) & \" \" & (w as text) & \" \" & (h as text)
+end tell" 2>/dev/null || echo "")"
+  [ -n "${ah:-}" ] && cliclick "c:$((ax + aw - 50)),$((ay + ah - 24))"
+}
+
+launch
+sleep 4
+cliclick t:invoices; sleep 3
+shot "10-ask-search"
+cliclick kd:alt kp:return ku:alt
+if wait_for 10 ask_open; then
+  shot "11-ask-opened"
+  record "row 26 Alt+Enter" pass "the Ask Magi window opened"
+  if [ -z "${MAGI_ASK_TEST_EMAIL:-}" ] || [ -z "${MAGI_ASK_TEST_PASSWORD:-}" ]; then
+    record "row 28 Ask Magi flow" unknown "no test account secrets: sign-in and asking not run"
+  else
+    # Tab and Enter: covered by sign_in_works_from_the_keyboard_alone.
+    cliclick "t:$MAGI_ASK_TEST_EMAIL" kp:tab "t:$MAGI_ASK_TEST_PASSWORD" kp:return
+    if wait_for 30 config_has signed_in_as; then
+      shot "12-ask-disclosure"
+      ask_click_primary
+      if wait_for 10 config_has "disclosed = true"; then
+        sleep 2
+        shot "13-ask-preview"
+        cliclick kp:return
+        sleep 25
+        shot "14-ask-answer"
+        record "row 28 Ask Magi flow" unknown "signed in and accepted the disclosure; grade 14-ask-answer.png by eye"
+      else
+        record "row 28 Ask Magi flow" fail "signed in, but the disclosure was not saved as accepted"
+      fi
+    else
+      record "row 28 Ask Magi flow" fail "not signed in after 30 s (a keychain prompt may block this runner)"
+    fi
+  fi
+else
+  shot "11-ask-not-opened"
+  if [ -z "$(ask_names)" ]; then
+    record "row 26 Alt+Enter" unknown "no window names to read (UI scripting?); see 11-ask-not-opened.png"
+  else
+    record "row 26 Alt+Enter" fail "no Ask Magi window within 10 s"
+  fi
+fi
+stop
+
 # Diagnosis for row 11, not graded: the footprint of a launch that never
 # opens a window (`--background`, as at login). Close to the idle figure
 # means the memory is taken at startup; far below means windows leave it.
@@ -331,7 +392,7 @@ stop
   echo "| --- | --- | --- |"
   printf '%s\n' "${RESULTS[@]}"
   echo
-  echo "Manual only (docs/qa-checklist.md): M12 iCloud, M13 network share, M15 battery, M19 blur, the real consent prompt."
+  echo "Manual only (docs/qa-checklist.md): M12 iCloud, M13 network share, M15 battery, M19 blur, the real consent prompt, the keychain prompt."
 } | tee "$OUT/summary.md" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 exit $FAILED

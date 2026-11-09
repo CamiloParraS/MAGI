@@ -36,6 +36,9 @@ jobs:
         run: bash .github/scripts/macos-checks.sh
         env:
           OUT: checks
+          # Optional: without them the run stops at opening the Ask window.
+          MAGI_ASK_TEST_EMAIL: ${{ secrets.MAGI_ASK_TEST_EMAIL }}
+          MAGI_ASK_TEST_PASSWORD: ${{ secrets.MAGI_ASK_TEST_PASSWORD }}
 
       - uses: actions/upload-artifact@v4
         if: always()
