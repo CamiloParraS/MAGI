@@ -98,6 +98,9 @@ pub enum Error {
     #[error("{} is downloading", .0.as_str())]
     DownloadInProgress(crate::features::Feature),
 
+    #[error(transparent)]
+    Ask(#[from] crate::ask::AskError),
+
     #[error("the engine is starting")]
     EngineStarting,
 }

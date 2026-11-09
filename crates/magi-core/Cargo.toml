@@ -44,6 +44,7 @@ tokenizers = { workspace = true }
 sha2 = { workspace = true }
 blake3 = { workspace = true }
 ureq = { workspace = true }
+keyring-core = { workspace = true }
 ort = { workspace = true }
 ndarray = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -57,9 +58,14 @@ libc = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
+apple-native-keyring-store = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
+windows-native-keyring-store = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -78,6 +78,11 @@ tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-
 sha2 = "0.11.0"
 blake3 = "1.8.7"
 ureq = "3.4.2"
+# Ask Magi keychain (ADR-0014): keyring-core plus one native store per OS, no libdbus on Linux.
+keyring-core = "1.0.1"
+windows-native-keyring-store = "1.1.0"
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 # default-features disabled to drop `download-binaries` (fetches ONNX
 # Runtime from a third-party CDN at build time — outside our own
 # manifest-controlled downloads) in favor of `load-dynamic`, loading the

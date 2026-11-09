@@ -57,6 +57,47 @@ most once each). Vectors are bound to `vec_f32()` as raw f32 BLOBs
 (`embed::embedding_to_blob`), not JSON text. The database file lives at
 `<data_dir>/magi.db`.
 
+### Ask Magi (ADR-0014)
+
+`magi_core::ask` is the only code that talks to the Magi account or the Magi
+server. Signed out, nothing in it runs: `Host::start` and `search` make no
+request and do not read the keychain (`tests/ask.rs` counts both).
+
+- **Host methods:** `account_state()` (from the config, no I/O), `sign_in`,
+  `sign_up`, `sign_out`, `ask(question, &[AskSource]) -> AskAnswer`,
+  `delete_account`, `accept_ask_disclosure`. `AskError` is `Error::Ask`. A
+  session that is gone (`SessionExpired`, `SignedOut`) also clears
+  `ask.signed_in_as`, so the window returns to sign-in.
+- **Types:** `AskSource { id, file_name, text }` (the id comes back in
+  `AskAnswer::cited`; the desktop uses the `file_id`), `AskAnswer { answer,
+  cited, used, limit }`, `AccountState { signed_in_as?, disclosed }`.
+- **Client:** `AuthedClient` is built only from a `Session`, and a `Session`
+  only comes out of `supabase::{sign_in, sign_up, refresh}`. Supabase Auth
+  (password grant, signup, refresh, logout) and `POST /ask`, `DELETE /account`
+  on the Worker both go through the `Transport` trait; `UreqTransport` is the
+  real one. Citations the server returns that were not sent are dropped again
+  on the client.
+- **Refresh:** the access token lives in memory only. The refresh token is
+  single use: a refresh saves the new one to the store before anything uses
+  it, behind one lock, and happens only when a question is asked (30 s before
+  expiry counts as expired). Refresh rejected: the stored login is cleared and
+  the caller gets `SessionExpired`; a network failure keeps it.
+- **Keychain:** `platform::Keychain` over `keyring-core` with Credential
+  Manager (Windows), Keychain (macOS) and the Secret Service via `zbus` (Linux,
+  no libdbus). It stores `{ refresh_token, email }` as JSON (the access token is
+  too big for a 2.5 KB Windows credential and is not needed). The store is
+  installed and read only on the first ask or sign-in. No keychain or a denied
+  prompt: the session lives in memory for that run; never a plaintext file.
+- **Config:** `[ask] signed_in_as = "…" disclosed = false`. Not patchable
+  through `update_settings`.
+- **Public values:** `ask::endpoints` holds the Supabase URL, the anon key and
+  the Worker URL. An empty key or Worker URL makes every call return
+  `AskError::NotConfigured`.
+- **Fakes:** `MAGI_FAKE_ASK=1` runs `Host::start` against `FakeBackend` (an
+  in-process Supabase and Worker) and `MemoryStore`, never the OS keychain;
+  `Host::start_with_ask` takes a service for tests.
+  `tests/ask_live.rs` (ignored) asks the deployed server.
+
 ## Config
 
 `<config_dir>/config.toml`, shape in SPEC.md §5.2. `config::load()` writes

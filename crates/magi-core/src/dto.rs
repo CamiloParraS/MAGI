@@ -471,5 +471,13 @@ impl From<&crate::Error> for ErrorCode {
     }
 }
 
+/// Whether this device is signed in to Ask Magi, from the config alone: no
+/// keychain read and no request.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountState {
+    pub signed_in_as: Option<String>,
+    pub disclosed: bool,
+}
+
 #[cfg(test)]
 mod tests;

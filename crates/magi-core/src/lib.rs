@@ -1,5 +1,6 @@
 //! magi-core: all business logic for magi. No UI dependency — see SPEC.md §5.1.
 
+pub mod ask;
 pub mod chunk;
 pub mod config;
 pub mod db;

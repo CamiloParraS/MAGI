@@ -13,6 +13,7 @@ use std::time::Instant;
 use crossbeam_channel::{Receiver, Sender, select};
 use rusqlite::Connection;
 
+use crate::ask::AskService;
 use crate::config::{self, Config};
 use crate::db::{self, files};
 use crate::dto::{
@@ -55,6 +56,7 @@ pub struct Host {
 
 struct Shared {
     paths: HostPaths,
+    ask: AskService,
     features: Features,
     running: RwLock<Option<Running>>,
     /// Held across every read-modify-write of `config.toml`.
@@ -88,6 +90,16 @@ impl Host {
     /// `on_event` runs on the supervisor thread; never call
     /// [`shutdown`](Self::shutdown) from it.
     pub fn start(paths: HostPaths, on_event: impl Fn(HostEvent) + Send + 'static) -> Result<Self> {
+        Self::start_with_ask(paths, on_event, AskService::from_env())
+    }
+
+    /// [`start`](Self::start) with the Ask Magi service given, so a test can
+    /// count its requests.
+    pub fn start_with_ask(
+        paths: HostPaths,
+        on_event: impl Fn(HostEvent) + Send + 'static,
+        ask: AskService,
+    ) -> Result<Self> {
         let features = Features::start_with(
             &paths.db,
             paths.config.clone(),
@@ -102,6 +114,7 @@ impl Host {
         let host = Self {
             inner: Arc::new(Shared {
                 paths,
+                ask,
                 features,
                 running: RwLock::new(None),
                 config: Mutex::new(()),
@@ -472,6 +485,8 @@ impl From<SearchHit> for SearchResult {
         }
     }
 }
+
+mod ask;
 
 #[cfg(test)]
 mod tests;

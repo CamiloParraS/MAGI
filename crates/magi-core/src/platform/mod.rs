@@ -11,10 +11,12 @@ mod windows;
 
 mod desktop;
 mod guidance;
+mod keychain;
 mod vendor;
 
 pub use desktop::*;
 pub use guidance::*;
+pub use keychain::Keychain;
 pub use vendor::*;
 
 use std::fs::Metadata;

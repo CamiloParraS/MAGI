@@ -194,6 +194,17 @@ impl Default for UiConfig {
     }
 }
 
+/// Ask Magi state that is not a secret (ADR-0014). The login itself lives in
+/// the OS keychain, never here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AskConfig {
+    /// Shown as "signed in as"; the keychain is not read at launch.
+    pub signed_in_as: Option<String>,
+    /// The first-use disclosure was accepted.
+    pub disclosed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -203,6 +214,7 @@ pub struct Config {
     pub models: ModelsConfig,
     pub features: FeaturesConfig,
     pub ui: UiConfig,
+    pub ask: AskConfig,
 }
 
 impl Default for Config {
@@ -214,6 +226,7 @@ impl Default for Config {
             models: ModelsConfig::default(),
             features: FeaturesConfig::default(),
             ui: UiConfig::default(),
+            ask: AskConfig::default(),
         }
     }
 }
