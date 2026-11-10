@@ -14,17 +14,17 @@ setup:
 
 # Run the desktop app (the GPUI crate lands in M6 Plan 3; ADR-0011)
 dev:
-    cargo run -p magi-desktop
+    cargo run -p magi-desktop --bin magi
 
 # Rebuild and relaunch the desktop app on every save (needs `cargo install cargo-watch --locked`).
 # Only the changed crate recompiles, so a UI edit is ~10s; keep rust-analyzer on its own
 # target dir (`rust-analyzer.cargo.targetDir: true`) so it never invalidates this build.
 watch:
-    cargo watch -w apps/desktop/src -w crates/magi-core/src -x "run -p magi-desktop"
+    cargo watch -w apps/desktop/src -w crates/magi-core/src -x "run -p magi-desktop --bin magi"
 
 # Run the desktop app with onboarding reset to its first step (folders and features stay)
 onboarding:
-    cargo run -p magi-desktop -- --onboarding
+    cargo run -p magi-desktop --bin magi -- --onboarding
 
 # Photograph every screen (light/dark, en/es) into <target>/shots/ and compare with the last run;
 # open <target>/shots/index.html. `just shots --only ask,settings --theme dark --lang es` retakes some
