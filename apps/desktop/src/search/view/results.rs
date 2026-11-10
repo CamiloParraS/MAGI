@@ -302,8 +302,15 @@ impl SearchView {
                     .into_any_element(),
                 false => list.into_any_element(),
             });
+        // The pane fades in when it first appears (a stable id, so moving the
+        // selection between results never replays it: that is keyboard
+        // navigation and stays instant).
         let pane = split
-            .then(|| state.selected().map(|r| self.pane(r, p, cx)))
+            .then(|| {
+                state
+                    .selected()
+                    .map(|r| theme::fade_in(self.pane(r, p, cx), "detail-pane-in"))
+            })
             .flatten();
         Some(
             div()
