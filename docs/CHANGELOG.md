@@ -6,15 +6,26 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ### 0.2.1
 
-- **Ask Magi in onboarding:** a switch on the setup screen (off until you
-  choose it). Turning it on adds a sign-in or create-account step before the
-  finish screen; it can be skipped, since search needs no account.
+- **Ask Magi can read more than snippets.** Each file you attach to a
+  question shows how it will be sent (the best-matching parts, the whole
+  file with its size, or, for photos, as a picture) and switches on click.
+  "Add file" searches your index inside the window; you can also drop files
+  onto it. Up to 3 pictures and 5 files per question; EXIF data is removed
+  from pictures and cloud placeholders are never read. Answers can be
+  selected and copied.
+- **Ask Magi in onboarding:** a switch on the setup screen, off until you
+  choose it. Turning it on adds a sign-in or create-account step before the
+  finish screen. It can be skipped: search needs no account.
 - **Sign-in redesign:** one screen, the same in the Ask window, onboarding
   and Settings (side by side there, so it fits the window).
+- **Settings › Ask Magi:** a switch hides or shows the Ask Magi button and
+  its shortcut in the search window; the button now sits beside the search
+  box.
+- **Ask window:** opens wider, the question box floats over the end of the
+  chat, and an arrow scrolls back to the latest answer.
 - **Empty folders state:** the whole drop zone is one button, in the same
   style as the rest of the app.
-- Ask Magi can send whole files and pictures with a question, and the
-  search window's Ask Magi button moved next to the search box.
+- **Fix:** questions with a picture no longer fail with a server error.
 
 ### 0.2.0 (test build)
 
