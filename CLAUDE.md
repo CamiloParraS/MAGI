@@ -22,6 +22,7 @@ Open only the row matching your task. Do not read `docs/SPEC.md` or `docs/progre
 | Packaging, release             | `packager.json`, `.github/workflows/`, `xtask/`             | ADR-0012; `docs/CHANGELOG.md`                                       |
 | Performance, memory            | n/a                                                         | `docs/benchmarks.md`, `docs/archive/perf-investigation.md`          |
 | Search quality, ranking changes | `eval/` (`queries.jsonl`), `crates/magi-cli`, `xtask/src/eval_diff.rs` | `eval/README.md` "Adopting a ranking change"; `docs/eval.md` |
+| Ask Magi (online answers)      | `crates/magi-core/src/ask/`, `apps/desktop/src/ask/`, `server/` (Worker) | ADR-0014; architecture.md "Ask Magi", "Ask window"; `server/README.md` (deploy, runbook) |
 | Manual QA per OS               | n/a                                                         | `docs/qa-checklist.md`                                              |
 
 Current milestone status: the last `##` sections of `docs/progress.md` (`grep -n '^## ' docs/progress.md`, then read the tail). SPEC §7 (milestone roadmap) is only for starting a new milestone.
@@ -32,7 +33,7 @@ Ignore: `docs/archive/` (finished plans and superseded docs, including the froze
 
 ## Commands
 
-`just --list` shows all recipes; `just check` (fmt, clippy, tests) before committing. Single test: `cargo test -p magi-core <name>`.
+`just --list` shows all recipes; `just check` (fmt, clippy, tests, then the Worker's vitest and tsc via `just server-check`) before committing. Single test: `cargo test -p magi-core <name>`.
 
 `MAGI_FAKE_EMBEDDER=1` runs indexing/search with a deterministic fake embedder (no model downloads). `MAGI_DATA_DIR` / `MAGI_CONFIG_DIR` override storage locations (SPEC §4.5).
 

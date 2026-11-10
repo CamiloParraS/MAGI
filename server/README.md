@@ -43,9 +43,21 @@ npm run typecheck
 - **Supabase project paused:** dashboard, Restore project. Wait for it to come
   up, then check `POST /ask` with a fresh sign-in. Sessions survive a restore.
 - **Top up or check credit:** openrouter.ai, Settings, Credits. Activity shows
-  cost per request. A question costs roughly $0.0003; 200 a day is about $0.05.
+  cost per request. A question with passages costs roughly $0.0003; one with
+  whole files at the 120,000-character cap about $0.004, so 200 a day costs at
+  most about $0.80.
 - **See that the cron ran:** Cloudflare dashboard, Workers, magi-ask, Settings,
   Triggers (cron), or `npx wrangler tail` while it fires. A failure means the
   Supabase call returned an error.
 - **Change a limit:** `LIMITS` in `src/ask.ts`, then deploy.
+- **Change the model or the `provider` routing:** `MODEL` in `wrangler.toml`
+  or `llm()` in `src/index.ts`. The model must take images, and OpenRouter
+  must list zero-retention hosts for it that support `response_format`
+  (`/api/v1/models/<model>/endpoints`). Deploy, then run the live check from
+  the repo root: `cargo test -p magi-core --test ask_live -- --ignored
+  --nocapture`. Only this catches a model or host that the unit tests cannot.
+- **A question failed (502):** the body's `reason` says why
+  (`model_status_<n>: <OpenRouter's message>`, `model_timeout`,
+  `model_unreachable`, `reply_empty`, `reply_not_json`, `worker_error`). The app
+  writes it to its own log as "Ask Magi got no answer".
 - **Logs:** keep `[observability]` disabled. Do not add `console` calls.

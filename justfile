@@ -26,11 +26,17 @@ watch:
 onboarding:
     cargo run -p magi-desktop -- --onboarding
 
-# Run formatting, lints and all tests
-check:
+# Run formatting, lints and all tests, then the Ask Magi Worker's
+check: && server-check
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace
+
+# Test and type-check the Ask Magi Worker (run `npm ci` in server/ once first)
+[working-directory: 'server']
+server-check:
+    npm test
+    npm run typecheck
 
 # Run all tests with a fake embedder (no model downloads required)
 test:

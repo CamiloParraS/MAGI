@@ -50,6 +50,29 @@ jobs:
         env:
           MAGI_FAKE_EMBEDDER: "1"
 
+  # The Ask Magi Worker (server/): its tests and types, which no cargo step sees.
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - name: vitest
+        run: npm test
+
+      - name: tsc
+        run: npm run typecheck
+
   # Debian is the supported Linux (release.yml's deb-check runs on bookworm):
   # build and test inside a clean container, not only on Ubuntu.
   debian:
