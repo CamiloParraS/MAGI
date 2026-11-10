@@ -334,12 +334,20 @@ pub struct Strings {
     pub ob_done_note: &'static str,
     /// [`ob_done_note`](Self::ob_done_note) once every file is read.
     pub ob_done_note_ready: &'static str,
+    /// The last step's title while a feature still downloads, so "all set"
+    /// does not read as "everything is here".
+    pub ob_done_downloading: &'static str,
+    pub ob_done_note_downloading: &'static str,
     /// Above the shortcut on the last step.
     pub ob_try_hotkey: &'static str,
     pub ob_try_it: &'static str,
     pub ob_preparing: &'static str,
-    /// `{name}` is the feature downloading.
-    pub ob_preparing_feature: &'static str,
+    /// `{name}` is the feature downloading; `{done}` and `{total}` are
+    /// sizes.
+    pub ob_downloading_feature: &'static str,
+    /// [`ob_downloading_feature`](Self::ob_downloading_feature) while
+    /// several are downloading.
+    pub ob_downloading: &'static str,
     pub ob_ready: &'static str,
     /// `{name}` is the feature.
     pub ob_download_failed: &'static str,

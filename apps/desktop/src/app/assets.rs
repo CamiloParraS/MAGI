@@ -32,6 +32,8 @@ gpui_kit::assets::icon_assets!(
         TextSearch,
         ScanText,
         ScanEye,
+        // The finish screen's badge while a feature still downloads.
+        Download,
         // The detail pane's tag for a QR match.
         ScanQrCode,
         // Ask Magi: the entry points, then the chat's send, retry and

@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{ErrorCode, Install};
 
-use super::{OnboardingView, Readiness, progress, readiness};
+use super::{OnboardingView, Readiness, download_progress, progress, readiness};
 use crate::app::AppEvent;
 use crate::hotkey::{RecorderStep, change, recorder_step, to_keystroke};
 use crate::i18n::Strings;
@@ -86,10 +86,26 @@ impl OnboardingView {
     pub(super) fn indexing(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let ready = readiness(live.status.as_ref(), &live.features);
+        let downloading = matches!(ready, Readiness::Downloading { .. });
+        // Was downloading and no longer is: the new words fade in.
+        let landed = !downloading && self.was_downloading.get();
+        if downloading {
+            self.was_downloading.set(true);
+        }
+        // "All set" while a feature still downloads read as "everything is
+        // here", so until then the title says almost.
+        let title = if downloading {
+            heading(s.ob_done_downloading).into_any_element()
+        } else if landed {
+            theme::fade_in(heading(s.ob_done), "done-heading-set").into_any_element()
+        } else {
+            heading(s.ob_done).into_any_element()
+        };
         // "Results get better" only while they still will. Going ready, the
         // old sentence fades out over the new one as it fades in.
         let line = |text: &'static str| div().text_color(p.mute).max_w(px(460.)).child(text);
         let intro = match ready {
+            Readiness::Downloading { .. } => line(s.ob_done_note_downloading).into_any_element(),
             Readiness::Ready if self.was_preparing.get() => div()
                 .relative()
                 .child(theme::fade_in(line(s.ob_done_note_ready), "intro-ready"))
@@ -107,7 +123,10 @@ impl OnboardingView {
                 )
                 .into_any_element(),
             Readiness::Ready => line(s.ob_done_note_ready).into_any_element(),
-            Readiness::Preparing(_) => line(s.ob_done_note).into_any_element(),
+            Readiness::Preparing if landed => {
+                theme::fade_in(line(s.ob_done_note), "intro-files").into_any_element()
+            }
+            Readiness::Preparing => line(s.ob_done_note).into_any_element(),
         };
         // Seen once, so it may arrive with a little life: it grows into its
         // fixed 52px slot (nothing around it moves) as it fades in.
@@ -142,7 +161,25 @@ impl OnboardingView {
                     .items_center()
                     .justify_center()
                     .bg(accent.opacity(0.14))
-                    .child(Icon::new(IconName::Check).size(px(26.)).text_color(accent))
+                    // A download still going is not a check yet; the check
+                    // fades in once it lands, with the title.
+                    .child(match (downloading, landed) {
+                        (true, _) => Icon::new(IconName::Download)
+                            .size(px(24.))
+                            .text_color(accent)
+                            .into_any_element(),
+                        (false, true) => theme::fade_in(
+                            div()
+                                .flex()
+                                .child(Icon::new(IconName::Check).size(px(26.)).text_color(accent)),
+                            "done-check-set",
+                        )
+                        .into_any_element(),
+                        (false, false) => Icon::new(IconName::Check)
+                            .size(px(26.))
+                            .text_color(accent)
+                            .into_any_element(),
+                    })
                     .with_animation(
                         "done-check",
                         Animation::new(CHECK_IN).with_easing(ease_out_quint()),
@@ -259,45 +296,56 @@ impl OnboardingView {
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_recording(window, cx))),
             );
         // Only while preparing, then it fades out in place (the button below
-        // stays put). A thin bar under the sentence, with no numbers.
+        // stays put). A thin bar under the sentence; a download says its
+        // sizes, so it reads as a download still going, not a stall.
         let is_ready = ready == Readiness::Ready;
-        let feature = match ready {
-            Readiness::Preparing(feature) => {
-                self.was_preparing.set(true);
-                feature
-            }
-            Readiness::Ready => None,
-        };
+        if !is_ready {
+            self.was_preparing.set(true);
+        }
+        let lang = live.lang;
         let preparing = (self.was_preparing.get()).then(|| {
-            let sentence = match feature {
-                Some(feature) => s
-                    .ob_preparing_feature
-                    .replace("{name}", s.feature(feature).name),
-                None => s.ob_preparing.to_string(),
+            let (sentence, value) = match ready {
+                Readiness::Downloading {
+                    feature,
+                    bytes,
+                    total,
+                } => {
+                    let text = match feature {
+                        Some(f) => s
+                            .ob_downloading_feature
+                            .replace("{name}", s.feature(f).name),
+                        None => s.ob_downloading.to_string(),
+                    };
+                    let text = text
+                        .replace("{done}", &lang.size(bytes))
+                        .replace("{total}", &lang.size(total));
+                    (text, download_progress(bytes, total))
+                }
+                Readiness::Preparing => (
+                    s.ob_preparing.to_string(),
+                    live.status.as_ref().and_then(progress),
+                ),
+                Readiness::Ready => (s.ob_preparing.to_string(), Some(100.)),
             };
             let bar = Progress::new("preparing").color(p.accent);
-            let block =
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .child(p.dot(Tone::Busy))
-                            .child(sentence),
-                    )
-                    .child(div().w(px(260.)).child(
-                        match live.status.as_ref().and_then(progress) {
-                            Some(value) => bar.value(value),
-                            None if is_ready => bar.value(100.),
-                            None => bar.loading(true),
-                        },
-                    ));
+            let block = div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .child(p.dot(Tone::Busy))
+                        .child(sentence),
+                )
+                .child(div().w(px(260.)).child(match value {
+                    Some(value) => bar.value(value),
+                    None => bar.loading(true),
+                }));
             if is_ready {
                 block
                     .with_animation(
@@ -329,7 +377,7 @@ impl OnboardingView {
             .pt(px(8.))
             .child(check)
             .child(stagger(
-                heading(s.ob_done).mt(px(14.)).mb(px(4.)),
+                div().mt(px(14.)).mb(px(4.)).child(title),
                 "done-heading",
                 1,
             ))

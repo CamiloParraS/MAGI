@@ -1,5 +1,7 @@
 // Not `super::*`: GPUI's prelude has its own `test` attribute.
-use super::{Readiness, download_total, feature_changes, preselected, progress, readiness};
+use super::{
+    Readiness, download_progress, download_total, feature_changes, preselected, progress, readiness,
+};
 use magi_core::dto::{DownloadError, FeatureStatus, IndexState, IndexStatus, Install};
 use magi_core::features::Feature;
 
@@ -122,10 +124,11 @@ fn the_last_step_says_ready_only_when_nothing_is_left() {
     let idle = status(IndexState::Idle, 10, 0);
     assert_eq!(readiness(Some(&idle), &first_run()), Readiness::Ready);
     // Before the first status, and while scanning or reading.
-    assert_eq!(readiness(None, &[]), Readiness::Preparing(None));
+    assert_eq!(readiness(None, &[]), Readiness::Preparing);
     let busy = status(IndexState::Indexing, 5, 5);
-    assert_eq!(readiness(Some(&busy), &[]), Readiness::Preparing(None));
-    // A download names its feature, even with the files done.
+    assert_eq!(readiness(Some(&busy), &[]), Readiness::Preparing);
+    // A download names its feature and how far it is, even with the files
+    // done: it is what "all set" would hide.
     let downloading = [feature(
         Feature::Meaning,
         true,
@@ -133,7 +136,11 @@ fn the_last_step_says_ready_only_when_nothing_is_left() {
     )];
     assert_eq!(
         readiness(Some(&idle), &downloading),
-        Readiness::Preparing(Some(Feature::Meaning))
+        Readiness::Downloading {
+            feature: Some(Feature::Meaning),
+            bytes: 1,
+            total: 2
+        }
     );
     // A failed download is reported on its own, not as preparing.
     let failed = [feature(
@@ -144,4 +151,43 @@ fn the_last_step_says_ready_only_when_nothing_is_left() {
         },
     )];
     assert_eq!(readiness(Some(&idle), &failed), Readiness::Ready);
+}
+
+#[test]
+fn a_download_bar_waits_for_its_size() {
+    assert_eq!(download_progress(0, 0), None);
+    assert_eq!(download_progress(25, 100), Some(25.));
+    assert_eq!(download_progress(120, 100), Some(100.));
+}
+
+#[test]
+fn several_downloads_add_up_under_no_one_name() {
+    let idle = status(IndexState::Idle, 10, 0);
+    let both = [
+        feature(
+            Feature::Meaning,
+            true,
+            Install::Downloading {
+                bytes: 10,
+                total: 40,
+            },
+        ),
+        feature(
+            Feature::ImageText,
+            true,
+            Install::Downloading {
+                bytes: 5,
+                total: 60,
+            },
+        ),
+        feature(Feature::ImageVisual, false, Install::NotInstalled),
+    ];
+    assert_eq!(
+        readiness(Some(&idle), &both),
+        Readiness::Downloading {
+            feature: None,
+            bytes: 15,
+            total: 100
+        }
+    );
 }

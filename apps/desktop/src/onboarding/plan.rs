@@ -44,25 +44,50 @@ pub fn download_total(features: &[FeatureStatus], chosen: &[Feature]) -> u64 {
 }
 
 /// What the finish screen says, in one plain sentence and no counts.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Readiness {
-    /// Files still being read, or this feature downloading.
-    Preparing(Option<Feature>),
+    /// A chosen feature still downloading: search works, but without it
+    /// until it lands. `feature` is `None` while several are, with their
+    /// bytes added up.
+    Downloading {
+        feature: Option<Feature>,
+        bytes: u64,
+        total: u64,
+    },
+    /// Files still being read; every feature is on disk.
+    Preparing,
     Ready,
 }
 
 /// A failed download is not "preparing": it is reported on its own.
 pub fn readiness(status: Option<&IndexStatus>, features: &[FeatureStatus]) -> Readiness {
-    if let Some(f) = features
+    let downloading: Vec<_> = features
         .iter()
-        .find(|f| matches!(f.install, Install::Downloading { .. }))
-    {
-        return Readiness::Preparing(Some(f.feature));
+        .filter_map(|f| match f.install {
+            Install::Downloading { bytes, total } => Some((f.feature, bytes, total)),
+            _ => None,
+        })
+        .collect();
+    if !downloading.is_empty() {
+        return Readiness::Downloading {
+            feature: match downloading.as_slice() {
+                [(feature, ..)] => Some(*feature),
+                _ => None,
+            },
+            bytes: downloading.iter().map(|d| d.1).sum(),
+            total: downloading.iter().map(|d| d.2).sum(),
+        };
     }
     match status {
         Some(st) if st.state == IndexState::Idle => Readiness::Ready,
-        _ => Readiness::Preparing(None),
+        _ => Readiness::Preparing,
     }
+}
+
+/// A download's percentage; `None` (an indeterminate bar) before its size
+/// is known.
+pub fn download_progress(bytes: u64, total: u64) -> Option<f32> {
+    (total > 0).then(|| bytes.min(total) as f32 * 100. / total as f32)
 }
 
 /// The first index's percentage; `None` (an indeterminate bar) while the

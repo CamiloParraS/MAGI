@@ -113,6 +113,9 @@ pub struct OnboardingView {
     /// Whether the finish screen has shown its progress: once it has, the
     /// block fades out when ready instead of vanishing.
     was_preparing: std::cell::Cell<bool>,
+    /// Whether it has said a feature is still downloading: once that ends,
+    /// the title and intro fade to their new words instead of jumping.
+    was_downloading: std::cell::Cell<bool>,
     focus: FocusHandle,
     /// The folder list's scroll, shared with its scrollbar.
     scroll: ScrollHandle,
@@ -179,6 +182,7 @@ impl OnboardingView {
             forward: true,
             hotkey_presses,
             was_preparing: Default::default(),
+            was_downloading: Default::default(),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             recorder: cx.focus_handle(),

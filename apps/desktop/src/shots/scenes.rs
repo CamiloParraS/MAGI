@@ -6,7 +6,7 @@ use std::time::Instant;
 use gpui_kit::*;
 use magi_core::ask::SendAs;
 use magi_core::config::Onboarding;
-use magi_core::dto::{IndexState, IndexStatus, SearchRequest, SearchResult};
+use magi_core::dto::{IndexState, IndexStatus, Install, SearchRequest, SearchResult};
 use magi_core::host::Host;
 
 use crate::app::Events;
@@ -87,6 +87,21 @@ pub fn all() -> Vec<Scene> {
         "onboarding-finish",
         onboarding_window(Onboarding::Done),
         vec![],
+    ));
+    scenes.push(scene(
+        "onboarding-finish-downloading",
+        onboarding_window(Onboarding::Done),
+        vec![Box::new(|kit, _, cx| {
+            kit.live.update(cx, |live, cx| {
+                if let Some(f) = live.features.iter_mut().find(|f| f.enabled) {
+                    f.install = Install::Downloading {
+                        bytes: 182_000_000,
+                        total: 470_000_000,
+                    };
+                }
+                cx.notify();
+            });
+        })],
     ));
     scenes.push(scene(
         "onboarding-no-folders",
