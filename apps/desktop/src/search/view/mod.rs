@@ -510,7 +510,11 @@ impl Render for SearchView {
                             // fixed at 20 px, so bigger text clips descenders.
                             .child(Input::new(&self.input).appearance(false).large())
                             .when(self.live.read(cx).ask_enabled, |row| {
-                                row.child(self.ask_button(!ask::can_ask(self.state.askable()), cx))
+                                row.child(self.ask_button(
+                                    !ask::can_ask(self.state.askable()),
+                                    &p,
+                                    cx,
+                                ))
                             }),
                     )
                     .children(self.shortcut_hint(&p, cx))

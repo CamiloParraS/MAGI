@@ -25,15 +25,17 @@ impl SearchView {
 
     /// The shortcut and the button, at the end of the input row; off while
     /// there is nothing to ask about.
-    pub(super) fn ask_button(&self, idle: bool, cx: &Context<Self>) -> Div {
+    pub(super) fn ask_button(&self, idle: bool, p: &Palette, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .opacity(if idle { 0.5 } else { 1. })
+            .text_xs()
+            .text_color(if idle { p.mute.opacity(0.7) } else { p.mute })
             .children(Keystroke::parse(ASK_KEY).ok().map(Kbd::new))
+            .child(div().ml(px(4.)).mr(px(2.)).child(s.ask_magi))
             .child(
                 div().debug_selector(|| "ask-footer".into()).child(
                     Button::new("ask-footer")
@@ -94,8 +96,7 @@ impl SearchView {
                 }
             }
         });
-        // Always shown, so they are learned in the empty window; dimmed while
-        // there is no result to act on.
+        // Shown once there is a result to act on.
         let idle = self.state.results().is_empty();
         let pairs: &[(&str, &'static str)] = &[
             ("enter", s.open),
@@ -133,8 +134,19 @@ impl SearchView {
             )
             .child(div().flex_1().min_w_0().children(status))
             .child(
-                keys(pairs, self.copied.is_some().then_some((self.copies, p)))
-                    .when(idle, |keys| keys.opacity(0.7))
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    // Open, reveal and copy act on a result: nothing to teach
+                    // until there is one.
+                    .when(!idle, |d| {
+                        d.child(keys(
+                            pairs,
+                            self.copied.is_some().then_some((self.copies, p)),
+                        ))
+                    })
                     .child(esc_key(p)),
             )
     }

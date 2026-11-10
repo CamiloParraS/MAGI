@@ -24,12 +24,6 @@ pub(super) fn column() -> Div {
     div().w_full().max_w(COLUMN).mx_auto()
 }
 
-/// The text color on an accent fill: black on the dark theme's light blue,
-/// white on the light theme's deep one.
-fn on_accent(p: &Palette) -> Hsla {
-    if p.dark { black() } else { white() }
-}
-
 /// Magi's avatar in the gutter beside each answer: the mark on the accent
 /// tint.
 fn magi_avatar(p: &Palette) -> Div {
@@ -44,8 +38,8 @@ fn magi_avatar(p: &Palette) -> Div {
         .child(svg().path(MARK).size(px(17.)).text_color(p.accent))
 }
 
-/// Your question, on the right in the accent: the one filled shape in the
-/// chat, so who said what reads at a glance.
+/// Your question, on the right in an accent tint with an accent hairline:
+/// who said what reads at a glance without a large accent fill.
 fn question_bubble(text: &str, p: &Palette) -> Div {
     div().flex().justify_end().child(
         div()
@@ -54,8 +48,10 @@ fn question_bubble(text: &str, p: &Palette) -> Div {
             .py(px(10.))
             .rounded(px(18.))
             .rounded_br(px(5.))
-            .bg(p.accent)
-            .text_color(on_accent(p))
+            .bg(p.selection)
+            .border_1()
+            .border_color(p.accent.opacity(0.4))
+            .text_color(p.ink)
             .line_height(relative(1.5))
             .child(text.to_owned()),
     )

@@ -151,7 +151,9 @@ impl SearchState {
                 self.failures += 1;
             }
         }
-        self.weak_open = false;
+        // With nothing strong, the weak ones are all there is: show them
+        // under "Nothing closely related" rather than behind a fold.
+        self.weak_open = self.strong_count() == 0 && !self.results.is_empty();
         self.selected = 0;
     }
 
@@ -312,11 +314,12 @@ mod tests {
 
     #[test]
     fn only_results_on_screen_can_be_asked_about() {
-        // "Nothing close": every result is folded away.
+        // "Nothing close": the weak results open on their own, so they are
+        // on screen; closing the fold takes them off.
         let mut s = folded(0, 3);
-        assert!(s.askable().is_empty());
-        s.toggle_weak();
         assert_eq!(s.askable().len(), 3);
+        s.toggle_weak();
+        assert!(s.askable().is_empty());
         // Folded weak results are not sent with the strong ones.
         assert_eq!(folded(2, 3).askable().len(), 2);
         // While a new query is out, the old list is not what was asked.
@@ -361,11 +364,9 @@ mod tests {
     }
 
     #[test]
-    fn with_no_strong_result_nothing_is_selected_until_opened() {
-        let mut s = folded(0, 2);
-        assert_eq!(s.selected_index(), None);
-        assert!(s.selected().is_none());
-        s.toggle_weak();
+    fn with_no_strong_result_the_weak_ones_open_on_their_own() {
+        let s = folded(0, 2);
+        assert!(s.weak_open());
         assert_eq!(s.selected().map(|r| r.file_id), Some(0));
     }
 

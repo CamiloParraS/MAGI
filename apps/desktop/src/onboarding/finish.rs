@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -288,6 +288,8 @@ impl OnboardingView {
                     .cursor_pointer()
                     .small()
                     .outline()
+                    // The dark theme's outline (`input`) is bright; soften it here.
+                    .when(p.dark, |b| b.border_color(p.mute.opacity(0.3)))
                     .label(if recording {
                         s.cancel
                     } else {
@@ -397,12 +399,12 @@ impl OnboardingView {
                     .children(preparing)
                     .children(failed)
                     .child(
-                        // A quiet way out: muted, full ink on hover.
+                        // A way out that still reads as a control.
                         Button::new("open-settings")
                             .cursor_pointer()
-                            .text()
+                            .outline()
+                            .when(p.dark, |b| b.border_color(p.mute.opacity(0.3)))
                             .small()
-                            .text_color(p.mute)
                             .label(s.open_settings)
                             .on_click(cx.listener(|this, _, window, _| {
                                 this.leave(Some(AppEvent::Settings), window)

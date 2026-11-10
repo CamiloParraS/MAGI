@@ -103,8 +103,8 @@ fn every_entry_point_opens_ask_in_both_layouts(cx: &mut TestAppContext) {
         vcx.simulate_keystrokes("alt-enter");
         assert!(asked(&rx).is_none(), "asked with no results");
 
-        // "Nothing close": every result is folded away, so nothing is on
-        // screen to ask about either.
+        // "Nothing close", folded away by the user: nothing is on screen to
+        // ask about.
         window
             .update(&mut vcx, |view, _, cx| {
                 let query = view.state_mut().set_query("zzz").unwrap();
@@ -119,6 +119,8 @@ fn every_entry_point_opens_ask_in_both_layouts(cx: &mut TestAppContext) {
                         took_ms: 1,
                     }),
                 );
+                // They open on their own; the user folds them away.
+                view.state_mut().toggle_weak();
                 cx.notify();
             })
             .unwrap();

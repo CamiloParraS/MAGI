@@ -95,8 +95,9 @@ pub fn all() -> Vec<Scene> {
             kit.live.update(cx, |live, cx| {
                 if let Some(f) = live.features.iter_mut().find(|f| f.enabled) {
                     f.install = Install::Downloading {
-                        bytes: 182_000_000,
-                        total: 470_000_000,
+                        // The meaning model's size, as the setup screen lists it.
+                        bytes: 54_000_000,
+                        total: 135_000_000,
                     };
                 }
                 cx.notify();
