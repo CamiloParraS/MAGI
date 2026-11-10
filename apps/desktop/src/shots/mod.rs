@@ -199,6 +199,10 @@ async fn take_all(kit: &Kit, out: &Path, filter: &Filter, cx: &mut AsyncApp) -> 
 }
 
 async fn take(kit: &Kit, scene: &Scene, cx: &mut AsyncApp) -> anyhow::Result<image::RgbaImage> {
+    // A scene's steps may change the features (a download in progress);
+    // the next scene starts from the real ones again.
+    let features = kit.host.features().status().unwrap_or_default();
+    cx.update(|cx| kit.live.update(cx, |live, _| live.features = features));
     let handle = cx.update(|cx| (scene.open)(kit, cx))?;
     settle(handle, cx).await;
     for step in &scene.steps {
