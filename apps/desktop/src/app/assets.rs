@@ -81,3 +81,63 @@ impl AssetSource for AppAssets {
         Ok(paths)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    use gpui_kit::assets::IconName;
+
+    use super::AppAssets;
+    use gpui_kit::{AssetSource, SharedString};
+
+    /// Every icon name written as `IconName::<name>` under `dir`.
+    fn icons_named_in(dir: &Path, found: &mut BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                icons_named_in(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices("IconName::") {
+                    let name: String = text[at + "IconName::".len()..]
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    if name != "ALL" && !name.is_empty() {
+                        found.insert(name);
+                    }
+                }
+            }
+        }
+    }
+
+    // An icon missing from the bundle and from ExtraIcons renders as blank
+    // space, and nothing else fails.
+    #[test]
+    fn every_icon_the_app_names_is_embedded() {
+        let catalog: BTreeMap<String, SharedString> = IconName::ALL
+            .iter()
+            .map(|name| (format!("{name:?}"), name.path()))
+            .collect();
+        let mut named = BTreeSet::new();
+        icons_named_in(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut named,
+        );
+        assert!(named.contains("Check"), "the scan found no icons");
+        let missing: Vec<_> = named
+            .iter()
+            .filter(|name| {
+                catalog
+                    .get(*name)
+                    .is_none_or(|path| AppAssets.load(path).ok().flatten().is_none())
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not embedded (add to ExtraIcons): {missing:?}"
+        );
+    }
+}
