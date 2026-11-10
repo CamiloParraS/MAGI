@@ -181,21 +181,24 @@ describe("handleAsk", () => {
   });
 
   it.each([
-    ["the model call fails", async () => null],
+    ["the model call fails", async () => ({ failed: "model_status_404: no endpoint" }), "model_status_404: no endpoint"],
     [
       "the model call throws",
-      async (): Promise<string | null> => {
+      async (): Promise<string> => {
         throw new Error("boom");
       },
+      "worker_error",
     ],
-    ["the output is not JSON", async () => "sorry"],
-    ["the answer is missing", async () => JSON.stringify({ cited: [] })],
-  ])("returns 502 and does not count when %s", async (_n, bad) => {
+    ["the output is not JSON", async () => "sorry", "reply_not_json"],
+    ["the answer is missing", async () => JSON.stringify({ cited: [] }), "reply_not_json"],
+  ])("returns 502 with the reason and does not count when %s", async (_n, bad, reason) => {
     let fail = true;
     const { ask } = setup({
       llm: async () => (fail ? bad() : JSON.stringify({ answer: "fine", cited: [] })),
     });
-    expect((await ask(good)).status).toBe(502);
+    const res = await ask(good);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upstream", reason });
     fail = false;
     expect(((await (await ask(good)).json()) as { used: number }).used).toBe(1);
   });

@@ -15,6 +15,18 @@ pub struct AuthedClient<'a> {
 }
 
 #[derive(Deserialize)]
+struct UpstreamBody {
+    reason: Option<String>,
+}
+
+/// Why the server could not answer, from its 502 body: a short code such as
+/// `model_status_404: ...` or `reply_not_json`, never the question or files.
+pub(crate) fn upstream_reason(body: &str) -> Option<String> {
+    let reason = serde_json::from_str::<UpstreamBody>(body).ok()?.reason?;
+    Some(reason.chars().take(300).collect())
+}
+
+#[derive(Deserialize)]
 struct LimitBody {
     scope: Option<String>,
     used: Option<u32>,
@@ -84,7 +96,11 @@ impl<'a> AuthedClient<'a> {
                 })
             }
             400 => Err(AskError::Rejected("the question was malformed".into())),
-            _ => Err(AskError::Upstream),
+            status => {
+                let reason = upstream_reason(&response.body);
+                tracing::warn!(status, reason = reason.as_deref(), "Ask Magi got no answer");
+                Err(AskError::Upstream)
+            }
         }
     }
 

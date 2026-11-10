@@ -32,7 +32,20 @@ async function verify(request: Request, env: Env): Promise<string | null> {
   }
 }
 
-async function llm(env: Env, messages: ChatMessage[], maxTokens: number): Promise<string | null> {
+// What OpenRouter says went wrong, cut short. Its errors are about the
+// request (no endpoint, bad parameter), never echo of what was sent.
+async function failure(res: Response): Promise<string> {
+  let message = "";
+  try {
+    const body = (await res.json()) as { error?: { message?: unknown } };
+    if (typeof body.error?.message === "string") message = body.error.message;
+  } catch {
+    // no JSON body
+  }
+  return `model_status_${res.status}${message ? `: ${message.slice(0, 200)}` : ""}`;
+}
+
+async function llm(env: Env, messages: ChatMessage[], maxTokens: number): Promise<string | { failed: string }> {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -43,15 +56,18 @@ async function llm(env: Env, messages: ChatMessage[], maxTokens: number): Promis
         model: env.MODEL,
         max_tokens: maxTokens,
         response_format: { type: "json_object" },
-        provider: { zdr: true, data_collection: "deny" },
+        // require_parameters: only hosts that honour response_format, so the
+        // reply is JSON rather than a bare word.
+        provider: { zdr: true, data_collection: "deny", require_parameters: true },
         messages,
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { failed: await failure(res) };
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return data.choices?.[0]?.message?.content ?? null;
-  } catch {
-    return null;
+    const content = data.choices?.[0]?.message?.content;
+    return typeof content === "string" && content !== "" ? content : { failed: "reply_empty" };
+  } catch (e) {
+    return { failed: e instanceof Error && e.name === "TimeoutError" ? "model_timeout" : "model_unreachable" };
   }
 }
 

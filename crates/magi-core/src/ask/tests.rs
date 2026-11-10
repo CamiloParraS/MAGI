@@ -370,3 +370,16 @@ fn a_session_does_not_print_its_tokens() {
     let shown = format!("{session:?}");
     assert!(!shown.contains("secret"), "{shown}");
 }
+
+#[test]
+fn the_reason_for_a_failed_answer_is_read_and_kept_short() {
+    use super::client::upstream_reason;
+    assert_eq!(
+        upstream_reason(r#"{"error":"upstream","reason":"reply_not_json"}"#).as_deref(),
+        Some("reply_not_json")
+    );
+    let long = format!(r#"{{"error":"upstream","reason":"{}"}}"#, "é".repeat(400));
+    assert_eq!(upstream_reason(&long).map(|r| r.chars().count()), Some(300));
+    assert_eq!(upstream_reason(r#"{"error":"upstream"}"#), None);
+    assert_eq!(upstream_reason("<html>Bad gateway</html>"), None);
+}

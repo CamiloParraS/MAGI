@@ -52,6 +52,8 @@ fn the_deployed_server_answers_a_question_about_a_source() {
 #[test]
 #[ignore = "reaches the deployed server"]
 fn the_deployed_server_takes_whole_files_and_pictures_and_rejects_oversized_ones() {
+    // Shows the server's reason when an answer fails.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let service = AskService::new(
         Box::new(UreqTransport::new()),
         Box::new(Arc::new(MemoryStore::new())),

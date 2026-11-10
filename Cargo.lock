@@ -4819,6 +4819,7 @@ dependencies = [
  "tokenizers",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
+ "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",

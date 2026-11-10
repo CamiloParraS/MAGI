@@ -25,8 +25,11 @@ export interface AskDeps {
     reserve(account: string, day: string, perAccount: number, global: number): Promise<ReserveResult>;
     refund(account: string, day: string): Promise<void>;
   };
-  /** The model's raw text, or null when the call failed. */
-  llm(messages: ChatMessage[], maxTokens: number): Promise<string | null>;
+  /**
+   * The model's raw text, or why the call failed: a short code with no
+   * question, file or answer text in it.
+   */
+  llm(messages: ChatMessage[], maxTokens: number): Promise<string | { failed: string }>;
   now(): Date;
 }
 
@@ -111,18 +114,25 @@ export async function handleAsk(request: Request, deps: AskDeps): Promise<Respon
     );
   }
 
-  // From here on a failure gives the question back.
+  // From here on a failure gives the question back, and says why to the
+  // app that asked (never to a log).
+  let reason = "worker_error";
   try {
     const messages = buildMessages(parsed.question, parsed.sources, parsed.images);
     const raw = await deps.llm(messages, LIMITS.maxTokens);
     const sent = [...parsed.sources, ...parsed.images].map((s) => s.id);
-    const out = raw === null ? null : parseModelOutput(raw, sent);
-    if (out) {
-      return json({ answer: out.answer, cited: out.cited, used: slot.used, limit: LIMITS.perAccountPerDay });
+    if (typeof raw !== "string") {
+      reason = raw.failed;
+    } else {
+      const out = parseModelOutput(raw, sent);
+      if (out) {
+        return json({ answer: out.answer, cited: out.cited, used: slot.used, limit: LIMITS.perAccountPerDay });
+      }
+      reason = "reply_not_json";
     }
   } catch {
-    // fall through to the refund
+    // reason stays worker_error
   }
   await deps.usage.refund(account, day);
-  return json({ error: "upstream" }, 502);
+  return json({ error: "upstream", reason }, 502);
 }
