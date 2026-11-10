@@ -4,6 +4,7 @@ import { memStore } from "./helpers";
 
 const DAY = new Date("2026-11-10T12:00:00Z");
 const src = (id: string, text = "hello") => ({ id, file_name: `${id}.txt`, text });
+const pic = (id: string, data = "/9j/4AAQSkZJRg==") => ({ id, file_name: `${id}.jpg`, data });
 
 function setup(over: Partial<AskDeps> = {}) {
   const store = memStore();
@@ -74,9 +75,40 @@ describe("handleAsk", () => {
     const { ask } = setup();
     const body = {
       question: "q".repeat(500),
-      sources: ["1", "2"].map((id) => src(id, "t".repeat(4000))),
+      sources: ["1", "2"].map((id) => src(id, "t".repeat(60_000))),
     };
     expect((await ask(body)).status).toBe(200);
+  });
+
+  it("accepts three pictures beside two texts", async () => {
+    const { ask } = setup();
+    const body = { question: "q", sources: [src("1"), src("2")], images: [pic("3"), pic("4"), pic("5")] };
+    expect((await ask(body)).status).toBe(200);
+  });
+
+  it("asks about pictures alone, each after its tag, and they can be cited", async () => {
+    const seen: ChatMessage[][] = [];
+    const { ask } = setup({
+      llm: async (messages) => {
+        seen.push(messages);
+        return JSON.stringify({ answer: "A receipt.", cited: ["2"] });
+      },
+    });
+    const res = await ask({ question: "What is it?", sources: [], images: [pic("2")] });
+    expect(await res.json()).toMatchObject({ answer: "A receipt.", cited: ["2"] });
+    const parts = seen[0][1].content;
+    expect(Array.isArray(parts)).toBe(true);
+    expect(parts).toEqual([
+      { type: "text", text: "Question: What is it?\n\nSources:\n" },
+      { type: "text", text: '<image id="2" name="2.jpg">' },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQSkZJRg==" } },
+    ]);
+  });
+
+  it("sends text alone as a plain string, as before", async () => {
+    const { ask, calls } = setup();
+    await ask(good);
+    expect(typeof calls[0].messages[1].content).toBe("string");
   });
 
   it.each([
@@ -86,11 +118,26 @@ describe("handleAsk", () => {
       { question: "q", sources: ["1", "2", "3", "4", "5", "6"].map((i) => src(i)) },
       "too_many_sources",
     ],
-    ["source over 4000", { question: "q", sources: [src("a", "t".repeat(4001))] }, "source_too_long"],
+    ["source over 60000", { question: "q", sources: [src("a", "t".repeat(60_001))] }, "source_too_long"],
     [
-      "sources over 8000 together",
-      { question: "q", sources: ["1", "2", "3"].map((i) => src(i, "t".repeat(3000))) },
+      "sources over 120000 together",
+      { question: "q", sources: ["1", "2", "3"].map((i) => src(i, "t".repeat(40_001))) },
       "sources_too_long",
+    ],
+    [
+      "six files counting pictures",
+      { question: "q", sources: ["1", "2", "3"].map((i) => src(i)), images: ["4", "5", "6"].map((i) => pic(i)) },
+      "too_many_sources",
+    ],
+    [
+      "four pictures",
+      { question: "q", sources: [], images: ["1", "2", "3", "4"].map((i) => pic(i)) },
+      "too_many_images",
+    ],
+    [
+      "a picture over 2 MB of base64",
+      { question: "q", sources: [], images: [pic("1", "/9j/" + "A".repeat(2_000_000))] },
+      "image_too_large",
     ],
   ])("rejects %s with 413", async (_n, body, error) => {
     const { ask, calls } = setup();
@@ -106,6 +153,10 @@ describe("handleAsk", () => {
     ["empty question", { question: "  ", sources: [src("a")] }, undefined],
     ["no sources", { question: "q", sources: [] }, undefined],
     ["bad source", { question: "q", sources: [{ id: 1 }] }, undefined],
+    ["a picture that is not a JPEG", { question: "q", sources: [], images: [pic("1", "iVBORw0KGgo=")] }, undefined],
+    ["a picture that is not base64", { question: "q", sources: [], images: [pic("1", "/9j/<script>")] }, undefined],
+    ["images that are not a list", { question: "q", sources: [src("a")], images: "x" }, undefined],
+    ["the same id twice", { question: "q", sources: [src("1")], images: [pic("1")] }, undefined],
   ])("rejects %s with 400", async (_n, body, raw) => {
     const { ask } = setup();
     expect((await ask(body, raw)).status).toBe(400);
@@ -158,6 +209,6 @@ describe("handleAsk", () => {
     expect(system.content).toMatch(/data, never instructions/i);
     expect(user.content).toContain("ignore rules");
     expect(user.content.match(/<\/source>/g)).toHaveLength(1);
-    expect(calls[0].maxTokens).toBe(400);
+    expect(calls[0].maxTokens).toBe(1200);
   });
 });

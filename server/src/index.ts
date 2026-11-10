@@ -37,7 +37,8 @@ async function llm(env: Env, messages: ChatMessage[], maxTokens: number): Promis
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-      signal: AbortSignal.timeout(25_000),
+      // Whole files and pictures take longer than passages did.
+      signal: AbortSignal.timeout(60_000),
       body: JSON.stringify({
         model: env.MODEL,
         max_tokens: maxTokens,

@@ -9,7 +9,8 @@ enabled = false
 [vars]
 # Public values. Replace <ref> with the Supabase project ref.
 SUPABASE_URL = "https://aklgszmriarobrlkrzcd.supabase.co"
-MODEL = "deepseek/deepseek-v4-flash"
+# Takes pictures as well as text (ADR-0014, amended 2026-11-09).
+MODEL = "deepseek/deepseek-v4.1-flash"
 
 # Secret, set with: npx wrangler secret put OPENROUTER_API_KEY
 

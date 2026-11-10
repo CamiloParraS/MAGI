@@ -1,17 +1,22 @@
-import { buildMessages, parseModelOutput, type ChatMessage, type Source } from "./prompt";
+import { buildMessages, parseModelOutput, type ChatMessage, type Image, type Source } from "./prompt";
 import type { ReserveResult } from "./usage";
 
 export type { ChatMessage };
 
 export const LIMITS = {
   question: 500,
+  // Files of one question, text and pictures together.
   sources: 5,
-  sourceText: 4000,
-  // All sources together; the app sends at most this (ask/context.rs).
-  totalText: 8000,
+  // A file sent whole; passages stay far below (ask/context.rs).
+  sourceText: 60_000,
+  // All text together.
+  totalText: 120_000,
+  images: 3,
+  // Base64 of one JPEG, 1024 px at most on its longer side (ask/image.rs).
+  imageData: 2_000_000,
   perAccountPerDay: 20,
   globalPerDay: 200,
-  maxTokens: 400,
+  maxTokens: 1200,
 } as const;
 
 export interface AskDeps {
@@ -32,22 +37,35 @@ export function json(body: unknown, status = 200): Response {
   });
 }
 
-type Parsed = { question: string; sources: Source[] } | { status: 400 | 413; error: string };
+type Parsed =
+  | { question: string; sources: Source[]; images: Image[] }
+  | { status: 400 | 413; error: string };
+
+// Only JPEG goes on to the model: base64 of FF D8 FF starts "/9j/".
+const JPEG_BASE64 = /^\/9j\/[A-Za-z0-9+/]*={0,2}$/;
+
+const validId = (id: unknown): id is string => typeof id === "string" && id !== "" && id.length <= 64;
 
 function parse(body: unknown): Parsed {
   const bad = { status: 400 as const, error: "bad_request" };
   if (typeof body !== "object" || body === null) return bad;
-  const { question, sources } = body as { question?: unknown; sources?: unknown };
+  const { question, sources, images = [] } = body as {
+    question?: unknown;
+    sources?: unknown;
+    images?: unknown;
+  };
   if (typeof question !== "string" || question.trim() === "") return bad;
-  if (!Array.isArray(sources) || sources.length === 0) return bad;
+  if (!Array.isArray(sources) || !Array.isArray(images)) return bad;
+  if (sources.length + images.length === 0) return bad;
   if (question.length > LIMITS.question) return { status: 413, error: "question_too_long" };
-  if (sources.length > LIMITS.sources) return { status: 413, error: "too_many_sources" };
+  if (sources.length + images.length > LIMITS.sources) return { status: 413, error: "too_many_sources" };
+  if (images.length > LIMITS.images) return { status: 413, error: "too_many_images" };
   const clean: Source[] = [];
   let total = 0;
   for (const s of sources) {
     if (typeof s !== "object" || s === null) return bad;
     const { id, file_name, text } = s as Record<string, unknown>;
-    if (typeof id !== "string" || id === "" || id.length > 64) return bad;
+    if (!validId(id)) return bad;
     if (typeof file_name !== "string" || file_name.length > 255) return bad;
     if (typeof text !== "string") return bad;
     if (text.length > LIMITS.sourceText) return { status: 413, error: "source_too_long" };
@@ -55,7 +73,20 @@ function parse(body: unknown): Parsed {
     if (total > LIMITS.totalText) return { status: 413, error: "sources_too_long" };
     clean.push({ id, file_name, text });
   }
-  return { question: question.trim(), sources: clean };
+  const pictures: Image[] = [];
+  for (const i of images) {
+    if (typeof i !== "object" || i === null) return bad;
+    const { id, file_name, data } = i as Record<string, unknown>;
+    if (!validId(id)) return bad;
+    if (typeof file_name !== "string" || file_name.length > 255) return bad;
+    if (typeof data !== "string") return bad;
+    if (data.length > LIMITS.imageData) return { status: 413, error: "image_too_large" };
+    if (!JPEG_BASE64.test(data)) return bad;
+    pictures.push({ id, file_name, data });
+  }
+  const ids = [...clean, ...pictures].map((s) => s.id);
+  if (new Set(ids).size !== ids.length) return bad;
+  return { question: question.trim(), sources: clean, images: pictures };
 }
 
 export async function handleAsk(request: Request, deps: AskDeps): Promise<Response> {
@@ -82,8 +113,10 @@ export async function handleAsk(request: Request, deps: AskDeps): Promise<Respon
 
   // From here on a failure gives the question back.
   try {
-    const raw = await deps.llm(buildMessages(parsed.question, parsed.sources), LIMITS.maxTokens);
-    const out = raw === null ? null : parseModelOutput(raw, parsed.sources.map((s) => s.id));
+    const messages = buildMessages(parsed.question, parsed.sources, parsed.images);
+    const raw = await deps.llm(messages, LIMITS.maxTokens);
+    const sent = [...parsed.sources, ...parsed.images].map((s) => s.id);
+    const out = raw === null ? null : parseModelOutput(raw, sent);
     if (out) {
       return json({ answer: out.answer, cited: out.cited, used: slot.used, limit: LIMITS.perAccountPerDay });
     }
