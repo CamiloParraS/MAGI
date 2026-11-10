@@ -40,6 +40,13 @@ gpui_kit::assets::icon_assets!(
         ArrowUp,
         RotateCcw,
         ShieldCheck,
+        // Ask Magi's chips (how each file is sent) and the chat's
+        // scroll-down arrow.
+        TextQuote,
+        FileText,
+        Image,
+        ChevronsUpDown,
+        ArrowDown,
         // Ask Magi's sign-in fields.
         Mail,
         LockKeyhole,

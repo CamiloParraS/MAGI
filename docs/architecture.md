@@ -64,13 +64,30 @@ server. Signed out, nothing in it runs: `Host::start` and `search` make no
 request and do not read the keychain (`tests/ask.rs` counts both).
 
 - **Host methods:** `account_state()` (from the config, no I/O), `sign_in`,
-  `sign_up`, `sign_out`, `ask(question, &[AskSource]) -> AskAnswer`, `ask_about(question, &[AskFile]) -> AskAnswer` (the app's call: picks each ticked file's best-matching passages, `ask::context`),
+  `sign_up`, `sign_out`, `ask(question, &[AskSource]) -> AskAnswer`, `ask_about(question, &[AskFile]) -> AskAnswer` (the app's call: builds each ticked file's part of the question as its `SendAs` says, `ask::context::payload_for`),
+  `ask_whole_size(file_id) -> WholeSize { chars, cut }` (what "whole file" would send, from the index),
+  `ask_file_at(path) -> Option<AskFileInfo>` (the searchable indexed file at a dropped path; `None` outside the roots),
   `delete_account`, `accept_ask_disclosure`. `AskError` is `Error::Ask`. A
   session that is gone (`SessionExpired`, `SignedOut`) also clears
   `ask.signed_in_as`, so the window returns to sign-in.
 - **Types:** `AskSource { id, file_name, text }` (the id comes back in
-  `AskAnswer::cited`; the desktop uses the `file_id`), `AskAnswer { answer,
-  cited, used, limit }`, `AccountState { signed_in_as?, disclosed }`.
+  `AskAnswer::cited`; the desktop uses the `file_id`), `AskImage { id,
+  file_name, data }` (base64 JPEG, same id numbering), `AskPayload { sources,
+  images }`, `AskFile { file_id, file_name, fallback, send: SendAs }` with
+  `SendAs::{Passages, Whole, Image}`, `AskAnswer { answer, cited, used, limit
+  }`, `AccountState { signed_in_as?, disclosed }`, `AskFileInfo { file_id,
+  file_name, kind, thumb_path?, preview }`.
+- **How a file is sent** (`ask::context`, `ask::image`). Passages: the best
+  matching chunks, 1,200 to 4,000 UTF-16 units per file, 8,000 for all.
+  Whole: the chunks in order with the chunker's overlap taken out, up to
+  60,000 per file and 120,000 per question with the passages. Image: the
+  original decoded upright, at most 1,024 px on its longer side, re-encoded as
+  a JPEG (so no EXIF), up to 3 per question; a cloud placeholder is never
+  read, and a picture that cannot be read goes as its text. The request is
+  `POST /ask { question, sources, images? }`; the Worker takes at most 5 files
+  in all, accepts only base64 JPEG for a picture (2,000,000 characters at
+  most), and passes pictures to the model as `image_url` parts, each after an
+  `<image id name>` tag.
 - **Client:** `AuthedClient` is built only from a `Session`, and a `Session`
   only comes out of `supabase::{sign_in, sign_up, refresh}`. Supabase Auth
   (password grant, signup, refresh, logout) and `POST /ask`, `DELETE /account`
@@ -739,8 +756,8 @@ subscriber wired up yet. Deferred to Plan 5.
 
 `apps/desktop/src/ask/`. `mod.rs` holds the logic as plain functions and `AskModel`; `view/` wires it to GPUI and `Host`, every `Host` call on the background executor.
 
-- **Opening.** The search footer's button, the detail pane's button and Alt+Enter all send `AppEvent::Ask(Request)`, and only with results on screen (`SearchState::askable`: not the weak results folded under "Nothing close", and nothing while a newer search runs). `app::show_ask` keeps one window at a time (`AskSlot`): an open one starts a new chat about the new `Request`, and a reply still in flight is dropped by generation. The window opens at 620×680, no taller than 86% of the screen (`ask::view::fit_to`).
-- **What is sent.** `ask::request` copies up to 5 top results that have text, ticked, with the search text as the question; the snippet it keeps is only the chip's hover text and a fallback. A snippet that only repeats the file's path is left out with the photos, because it would send folder names. For every question, first or follow-up, `Host::ask_about` replaces each ticked file's snippet with that file's own passages that best match the question (`ask::context`: its chunks ranked by question words and, when the meaning feature runs, by vector cosine, fused as in search, then taken in the file's order). The budget is 8,000 UTF-16 units for all files, split evenly, 1,200 to 4,000 per file, matching the Worker's `sourceText` and `totalText`; only searchable files are read from the index, never the file itself. Source ids are the ordinals of the ticked files ("1", "2", …), so a number the model writes matches the number on screen.
+- **Opening.** The search footer's button, the detail pane's button and Alt+Enter all send `AppEvent::Ask(Request)`, and only with results on screen (`SearchState::askable`: not the weak results folded under "Nothing close", and nothing while a newer search runs). `app::show_ask` keeps one window at a time (`AskSlot`): an open one starts a new chat about the new `Request`, and a reply still in flight is dropped by generation. The window opens at 880×660, no taller than 86% and no wider than 90% of the screen (`ask::view::fit_to`).
+- **What is sent.** `ask::request` copies up to 5 top results that have something to send, ticked, with the search text as the question; the snippet it keeps is only the chip's hover text and a fallback. A snippet that only repeats the file's path is not kept, because it would send folder names. Each chip has a `SendAs` (`ask::attach`): photos go as pictures (up to 3 ticked; past that as their text, or left out with none), everything else as passages, and a document's chip can switch to the whole file. `AskModel::add` puts a dropped or picked file in as a ticked chip (no duplicates, 5 at most), and `remove` takes one off. For every question, first or follow-up, `Host::ask_about` replaces each ticked file's snippet with that file's own passages that best match the question (`ask::context`: its chunks ranked by question words and, when the meaning feature runs, by vector cosine, fused as in search, then taken in the file's order). The budget is 8,000 UTF-16 units for all files, split evenly, 1,200 to 4,000 per file, matching the Worker's `sourceText` and `totalText`; only searchable files are read from the index, never the file itself. Source ids are the ordinals of the ticked files ("1", "2", …), so a number the model writes matches the number on screen.
 - **A chat** (`ask::Phase`: `SignIn { expired }` or `Chat`). The conversation is a list of `ask::Turn`s (question, the sources that went with it, and `TurnState`: asking, answered, failed, limit), questions on the right and Magi's answers on the left, each with its cited files as numbered chips that open them. The dock under it holds the chips of what the next question sends (tick or untick each, every time: the send preview ADR-0014 asks for) and the question box, which opens with the search text; Enter sends. A follow-up is a new turn with the chips as they are then. The server keeps no history, so a follow-up does not see earlier answers. A failure stays on its turn with Try again (`AskModel::retry`); the daily limit ends the chat for the day; an expired session returns to sign-in and keeps the chat.
 - **Disclosure.** Shown once as a notice above the box. The first question saves it as seen (`Outgoing::accept_disclosure`), as does its "Got it".
 - **Account.** `ask::view::sign_in::SignInForm` is the one sign-in form, in the Ask window and in Settings › Account when signed out; a sign-in from either sets `Live::account`, which every window follows. Settings › Account also signs out (an open Ask window returns to sign-in) and deletes the account. `ui.detail_pane` and every other setting are unaffected by the account.

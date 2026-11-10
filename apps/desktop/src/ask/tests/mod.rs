@@ -64,18 +64,17 @@ fn it_takes_the_top_five_results_with_text_all_ticked() {
 }
 
 #[test]
-fn photos_with_no_text_are_left_out_and_do_not_use_up_a_place() {
+fn a_photo_with_no_text_goes_as_its_picture() {
     let mut results = vec![result(1, Kind::Image, None)];
     results.extend(texts(6).into_iter().map(|mut r| {
         r.file_id += 1;
         r
     }));
-    let ids: Vec<i64> = request("rent", &results)
-        .sources
-        .iter()
-        .map(|s| s.file_id)
-        .collect();
-    assert_eq!(ids, [2, 3, 4, 5, 6]);
+    let taken = request("rent", &results).sources;
+    let ids: Vec<i64> = taken.iter().map(|s| s.file_id).collect();
+    assert_eq!(ids, [1, 2, 3, 4, 5]);
+    assert_eq!(taken[0].send, SendAs::Image);
+    assert_eq!(taken[1].send, SendAs::Passages);
 }
 
 #[test]
@@ -124,7 +123,6 @@ fn text_is_cut_to_what_the_server_accepts_counting_as_it_does() {
 fn asking_needs_something_on_screen_to_ask_about() {
     assert!(!can_ask(&[]));
     assert!(can_ask(&texts(1)));
-    // Only photos: the window opens and says there is nothing to send.
     assert!(can_ask(&[result(1, Kind::Image, None)]));
 }
 
@@ -145,6 +143,9 @@ fn the_window_fits_a_short_screen_so_the_question_box_shows() {
         fit_to(Some(size(px(800.), px(300.)))).height,
         MIN_SIZE.height
     );
+    // A narrow screen narrows it too, never under the minimum.
+    assert_eq!(fit_to(Some(size(px(800.), px(900.)))).width, px(720.));
+    assert_eq!(fit_to(Some(size(px(300.), px(900.)))).width, MIN_SIZE.width);
 }
 
 // --- Where the window starts ---
@@ -241,10 +242,10 @@ fn one_question_at_a_time() {
 }
 
 #[test]
-fn a_search_with_only_photos_has_nothing_to_send() {
+fn a_search_with_only_photos_can_ask_about_the_pictures() {
     let model = AskModel::new(signed_in(), request("q", &[result(1, Kind::Image, None)]));
-    assert!(model.sources().is_empty());
-    assert_eq!(model.blocked("anything"), Some(Blocked::NoSources));
+    assert_eq!(model.sources().len(), 1);
+    assert_eq!(model.blocked("what is this?"), None);
 }
 
 #[test]
@@ -503,3 +504,5 @@ fn an_answer_that_cites_nothing_does_not_point_at_cited_files() {
         assert_ne!(s.ask_written_by_ai, s.ask_written_by_ai_uncited);
     }
 }
+
+mod attach;

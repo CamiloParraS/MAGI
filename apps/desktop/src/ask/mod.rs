@@ -2,10 +2,11 @@
 //! the states the window moves through. Plain functions and data, so
 //! `cargo test` covers it; [`view`] wires it to GPUI and `Host`.
 
+pub mod attach;
 pub mod view;
 
 use magi_core::Error;
-use magi_core::ask::{AskAnswer, AskError, AskFile};
+use magi_core::ask::{AskAnswer, AskError, AskFile, SendAs};
 use magi_core::discovery::Kind;
 use magi_core::dto::{AccountState, SearchResult};
 
@@ -45,6 +46,8 @@ pub struct Source {
     /// The result's thumbnail, for the chip and its preview.
     pub thumb: Option<std::path::PathBuf>,
     pub ticked: bool,
+    /// How it goes with the next question; the chip says so.
+    pub send: SendAs,
 }
 
 /// What the search window hands over: the window keeps its own copy, because
@@ -63,31 +66,41 @@ fn excerpt(result: &SearchResult) -> Option<&str> {
     (!text.is_empty() && !snippet_is_the_path(text, &result.path)).then_some(text)
 }
 
-/// A copy of the top results that have text, ticked, with the search text as
-/// the question.
+/// A copy of the top results that have something to send, ticked, with the
+/// search text as the question. Photos go as pictures, up to
+/// [`attach::MAX_IMAGES`]; past that, as their text if they have any.
 pub fn request(query: &str, results: &[SearchResult]) -> Request {
-    let sources = results
-        .iter()
-        .filter_map(|result| {
-            excerpt(result).map(|text| Source {
-                file_id: result.file_id,
-                file_name: clip(&result.file_name, MAX_FILE_NAME_LEN),
-                kind: result.kind,
-                text: clip(text, MAX_SOURCE_LEN),
-                thumb: result.thumb_path.as_ref().map(std::path::PathBuf::from),
-                ticked: true,
-            })
-        })
-        .take(MAX_SOURCES)
-        .collect();
+    let mut images = 0;
+    let mut sources = Vec::new();
+    for result in results {
+        if sources.len() == MAX_SOURCES {
+            break;
+        }
+        let text = excerpt(result).map_or_else(String::new, |t| clip(t, MAX_SOURCE_LEN));
+        let Some(send) = attach::default_send(result.kind, !text.is_empty(), images) else {
+            continue;
+        };
+        if send == SendAs::Passages && text.is_empty() {
+            continue;
+        }
+        images += usize::from(send == SendAs::Image);
+        sources.push(Source {
+            file_id: result.file_id,
+            file_name: clip(&result.file_name, MAX_FILE_NAME_LEN),
+            kind: result.kind,
+            text,
+            thumb: result.thumb_path.as_ref().map(std::path::PathBuf::from),
+            ticked: true,
+            send,
+        });
+    }
     Request {
         question: clip(query.trim(), MAX_QUESTION_LEN),
         sources,
     }
 }
 
-/// There is something to ask about. With only photos on screen the window
-/// still opens, and says there is no text to send.
+/// There is something to ask about.
 pub fn can_ask(results: &[SearchResult]) -> bool {
     !results.is_empty()
 }
@@ -315,6 +328,9 @@ impl AskModel {
         if self.is_asking() {
             return;
         }
+        if !self.tick_allowed(ix) {
+            return;
+        }
         if let Some(source) = self.request.sources.get_mut(ix) {
             source.ticked = !source.ticked;
         }
@@ -372,6 +388,7 @@ impl AskModel {
                 file_id: s.file_id,
                 file_name: s.file_name.clone(),
                 fallback: s.text.clone(),
+                send: s.send,
             })
             .collect();
         let accept_disclosure = !self.account.disclosed;

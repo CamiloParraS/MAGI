@@ -5,122 +5,22 @@
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::Textarea;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
+use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{AskView, COLUMN};
-use crate::ask::{Answer, Source, Turn, TurnState, ai_note, blocked_text, problem_text};
+use super::chip::{chip_face, source_tip};
+use super::{AskView, COLUMN, DOCK_OVERLAP};
+use crate::ask::{Answer, Turn, TurnState, ai_note, problem_text};
 use crate::i18n::{Lang, Strings};
-use crate::search::highlight::one_line;
 use crate::theme::{self, Palette};
 use crate::ui::{MARK, brand_tile, note, pressable, subheading, warn_note};
 
-/// The glyph on a chip, and the room a chip's file name gets.
-const CHIP_GLYPH: Pixels = px(14.);
-const CHIP_THUMB: Pixels = px(20.);
-const CHIP_NAME: Pixels = px(170.);
-/// What a chip's tooltip quotes of its excerpt.
-const TIP_LEN: usize = 280;
-
 /// The column everything sits in, centered when the window is wide.
-fn column() -> Div {
+pub(super) fn column() -> Div {
     div().w_full().max_w(COLUMN).mx_auto()
-}
-
-/// The excerpt as a tooltip: a file's name says little about what goes.
-fn excerpt_tip(source: &Source) -> SharedString {
-    let text = one_line(&source.text);
-    let mut tip: String = text.chars().take(TIP_LEN).collect();
-    if text.chars().count() > TIP_LEN {
-        tip.push('…');
-    }
-    tip.into()
-}
-
-/// A chip's icon: the file's thumbnail when it has one, else its glyph.
-fn chip_icon(source: &Source) -> AnyElement {
-    let (kind, name) = (source.kind, source.file_name.clone());
-    match &source.thumb {
-        Some(path) => img(path.clone())
-            .flex_none()
-            .size(CHIP_THUMB)
-            .rounded(px(4.))
-            .object_fit(ObjectFit::Cover)
-            .with_fallback(move || theme::file_glyph(kind, &name, CHIP_GLYPH).into_any_element())
-            .into_any_element(),
-        None => theme::file_glyph(kind, &source.file_name, CHIP_GLYPH)
-            .flex_none()
-            .into_any_element(),
-    }
-}
-
-/// The tooltip of a chip: the excerpt, under a larger look at the file when
-/// it has a thumbnail.
-fn source_tip(source: &Source) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let (text, thumb) = (excerpt_tip(source), source.thumb.clone());
-    move |window, cx| match thumb.clone() {
-        None => Tooltip::new(text.clone()).build(window, cx),
-        Some(path) => {
-            let text = text.clone();
-            Tooltip::element(move |_, _| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .w(px(240.))
-                    .child(
-                        img(path.clone())
-                            .w_full()
-                            .h(px(180.))
-                            .rounded(px(4.))
-                            .object_fit(ObjectFit::Contain),
-                    )
-                    .child(div().text_xs().child(text.clone()))
-            })
-            .build(window, cx)
-        }
-    }
-}
-
-/// A chip's face: its number when it has one, the file's glyph and name.
-fn chip_face(number: Option<usize>, source: &Source, p: &Palette) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .h(px(26.))
-        .pl(px(if number.is_some() { 4. } else { 8. }))
-        .pr(px(10.))
-        .rounded_full()
-        .border_1()
-        .text_size(px(12.))
-        .when_some(number, |d, n| {
-            d.child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(18.))
-                    .rounded_full()
-                    .bg(p.selection)
-                    .text_color(p.accent)
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(n.to_string()),
-            )
-        })
-        .child(chip_icon(source))
-        .child(
-            div()
-                .max_w(CHIP_NAME)
-                .truncate()
-                .child(source.file_name.clone()),
-        )
 }
 
 /// The text color on an accent fill: black on the dark theme's light blue,
@@ -341,10 +241,66 @@ impl AskView {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            // Redraw on scroll, so the arrow to the latest comes and goes.
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .px(px(24.))
             .pt(px(24.))
-            .pb(px(12.))
+            // Room for the end to clear the dock, which overlaps this.
+            .pb(DOCK_OVERLAP + px(16.))
             .child(content)
+    }
+
+    /// The chat is scrolled up from its end (with a little slack).
+    fn above_the_end(&self) -> bool {
+        let max = self.scroll.max_offset().y;
+        max > px(1.) && -self.scroll.offset().y < max - px(24.)
+    }
+
+    /// The conversation, with an arrow back to the latest answer in the
+    /// right margin while it is scrolled up. Its end runs under the dock.
+    pub(super) fn chat_area(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let s = self.live.read(cx).lang.strings();
+        let (card, line, ink, selection) = (p.card, p.line, p.ink, p.selection);
+        let arrow = self.above_the_end().then(|| {
+            div()
+                .absolute()
+                .bottom(DOCK_OVERLAP + px(10.))
+                .right(px(10.))
+                .child(
+                    div()
+                        .id("ask-scroll-down")
+                        .focusable()
+                        .focus_visible(move |d| d.bg(selection))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(32.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(line)
+                        .bg(card)
+                        .shadow_md()
+                        .cursor_pointer()
+                        .text_color(ink)
+                        .hover(move |d| d.bg(selection))
+                        .role(Role::Button)
+                        .aria_label(s.ask_scroll_down)
+                        .tooltip(super::chip::text_tip(s.ask_scroll_down))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.scroll.scroll_to_bottom();
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::ArrowDown).size(px(15.))),
+                )
+        });
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(self.conversation(p, cx))
+            .children(arrow)
     }
 
     fn empty_state(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
@@ -559,7 +515,11 @@ impl AskView {
                 div()
                     .text_size(px(14.5))
                     .line_height(relative(1.65))
-                    .child(answer.text.clone()),
+                    // Selectable and copyable, like any chat's answer.
+                    .child(SelectableText::new(
+                        ("ask-answer", turn_ix),
+                        answer.text.clone(),
+                    )),
             )
             .when(!answer.cited.is_empty(), |d| {
                 d.child(
@@ -577,168 +537,5 @@ impl AskView {
             })
             .when(gone, |d| d.child(warn_note(p, s.ask_file_gone).mt(px(8.))))
             .child(note(p).mt(px(10.)).child(ai_note(answer, s)))
-    }
-
-    /// Under the chat: the disclosure the first time, then the box with the
-    /// chips that go with the next question.
-    pub(super) fn dock(&self, p: &Palette, cx: &Context<Self>) -> Div {
-        let live = self.live.read(cx);
-        let (lang, s) = (live.lang, live.lang.strings());
-        let sources = self.model.sources();
-        let question = self.question.read(cx).value();
-        let blocked = self.model.blocked(&question);
-        let ticked = sources.iter().filter(|source| source.ticked).count();
-        let caption = blocked
-            .and_then(|reason| blocked_text(reason, !sources.is_empty(), s))
-            .map(|text| warn_note(p, text).mt_0().into_any_element())
-            .or_else(|| {
-                (!sources.is_empty()).then(|| {
-                    note(p)
-                        .mt_0()
-                        .child(lang.plural(&s.ask_excerpts, ticked as u64))
-                        .into_any_element()
-                })
-            });
-        let used = self.model.used().map(|(used, limit)| {
-            s.ask_used
-                .replace("{used}", &lang.number(u64::from(used)))
-                .replace("{limit}", &lang.number(u64::from(limit)))
-        });
-        let busy = self.model.is_asking();
-        let chips = sources.iter().enumerate().map(|(ix, source)| {
-            let on = source.ticked;
-            div()
-                .id(("ask-source", ix))
-                .debug_selector(move || format!("ask-source-{ix}"))
-                .role(Role::CheckBox)
-                .aria_label(source.file_name.clone())
-                .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                .when(!busy, |d| d.cursor_pointer())
-                .tooltip(source_tip(source))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model.toggle(ix);
-                    cx.notify();
-                }))
-                .child(
-                    chip_face(None, source, p)
-                        .map(|chip| match on {
-                            true => chip.border_color(p.accent.opacity(0.45)).bg(p.selection),
-                            false => chip
-                                .border_color(p.line)
-                                .text_color(p.mute)
-                                .line_through()
-                                .opacity(0.6),
-                        })
-                        .child(
-                            Icon::new(if on { IconName::Check } else { IconName::Plus })
-                                .size(px(11.))
-                                .text_color(if on { p.accent } else { p.mute }),
-                        ),
-                )
-        });
-        let send = Button::new("ask-send")
-            .cursor_pointer()
-            .primary()
-            .small()
-            .icon(IconName::ArrowUp)
-            .tooltip(s.ask_send)
-            .loading(busy)
-            .disabled(blocked.is_some())
-            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)));
-        let disclosure = self.model.needs_disclosure().then(|| {
-            div()
-                .flex()
-                .items_start()
-                .gap(px(10.))
-                .mb(px(10.))
-                .px(px(12.))
-                .py(px(10.))
-                .rounded(px(12.))
-                .border_1()
-                .border_color(p.line)
-                .bg(p.card)
-                .child(
-                    div().pt(px(1.)).child(
-                        Icon::new(IconName::ShieldCheck)
-                            .size(px(15.))
-                            .text_color(p.accent),
-                    ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(12.5))
-                        .line_height(relative(1.45))
-                        .text_color(p.mute)
-                        .child(s.ask_disclosure_body),
-                )
-                .child(
-                    Button::new("ask-got-it")
-                        .cursor_pointer()
-                        .ghost()
-                        .xsmall()
-                        .label(s.ask_got_it)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.accept_disclosure(window, cx);
-                        })),
-                )
-        });
-        div().flex_none().px(px(20.)).pt(px(4.)).pb(px(16.)).child(
-            column()
-                .children(disclosure)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .px(px(12.))
-                        .pt(px(10.))
-                        .pb(px(8.))
-                        .rounded(px(20.))
-                        .border_1()
-                        // Lights up once there is something to send.
-                        .border_color(if question.is_empty() {
-                            p.line
-                        } else {
-                            p.accent.opacity(0.5)
-                        })
-                        .bg(p.card)
-                        .when(!p.dark, |d| d.shadow_sm())
-                        .when(!sources.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .child(
-                                        div().px(px(2.)).child(subheading(s.ask_what_gets_sent, p)),
-                                    )
-                                    .child(div().flex().flex_wrap().gap(px(6.)).children(chips)),
-                            )
-                        })
-                        .child(
-                            div()
-                                .px(px(2.))
-                                .child(Textarea::new(&self.question).appearance(false)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().min_w_0().px(px(2.)).children(caption))
-                                .child(send),
-                        ),
-                )
-                .children(used.map(|used| {
-                    div()
-                        .mt(px(6.))
-                        .flex()
-                        .justify_end()
-                        .px(px(6.))
-                        .child(note(p).mt_0().child(used))
-                })),
-        )
     }
 }

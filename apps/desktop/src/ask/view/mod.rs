@@ -4,39 +4,54 @@
 //! call to `Host` runs on the background executor.
 
 mod chat;
+mod chip;
+mod dock;
+mod picker;
 pub mod sign_in;
 
 use gpui_kit::component::input::{InputEvent, TextareaState};
+use std::collections::HashMap;
+
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use magi_core::dto::WholeSize;
 use magi_core::host::Host;
 
+use super::attach::Notice;
 use super::{AskModel, Outgoing, Phase, Request};
 use crate::ask::ask_error;
 use crate::live::Live;
 use crate::theme::{self, Backdrop, Palette};
 use crate::ui::loading_track;
+use picker::Picker;
 use sign_in::SignInForm;
 
 actions!(magi_ask, [Close]);
 
 const CONTEXT: &str = "AskWindow";
-pub const SIZE: Size<Pixels> = size(px(620.), px(620.));
+pub const SIZE: Size<Pixels> = size(px(880.), px(660.));
 pub const MIN_SIZE: Size<Pixels> = size(px(480.), px(440.));
 
-/// [`SIZE`], no taller than most of the screen it opens on: a scaled
+/// [`SIZE`], no taller than most of the screen it opens on (a scaled
 /// laptop screen can be under 700 px tall, and the question box is at the
-/// bottom.
+/// bottom) and no wider than most of it.
 pub fn fit_to(screen: Option<Size<Pixels>>) -> Size<Pixels> {
     let Some(screen) = screen else {
         return SIZE;
     };
     let room = (screen.height * 0.86).max(MIN_SIZE.height);
-    size(SIZE.width, SIZE.height.min(room))
+    let across = (screen.width * 0.9).max(MIN_SIZE.width);
+    size(SIZE.width.min(across), SIZE.height.min(room))
 }
 /// How wide the chat gets in a maximized window, for readable lines.
-const COLUMN: Pixels = px(680.);
+const COLUMN: Pixels = px(820.);
+/// How far the dock reaches up over the end of the conversation, so text
+/// scrolls away behind the question box instead of against a seam.
+const DOCK_OVERLAP: Pixels = px(36.);
 /// The question box, from its opening height to where it starts scrolling.
 const QUESTION_ROWS: (usize, usize) = (1, 6);
+/// The group the drop highlight follows.
+const DROP: &str = "ask-drop";
 
 pub struct AskView {
     host: Host,
@@ -54,6 +69,13 @@ pub struct AskView {
     gone: Option<i64>,
     /// The question box's placeholder, as last set.
     placeholder: &'static str,
+    /// What "whole file" would send, by file, once asked for.
+    whole: HashMap<i64, WholeSize>,
+    /// A limit or a stranger, said for a few seconds.
+    notice: Option<Notice>,
+    notice_generation: u64,
+    /// Open while adding a file from the index.
+    picker: Option<Picker>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -123,6 +145,10 @@ impl AskView {
             theme: String::new(),
             gone: None,
             placeholder: "",
+            whole: HashMap::new(),
+            notice: None,
+            notice_generation: 0,
+            picker: None,
             _subscriptions: subscriptions,
         };
         view.sync_appearance(window, cx);
@@ -189,6 +215,8 @@ impl AskView {
     pub fn replace(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
         let question = request.question.clone();
         self.model.replace(request);
+        self.picker = None;
+        self.notice = None;
         self.question
             .update(cx, |input, cx| input.set_value(question, window, cx));
         self.enter_phase(window, cx);
@@ -307,6 +335,7 @@ impl Render for AskView {
         let p = Palette::new(self.dark);
         self.sync_placeholder(window, cx);
         let asking = self.model.is_asking();
+        let chat = self.model.phase() == Phase::Chat;
         let body = match self.model.phase() {
             Phase::SignIn { expired } => self.sign_in_scene(expired, &p, cx).into_any_element(),
             Phase::Chat => div()
@@ -314,14 +343,18 @@ impl Render for AskView {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .child(self.conversation(&p, cx))
+                .child(self.chat_area(&p, cx))
                 .child(self.dock(&p, cx))
                 .into_any_element(),
         };
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.escape(window, cx)))
+            .group(DROP)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.drop_files(paths.paths().to_vec(), cx);
+            }))
             .relative()
             .size_full()
             .flex()
@@ -332,5 +365,6 @@ impl Render for AskView {
             .child(p.wash(px(160.)))
             .child(loading_track(&p, asking))
             .child(body)
+            .when(chat, |d| d.child(self.drop_overlay(&p, cx)))
     }
 }
