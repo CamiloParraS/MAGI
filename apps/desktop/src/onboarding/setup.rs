@@ -177,28 +177,46 @@ impl OnboardingView {
         grouped(p, rows)
     }
 
-    /// "Start with your computer" (FR-10), on by default: a switch, as in
-    /// Settings.
-    fn launch_row(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
-        group(p).child(
-            row(
-                IconName::Power,
-                s.launch_at_login,
-                Some(s.launch_at_login_note),
-                p,
-            )
+    /// "Start with your computer" (FR-10), on by default, and "Ask Magi", off
+    /// until chosen: switches, as in Settings, in one group.
+    fn options(&self, s: &Strings, p: &Palette, cx: &Context<Self>) -> Div {
+        group(p)
             .child(
-                Switch::new("start-at-login")
-                    .cursor_pointer()
-                    .checked(self.launch_at_login)
-                    .color(p.accent)
-                    .accessibility_label(s.launch_at_login)
-                    .on_click(cx.listener(|this, &on: &bool, _, cx| {
-                        this.launch_at_login = on;
-                        cx.notify();
-                    })),
-            ),
-        )
+                row(
+                    IconName::Power,
+                    s.launch_at_login,
+                    Some(s.launch_at_login_note),
+                    p,
+                )
+                .child(
+                    Switch::new("start-at-login")
+                        .cursor_pointer()
+                        .checked(self.launch_at_login)
+                        .color(p.accent)
+                        .accessibility_label(s.launch_at_login)
+                        .on_click(cx.listener(|this, &on: &bool, _, cx| {
+                            this.launch_at_login = on;
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(divider(p))
+            .child(
+                row(
+                    IconName::MessageCircleQuestionMark,
+                    s.ask_magi,
+                    Some(s.ob_ask_note),
+                    p,
+                )
+                .child(
+                    Switch::new("ask-magi")
+                        .cursor_pointer()
+                        .checked(self.ask)
+                        .color(p.accent)
+                        .accessibility_label(s.ask_magi)
+                        .on_click(cx.listener(|this, &on: &bool, _, cx| this.set_ask(on, cx))),
+                ),
+            )
     }
 
     /// The one setup screen: the welcome over two columns, folders on the
@@ -247,7 +265,7 @@ impl OnboardingView {
                                 self.features(s, p, cx),
                                 p,
                             ))
-                            .child(self.launch_row(s, p, cx)),
+                            .child(self.options(s, p, cx)),
                     ),
             )
     }

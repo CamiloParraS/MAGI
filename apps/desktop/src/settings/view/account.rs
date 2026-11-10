@@ -10,8 +10,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
+use crate::ask::view::sign_in::sign_in_panel;
 use crate::theme::Palette;
-use crate::ui::{brand_tile, group, grouped, note, row_icon};
+use crate::ui::{group, grouped, note, row_icon};
 
 impl SettingsView {
     /// Tells every window who is signed in now; an open Ask window goes
@@ -89,36 +90,15 @@ impl SettingsView {
         let s = live.lang.strings();
         // Signed out: the Ask window's own form, so either place works.
         let Some(email) = live.account.signed_in_as.clone() else {
-            return group(p).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .px_4()
-                    .py(px(24.))
-                    .child(brand_tile(p, px(40.)))
-                    .child(
-                        div()
-                            .mt(px(14.))
-                            .text_size(px(18.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(s.ask_sign_in_title),
-                    )
-                    .child(
-                        note(p)
-                            .mt(px(6.))
-                            .max_w(px(380.))
-                            .text_center()
-                            .child(s.ask_sign_in_body),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(380.))
-                            .mt(px(20.))
-                            .child(self.sign_in.clone()),
-                    ),
-            );
+            let creating = self.sign_in.read(cx).creating();
+            return group(p).child(div().px_5().py(px(20.)).child(sign_in_panel(
+                &self.sign_in,
+                creating,
+                false,
+                true,
+                p,
+                s,
+            )));
         };
         let busy = self.is_busy(Field::SignOut) || self.is_busy(Field::DeleteAccount);
         div()

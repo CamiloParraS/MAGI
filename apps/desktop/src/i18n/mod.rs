@@ -344,6 +344,13 @@ pub struct Strings {
     /// `{name}` is the feature.
     pub ob_download_failed: &'static str,
     pub ob_start_searching: &'static str,
+    /// The setup switch for Ask Magi: what it is and what it needs.
+    pub ob_ask_note: &'static str,
+    /// The sign-in step's way past it, and its way on once signed in.
+    pub ob_account_skip: &'static str,
+    pub ob_continue: &'static str,
+    pub ob_signed_in_title: &'static str,
+    pub ob_signed_in_note: &'static str,
     pub open_settings: &'static str,
     /// The feature's name, the same in every language.
     pub ask_magi: &'static str,

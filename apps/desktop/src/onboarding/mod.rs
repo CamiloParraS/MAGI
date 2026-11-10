@@ -1,9 +1,13 @@
-//! First-run onboarding (FR-10) in two screens. Setup: folders, with each
-//! one's status as the permission check; search features, with consent to
-//! download; start with the computer. Confirming applies all three and saves
-//! `done` to `ui.onboarding`; then the first index's progress. A plain launch
-//! opens onboarding until then. Closing it leaves the app running.
+//! First-run onboarding (FR-10) in two screens, three when Ask Magi is on.
+//! Setup: folders, with each one's status as the permission check; search
+//! features, with consent to download; start with the computer; Ask Magi,
+//! off until chosen. Confirming applies them and saves `done` to
+//! `ui.onboarding`. With Ask Magi on and nobody signed in, an account screen
+//! follows (skippable: search needs no account); then the first index's
+//! progress. A plain launch opens onboarding until then. Closing it leaves
+//! the app running.
 
+mod account;
 mod finish;
 mod frame;
 mod plan;
@@ -20,6 +24,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 use crate::app::{AppEvent, Events};
+use crate::ask::view::sign_in::SignInForm;
 use crate::live::Live;
 use crate::settings::turn_on;
 use crate::theme;
@@ -44,9 +49,11 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Step {
     Setup,
+    /// Sign in or create an account; only after setup turned Ask Magi on.
+    Account,
     Indexing,
 }
 
@@ -78,6 +85,15 @@ pub struct OnboardingView {
     chosen: Option<Vec<Feature>>,
     /// "Start with your computer", checked by default (ADR-0010).
     launch_at_login: bool,
+    /// "Ask Magi", off by default: it is the one feature that goes online.
+    ask: bool,
+    /// The form on the account screen.
+    sign_in: Entity<SignInForm>,
+    /// The account screen was shown on the way to the finish screen, so Back
+    /// returns to it.
+    account_shown: bool,
+    /// The account screen just opened: its next render focuses the email.
+    focus_account: bool,
     /// Documents, Desktop and Pictures, offered with one click.
     user_folders: Vec<PathBuf>,
     folder_list: FolderList,
@@ -123,6 +139,7 @@ impl OnboardingView {
             .map(|c| c.ui)
             .unwrap_or_default();
         let folder_list = FolderList::open(&host);
+        let sign_in = cx.new(|cx| SignInForm::new(host.clone(), live.clone(), window, cx));
         let subscriptions = vec![
             cx.observe_in(&live, window, |this, _, window, cx| {
                 this.prune_removing(cx);
@@ -131,6 +148,7 @@ impl OnboardingView {
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
             }),
+            cx.observe(&sign_in, |_, _, cx| cx.notify()),
             // The key-ups go to whichever window is active by then (search,
             // after the hotkey): unlight them all.
             cx.observe_window_activation(window, |this, window, cx| {
@@ -148,6 +166,10 @@ impl OnboardingView {
             step: ui.onboarding.into(),
             chosen: None,
             launch_at_login: true,
+            ask: false,
+            sign_in,
+            account_shown: false,
+            focus_account: false,
             user_folders: magi_core::paths::user_folders(),
             folder_list,
             hotkey: ui.hotkey,
@@ -173,9 +195,17 @@ impl OnboardingView {
         self.step
     }
 
+    /// Turns the Ask Magi switch on or off.
+    pub fn set_ask(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.ask = on;
+        cx.notify();
+    }
+
     fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.live.read(cx).theme.clone();
         self.dark = theme::sync(&theme, window, cx);
+        let dark = self.dark;
+        self.sign_in.update(cx, |form, _| form.set_dark(dark));
         cx.notify();
     }
 
@@ -209,8 +239,15 @@ impl OnboardingView {
                     self.roots(cx).is_some_and(|roots| !roots.is_empty())
                         && !self.live.read(cx).features.is_empty()
                 }
-                Step::Indexing => true,
+                // Signing in is optional: the same button skips it.
+                Step::Account | Step::Indexing => true,
             }
+    }
+
+    /// Whether the account screen has anything to do: Ask Magi is on and
+    /// nobody is signed in.
+    fn needs_account(&self, cx: &App) -> bool {
+        self.ask && !self.is_signed_in(cx)
     }
 
     /// Setup applies the features and the login choice and finishes
@@ -226,10 +263,17 @@ impl OnboardingView {
                 self.chosen = Some(chosen);
                 let ui = json!({
                     "launch_at_login": self.launch_at_login,
+                    "ask_magi": self.ask,
                     "onboarding": Onboarding::Done,
                 });
+                let then = if self.needs_account(cx) {
+                    Step::Account
+                } else {
+                    Step::Indexing
+                };
+                self.account_shown = then == Step::Account;
                 self.apply(
-                    Step::Indexing,
+                    then,
                     move |host| {
                         for (feature, on) in changes {
                             if on {
@@ -243,6 +287,7 @@ impl OnboardingView {
                     cx,
                 );
             }
+            Step::Account => self.go(Step::Indexing, cx),
             Step::Indexing => self.leave(Some(AppEvent::Toggle), window),
         }
     }
@@ -256,16 +301,23 @@ impl OnboardingView {
         }
     }
 
-    /// From the finish screen back to setup, to change a choice. Setup is
-    /// already applied; confirming it again applies only what changed.
+    /// One screen back, to change a choice. Setup is already applied;
+    /// confirming it again applies only what changed.
     pub fn back(&mut self, cx: &mut Context<Self>) {
-        if self.step == Step::Indexing && !self.busy && !self.recording {
-            self.go(Step::Setup, cx);
+        if self.busy || self.recording {
+            return;
+        }
+        match self.step {
+            Step::Setup => {}
+            Step::Account => self.go(Step::Setup, cx),
+            Step::Indexing if self.account_shown => self.go(Step::Account, cx),
+            Step::Indexing => self.go(Step::Setup, cx),
         }
     }
 
-    fn go(&mut self, step: Step, cx: &mut Context<Self>) {
-        self.forward = step == Step::Indexing;
+    pub(crate) fn go(&mut self, step: Step, cx: &mut Context<Self>) {
+        self.forward = step > self.step;
+        self.focus_account = step == Step::Account;
         self.step = step;
         self.error = None;
         cx.notify();

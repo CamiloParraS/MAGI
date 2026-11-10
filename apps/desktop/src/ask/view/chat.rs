@@ -12,6 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::chip::{chip_face, source_tip};
+use super::sign_in::sign_in_panel;
 use super::{AskView, COLUMN, DOCK_OVERLAP};
 use crate::ask::{Answer, Turn, TurnState, ai_note, problem_text};
 use crate::i18n::{Lang, Strings};
@@ -128,15 +129,7 @@ impl AskView {
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         let s = self.live.read(cx).lang.strings();
-        let (title, body) = match self.sign_in.read(cx).creating() {
-            true => (s.ask_create_title, s.ask_create_body),
-            false => (s.ask_sign_in_title, s.ask_sign_in_body),
-        };
-        let trust = [
-            (IconName::HardDrive, s.ask_trust_local),
-            (IconName::FileCheck, s.ask_trust_choose),
-            (IconName::ShieldCheck, s.ask_trust_nokeep),
-        ];
+        let creating = self.sign_in.read(cx).creating();
         div()
             .id("ask-sign-in")
             .flex()
@@ -146,65 +139,7 @@ impl AskView {
             .overflow_y_scroll()
             .px(px(24.))
             .py(px(28.))
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(380.))
-                    .mx_auto()
-                    .my_auto()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(brand_tile(p, px(40.)).mb(px(14.)))
-                    .child(
-                        div()
-                            .text_size(px(24.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_center()
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .mt(px(6.))
-                            .max_w(px(340.))
-                            .text_center()
-                            .text_color(p.mute)
-                            .line_height(relative(1.5))
-                            .child(body),
-                    )
-                    .when(expired, |d| {
-                        d.child(warn_note(p, s.ask_session_ended).mt(px(10.)))
-                    })
-                    .child(
-                        div()
-                            .w_full()
-                            .mt(px(22.))
-                            .p(px(16.))
-                            .rounded(px(16.))
-                            .border_1()
-                            .border_color(p.line)
-                            .bg(p.card)
-                            .when(!p.dark, |d| d.shadow_sm())
-                            .child(self.sign_in.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(20.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.))
-                            .children(trust.map(|(icon, text)| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .text_xs()
-                                    .text_color(p.mute)
-                                    .child(Icon::new(icon).size(px(13.)).text_color(p.accent))
-                                    .child(text)
-                            })),
-                    ),
-            )
+            .child(sign_in_panel(&self.sign_in, creating, expired, false, p, s).my_auto())
     }
 
     /// The chat so far, or before the first question what it is for.

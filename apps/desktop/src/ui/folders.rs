@@ -101,31 +101,63 @@ pub(crate) fn drop_zone(
     p: &Palette,
     on_add: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
+    // The whole zone is the button: click, or drop folders on it. The icon
+    // sits in the accent halo the sign-in screen uses, so the empty state
+    // reads as part of the same app, and a dashed edge still says "drop here".
     div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_2()
-        .py(px(22.))
-        .rounded(px(10.))
+        .rounded(px(12.))
         .border_1()
         .border_dashed()
-        .border_color(p.mute.opacity(0.4))
+        .border_color(p.accent.opacity(0.45))
+        .bg(p.card)
         .child(
-            Icon::new(IconName::FolderPlus)
-                .size(px(26.))
-                .text_color(p.accent),
-        )
-        .child(div().text_color(p.mute).child(s.ob_drop_folders))
-        .child(pressable(
             Button::new("add-folder")
                 .cursor_pointer()
-                .primary()
-                .xsmall()
-                .label(s.add_folder)
+                .ghost()
+                .group("drop-zone")
+                .child(
+                    div()
+                        .id("drop-zone-content")
+                        .relative()
+                        .group_active("drop-zone", |s| s.top(PRESS))
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .p(px(6.))
+                                .rounded(px(14.))
+                                .bg(p.accent.opacity(if p.dark { 0.16 } else { 0.12 }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size(px(36.))
+                                        .rounded(px(10.))
+                                        .bg(p.accent)
+                                        .child(
+                                            Icon::new(IconName::FolderPlus)
+                                                .size(px(20.))
+                                                .text_color(if p.dark { black() } else { white() }),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .mt(px(8.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(s.add_folder),
+                        )
+                        .child(div().text_sm().text_color(p.mute).child(s.ob_drop_folders)),
+                )
+                .w_full()
+                .h(px(150.))
+                .rounded(px(11.))
                 .on_click(on_add),
-            "press-add-folder",
-        ))
+        )
 }
 
 /// A folder list's last row: Add folder. The whole row is the button: click

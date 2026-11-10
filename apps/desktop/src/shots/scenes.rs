@@ -88,6 +88,35 @@ pub fn all() -> Vec<Scene> {
         onboarding_window(Onboarding::Done),
         vec![],
     ));
+    scenes.push(scene(
+        "onboarding-no-folders",
+        onboarding_window(Onboarding::Folders),
+        vec![Box::new(|kit, _, cx| {
+            kit.live.update(cx, |live, cx| {
+                if let Some(status) = live.status.as_mut() {
+                    status.roots.clear();
+                }
+                cx.notify();
+            });
+        })],
+    ));
+    scenes.push(scene(
+        "onboarding-ask-on",
+        onboarding_window(Onboarding::Folders),
+        vec![Box::new(|_, handle, cx| {
+            on_onboarding(handle, cx, |view, _, cx| view.set_ask(true, cx));
+        })],
+    ));
+    scenes.push(scene(
+        "onboarding-account",
+        onboarding_window(Onboarding::Folders),
+        vec![Box::new(|_, handle, cx| {
+            on_onboarding(handle, cx, |view, _, cx| {
+                view.set_ask(true, cx);
+                view.go(onboarding::Step::Account, cx);
+            });
+        })],
+    ));
     scenes.extend(ask_scenes());
     scenes
 }
@@ -163,6 +192,18 @@ fn on_ask(
 ) {
     let _ = handle.update(cx, |root, window, cx| {
         if let Some(view) = content::<AskView>(root, cx) {
+            view.update(cx, |view, cx| f(view, window, cx));
+        }
+    });
+}
+
+fn on_onboarding(
+    handle: AnyWindowHandle,
+    cx: &mut App,
+    f: impl FnOnce(&mut OnboardingView, &mut Window, &mut Context<OnboardingView>),
+) {
+    let _ = handle.update(cx, |root, window, cx| {
+        if let Some(view) = content::<OnboardingView>(root, cx) {
             view.update(cx, |view, cx| f(view, window, cx));
         }
     });

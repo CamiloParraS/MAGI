@@ -15,13 +15,21 @@ use crate::theme::Palette;
 use crate::ui::{note, warn_note};
 
 impl Render for OnboardingView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::new(self.dark);
         let s = self.live.read(cx).lang.strings();
+        if self.focus_account {
+            self.focus_account = false;
+            if !self.is_signed_in(cx) {
+                self.sign_in.update(cx, |form, cx| form.focus(window, cx));
+            }
+        }
         let body = match self.step {
             Step::Setup => self.setup(s, &p, cx),
+            Step::Account => self.account(s, &p, cx),
             Step::Indexing => self.indexing(s, &p, cx),
         };
+        let signed_in = self.is_signed_in(cx);
         let can_continue = self.can_continue(cx);
         let no_folder = self.roots(cx).is_none_or(|roots| roots.is_empty());
         let folder_count = self.roots(cx).map_or(0, |roots| roots.len());
@@ -33,6 +41,8 @@ impl Render for OnboardingView {
                 .replace("{size}", &self.live.read(cx).lang.size(total))
                 .into(),
             Step::Setup => s.ob_start.into(),
+            Step::Account if signed_in => s.ob_continue.into(),
+            Step::Account => s.ob_account_skip.into(),
             Step::Indexing => s.ob_start_searching.into(),
         };
         // What Start sets up, in one line: the folders and the download.
@@ -129,7 +139,7 @@ impl Render for OnboardingView {
                         )
                     })
                     // Back across from the way forward, where wizards keep it.
-                    .when(self.step == Step::Indexing, |bar| {
+                    .when(self.step != Step::Setup, |bar| {
                         bar.child(
                             Button::new("back")
                                 .cursor_pointer()
@@ -139,11 +149,18 @@ impl Render for OnboardingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
                         )
                     })
-                    .when(self.step == Step::Indexing, |bar| bar.child(div().flex_1()))
+                    .when(self.step != Step::Setup, |bar| bar.child(div().flex_1()))
                     .child(
                         Button::new("next")
                             .when(can_continue, |b| b.cursor_pointer())
-                            .primary()
+                            // Skipping sign-in is quiet; signed in, Continue leads.
+                            .map(|b| {
+                                if self.step == Step::Account && !signed_in {
+                                    b.ghost()
+                                } else {
+                                    b.primary()
+                                }
+                            })
                             .label(next_label)
                             .loading(self.busy)
                             .disabled(!can_continue && !self.busy)

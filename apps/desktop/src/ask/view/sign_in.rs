@@ -11,9 +11,10 @@ use gpui_kit::*;
 use magi_core::host::Host;
 
 use crate::ask::{Problem, ask_error, credentials_ok, problem_of, problem_text};
+use crate::i18n::Strings;
 use crate::live::Live;
 use crate::theme::Palette;
-use crate::ui::{pressable, subheading, warn_note};
+use crate::ui::{brand_tile, pressable, subheading, warn_note};
 
 pub struct SignInForm {
     host: Host,
@@ -227,7 +228,7 @@ impl Render for SignInForm {
         div()
             .flex()
             .flex_col()
-            .gap(px(14.))
+            .gap(px(16.))
             .w_full()
             .child(
                 div()
@@ -288,4 +289,155 @@ impl Render for SignInForm {
                     .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
             )
     }
+}
+
+/// The whole sign-in screen, the same in the Ask window, in onboarding and in
+/// Settings: the mark in a soft halo, what the account is for, the form on a
+/// raised card, and the three promises under it as one quiet row.
+pub fn sign_in_panel(
+    form: &Entity<SignInForm>,
+    creating: bool,
+    expired: bool,
+    compact: bool,
+    p: &Palette,
+    s: &Strings,
+) -> Div {
+    let (title, body) = match creating {
+        true => (s.ask_create_title, s.ask_create_body),
+        false => (s.ask_sign_in_title, s.ask_sign_in_body),
+    };
+    let trust = [
+        (IconName::HardDrive, s.ask_trust_local),
+        (IconName::FileCheck, s.ask_trust_choose),
+        (IconName::ShieldCheck, s.ask_trust_nokeep),
+    ];
+    if compact {
+        return compact_panel(form, title, body, trust, p);
+    }
+    div()
+        .w_full()
+        .max_w(px(560.))
+        .mx_auto()
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(
+            // A halo of the accent behind the mark: the one brand moment.
+            div()
+                .p(px(6.))
+                .rounded(px(18.))
+                .bg(p.accent.opacity(if p.dark { 0.16 } else { 0.12 }))
+                .child(brand_tile(p, px(40.))),
+        )
+        .child(
+            div()
+                .mt(px(12.))
+                .text_size(px(24.))
+                .line_height(px(30.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_center()
+                .child(title),
+        )
+        .child(
+            div()
+                .mt(px(6.))
+                .max_w(px(340.))
+                .text_center()
+                .text_color(p.mute)
+                .line_height(relative(1.5))
+                .child(body),
+        )
+        .when(expired, |d| {
+            d.child(warn_note(p, s.ask_session_ended).mt(px(10.)))
+        })
+        .child(
+            div()
+                .w_full()
+                .max_w(px(380.))
+                .mt(px(22.))
+                .p(px(18.))
+                .rounded(px(16.))
+                .border_1()
+                .border_color(p.line)
+                .bg(p.card)
+                .when(!p.dark, |d| d.shadow_sm())
+                .child(form.clone()),
+        )
+        .child(
+            div()
+                .mt(px(18.))
+                .flex()
+                .flex_wrap()
+                .justify_center()
+                .gap_x(px(16.))
+                .gap_y(px(6.))
+                .children(trust.map(|(icon, text)| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_xs()
+                        .text_color(p.mute)
+                        .child(Icon::new(icon).size(px(13.)).text_color(p.accent))
+                        .child(text)
+                })),
+        )
+}
+
+/// For a box that is already a card (Settings): what the account is for on
+/// the left, the form on the right, so it fits a short window.
+fn compact_panel(
+    form: &Entity<SignInForm>,
+    title: &'static str,
+    body: &'static str,
+    trust: [(IconName, &'static str); 3],
+    p: &Palette,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(32.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .items_start()
+                .child(brand_tile(p, px(32.)))
+                .child(
+                    div()
+                        .mt(px(12.))
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .mt(px(4.))
+                        .text_sm()
+                        .text_color(p.mute)
+                        .line_height(relative(1.45))
+                        .child(body),
+                )
+                .child(
+                    div()
+                        .mt(px(14.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.))
+                        .children(trust.map(|(icon, text)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_xs()
+                                .text_color(p.mute)
+                                .child(Icon::new(icon).size(px(13.)).text_color(p.accent))
+                                .child(text)
+                        })),
+                ),
+        )
+        .child(div().w(px(330.)).flex_none().child(form.clone()))
 }
