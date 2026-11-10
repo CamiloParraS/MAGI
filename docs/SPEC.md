@@ -413,6 +413,7 @@ theme = "system"
 max_results = 30
 launch_at_login = false            # onboarding offers it checked (ADR-0010)
 copy_as_file = true                # Copy puts the file on the clipboard (path as text too); false copies the path only
+ask_magi = true                    # Show the Ask Magi button and shortcut in the search window
 language = "system"                # system | en | es; system = es-* → es, else en
 transparency_mode = "match_system" # match_system | always | never (search window only)
 transparency_intensity = 0.75      # 0.40–0.95, alpha of the tint over the native effect

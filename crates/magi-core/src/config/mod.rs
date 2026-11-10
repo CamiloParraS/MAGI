@@ -167,6 +167,9 @@ pub struct UiConfig {
     /// Copying a result puts the file on the clipboard (paste it in a file
     /// manager); off copies its path as text.
     pub copy_as_file: bool,
+    /// Shows the Ask Magi button and its shortcut in the search window. The
+    /// account is separate; this only hides the entry points.
+    pub ask_magi: bool,
     /// The search window splits into the results and a pane with the
     /// selected one's preview and details. On for new installs; a config
     /// saved before the setting existed keeps the plain list, hence the
@@ -188,6 +191,7 @@ impl Default for UiConfig {
             max_results: 30,
             launch_at_login: false,
             copy_as_file: true,
+            ask_magi: true,
             detail_pane: true,
             language: Language::System,
             transparency_mode: TransparencyMode::MatchSystem,

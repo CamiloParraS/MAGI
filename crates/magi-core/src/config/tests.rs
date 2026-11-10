@@ -8,6 +8,13 @@ fn copying_a_result_copies_the_file_unless_turned_off() {
 }
 
 #[test]
+fn ask_magi_is_shown_unless_turned_off() {
+    assert!(UiConfig::default().ask_magi);
+    let old: UiConfig = toml::from_str("launch_at_login = true").unwrap();
+    assert!(old.ask_magi);
+}
+
+#[test]
 fn the_detail_pane_is_on_for_new_installs_and_saved_configs_keep_theirs() {
     assert!(UiConfig::default().detail_pane);
     let off: UiConfig = toml::from_str("detail_pane = false").unwrap();
