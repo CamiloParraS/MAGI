@@ -4,6 +4,18 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### 0.2.1
+
+- **Ask Magi in onboarding:** a switch on the setup screen (off until you
+  choose it). Turning it on adds a sign-in or create-account step before the
+  finish screen; it can be skipped, since search needs no account.
+- **Sign-in redesign:** one screen, the same in the Ask window, onboarding
+  and Settings (side by side there, so it fits the window).
+- **Empty folders state:** the whole drop zone is one button, in the same
+  style as the rest of the app.
+- Ask Magi can send whole files and pictures with a question, and the
+  search window's Ask Magi button moved next to the search box.
+
 ### 0.2.0 (test build)
 
 - **Ask Magi (optional, needs a Magi account):** ask a question in plain
