@@ -27,7 +27,7 @@ const NAV_GAP: f32 = 2.;
 const NAV_SLIDE: std::time::Duration = std::time::Duration::from_millis(240);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Section {
+pub enum Section {
     Folders,
     Searched,
     General,
@@ -36,7 +36,7 @@ pub(super) enum Section {
     Account,
 }
 
-pub(super) const SECTIONS: [Section; 6] = [
+pub const SECTIONS: [Section; 6] = [
     Section::Folders,
     Section::Searched,
     Section::General,

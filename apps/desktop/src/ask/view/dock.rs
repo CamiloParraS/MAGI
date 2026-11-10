@@ -57,7 +57,7 @@ impl AskView {
 
     /// Changes how chip `ix` is sent. A whole file also learns how much that
     /// is.
-    fn switch_send(&mut self, ix: usize, send: SendAs, cx: &mut Context<Self>) {
+    pub fn switch_send(&mut self, ix: usize, send: SendAs, cx: &mut Context<Self>) {
         let Some(source) = self.model.sources().get(ix) else {
             return;
         };

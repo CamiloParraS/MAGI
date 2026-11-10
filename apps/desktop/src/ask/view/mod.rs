@@ -223,6 +223,12 @@ impl AskView {
         cx.notify();
     }
 
+    /// Scrolls the conversation back to its first question.
+    pub fn scroll_to_top(&mut self, cx: &mut Context<Self>) {
+        self.scroll.set_offset(Point::default());
+        cx.notify();
+    }
+
     /// Puts `text` in the question box, as typing would.
     pub fn set_question(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let text = text.to_owned();

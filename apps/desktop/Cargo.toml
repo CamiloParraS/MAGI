@@ -10,6 +10,15 @@ description = "magi desktop app (GPUI, ADR-0011)"
 name = "magi"
 path = "src/main.rs"
 
+# `just shots`: photographs every screen (src/shots/). Never in a release.
+[[bin]]
+name = "magi-shots"
+path = "src/bin/shots.rs"
+required-features = ["shots"]
+
+[features]
+shots = ["gpui-kit/test-support", "dep:image"]
+
 [dependencies]
 magi-core = { path = "../../crates/magi-core" }
 gpui-kit = { workspace = true }
@@ -29,6 +38,7 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+image = { workspace = true, optional = true }
 
 [build-dependencies]
 embed-resource = { workspace = true }

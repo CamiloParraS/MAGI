@@ -35,6 +35,8 @@ Ignore: `docs/archive/` (finished plans and superseded docs, including the froze
 
 `just --list` shows all recipes; `just check` (fmt, clippy, tests, then the Worker's vitest and tsc via `just server-check`) before committing. Single test: `cargo test -p magi-core <name>`.
 
+After a UI change, `just shots` photographs every screen in fixed states and writes a before/after/diff page to `<target>/shots/index.html`; read the changed PNGs to check the change by eye. New screen or state: add a scene in `apps/desktop/src/shots/scenes.rs`.
+
 `MAGI_FAKE_EMBEDDER=1` runs indexing/search with a deterministic fake embedder (no model downloads). `MAGI_DATA_DIR` / `MAGI_CONFIG_DIR` override storage locations (SPEC §4.5).
 
 ## Rules that matter most

@@ -41,7 +41,7 @@ mod save;
 mod sync;
 mod what_to_index;
 
-use nav::Section;
+pub use nav::{SECTIONS, Section};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::select::SelectState;
@@ -182,6 +182,11 @@ impl SettingsView {
             self.load_unreadable(cx);
         }
         cx.notify();
+    }
+
+    /// Opens `section`, as a click on its nav item does.
+    pub fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.show(section, cx);
     }
 
     pub fn new(

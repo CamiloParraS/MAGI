@@ -26,6 +26,11 @@ watch:
 onboarding:
     cargo run -p magi-desktop -- --onboarding
 
+# Photograph every screen (light/dark, en/es) into <target>/shots/ and compare with the last run;
+# open <target>/shots/index.html. `just shots --only ask,settings --theme dark --lang es` retakes some
+shots *args:
+    cargo run -p magi-desktop --features shots --bin magi-shots -- {{args}}
+
 # Run formatting, lints and all tests, then the Ask Magi Worker's
 check: && server-check
     cargo fmt --all -- --check

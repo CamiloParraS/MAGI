@@ -11,6 +11,8 @@ mod logging;
 pub mod onboarding;
 pub mod search;
 pub mod settings;
+#[cfg(feature = "shots")]
+pub mod shots;
 pub mod theme;
 pub mod tray;
 pub mod ui;

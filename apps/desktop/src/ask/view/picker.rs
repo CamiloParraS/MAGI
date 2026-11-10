@@ -67,7 +67,7 @@ impl AskView {
     }
 
     /// Opens the picker, or closes it.
-    fn toggle_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.picker.take().is_some() {
             self.question
                 .update(cx, |question, cx| question.focus(window, cx));

@@ -24,7 +24,7 @@ use crate::theme;
 use crate::tray::{Tray, TrayAction};
 use crate::ui::SCAN_EXIT;
 
-use assets::AppAssets;
+pub(crate) use assets::AppAssets;
 use start_failure::show_start_failure;
 use windows::activate;
 pub use windows::{AskSlot, show_ask};

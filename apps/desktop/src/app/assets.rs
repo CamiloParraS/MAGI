@@ -60,7 +60,7 @@ gpui_kit::assets::icon_assets!(
 
 const MARK_SVG: &[u8] = include_bytes!("../../assets/brand/magi-mark.svg");
 
-pub(super) struct AppAssets;
+pub(crate) struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {

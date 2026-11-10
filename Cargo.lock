@@ -4855,6 +4855,7 @@ dependencies = [
  "icu_decimal",
  "icu_locale_core",
  "icu_plurals",
+ "image",
  "interprocess",
  "magi-core",
  "serde_json",
