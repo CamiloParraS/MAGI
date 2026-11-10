@@ -1,14 +1,15 @@
-//! The text Ask Magi sends for a file (ADR-0014): the passages of that file
-//! that best match the question, not the snippet the search happened to show.
-//!
-//! The file's own chunks are ranked by keywords and, when a text embedder is
-//! running, by meaning, and the best ones are sent up to a character budget.
-//! Never the whole file, and never its path. The server counts in UTF-16
-//! units, so the budget does too.
+//! What Ask Magi sends for a file (ADR-0014). By default, the passages of that
+//! file that best match the question, not the snippet the search happened to
+//! show: the file's own chunks are ranked by keywords and, when a text
+//! embedder is running, by meaning, and the best ones are sent up to a
+//! character budget. A file the person switched to "whole" sends its indexed
+//! text in order, up to a larger budget; a picture sends itself ([`image`]).
+//! Never the path. The server counts in UTF-16 units, so the budgets do too.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{AskFile, AskSource};
+use super::image;
+use super::{AskFile, AskImage, AskPayload, AskSource, SendAs};
 use crate::db::roots::searchable_sql;
 use crate::error::Result;
 
@@ -17,6 +18,12 @@ pub const TOTAL_BUDGET: usize = 8000;
 /// The most one file gets, and the least, however many files are ticked.
 pub const MAX_PER_FILE: usize = 4000;
 pub const MIN_PER_FILE: usize = 1200;
+/// What a file sent whole may take, and all text of one question together.
+pub const WHOLE_PER_FILE: usize = 60_000;
+pub const WHOLE_TOTAL: usize = 120_000;
+/// How many bytes at the start of a chunk may repeat the end of the one
+/// before (the chunker's 50-token overlap, with room for long words).
+const MAX_OVERLAP_BYTES: usize = 2000;
 /// A file's chunks past this many are not looked at (a 15 MB text file has
 /// thousands).
 const MAX_CANDIDATES: i64 = 5000;
@@ -199,6 +206,60 @@ pub fn load(conn: &Connection, file_id: i64) -> Result<Vec<Candidate>> {
     Ok(out)
 }
 
+/// The longest start of `next` that `prev` ends with, cut at a word end:
+/// the overlap the chunker carried from one chunk into the next.
+fn overlap(prev: &str, next: &str) -> usize {
+    let limit = next.len().min(prev.len()).min(MAX_OVERLAP_BYTES);
+    let mut ends: Vec<usize> = next
+        .char_indices()
+        .take_while(|(ix, _)| *ix <= limit)
+        .filter(|(_, c)| c.is_whitespace())
+        .map(|(ix, _)| ix)
+        .collect();
+    if next.len() <= limit {
+        ends.push(next.len());
+    }
+    let word_start = |end: usize| {
+        let before = &prev[..prev.len() - end];
+        before.is_empty() || before.ends_with(char::is_whitespace)
+    };
+    ends.into_iter()
+        .rev()
+        .find(|&end| end > 0 && prev.ends_with(&next[..end]) && word_start(end))
+        .unwrap_or(0)
+}
+
+/// The file's chunks in order, with the overlap between neighbours taken out,
+/// at most `budget` units. The second value says whether it was cut short.
+pub fn whole(candidates: &[Candidate], budget: usize) -> (String, bool) {
+    let mut out = String::new();
+    let mut used = 0;
+    let mut prev: Option<&str> = None;
+    for candidate in candidates {
+        let text = candidate.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let piece = match prev {
+            Some(p) => match overlap(p, text) {
+                0 => format!("{SEPARATOR}{text}"),
+                n => text[n..].to_owned(),
+            },
+            None => text.to_owned(),
+        };
+        let left = budget.saturating_sub(used);
+        let size = utf16_len(&piece);
+        if size > left {
+            out.push_str(clip(&piece, left));
+            return (out, true);
+        }
+        out.push_str(&piece);
+        used += size;
+        prev = Some(text);
+    }
+    (out, false)
+}
+
 /// One source per ticked file, numbered as the chips are, each with the
 /// passages of that file that best match the question.
 pub fn sources_for(
@@ -207,13 +268,81 @@ pub fn sources_for(
     question: &str,
     files: &[AskFile],
 ) -> Result<Vec<AskSource>> {
-    let budget = per_file_budget(files.len());
-    let mut sources = Vec::with_capacity(files.len());
+    let passages: Vec<AskFile> = files
+        .iter()
+        .cloned()
+        .map(|f| AskFile {
+            send: SendAs::Passages,
+            ..f
+        })
+        .collect();
+    Ok(payload_for(conn, query, question, &passages)?.sources)
+}
+
+/// The picture for `file`, if it should and can go as one.
+fn picture(conn: &Connection, file: &AskFile) -> Result<Option<String>> {
+    let Some(path) = image::image_path(conn, file.file_id)? else {
+        return Ok(None);
+    };
+    match image::encode_file(&path) {
+        Ok(data) => Ok(Some(data)),
+        Err(reason) => {
+            tracing::warn!(file_id = file.file_id, %reason, "picture not sent; sending its text");
+            Ok(None)
+        }
+    }
+}
+
+/// What one question sends: for each ticked file, numbered as the chips are,
+/// its passages, its whole text or its picture, as the person chose. A
+/// picture that cannot be read, or past [`image::MAX_IMAGES`], goes as text.
+pub fn payload_for(
+    conn: &Connection,
+    query: Option<&[f32]>,
+    question: &str,
+    files: &[AskFile],
+) -> Result<AskPayload> {
+    let mut images: Vec<AskImage> = Vec::new();
+    let mut as_text: Vec<(usize, &AskFile, SendAs)> = Vec::new();
     for (ix, file) in files.iter().enumerate() {
+        if file.send == SendAs::Image
+            && images.len() < image::MAX_IMAGES
+            && let Some(data) = picture(conn, file)?
+        {
+            images.push(AskImage {
+                id: (ix + 1).to_string(),
+                file_name: file.file_name.clone(),
+                data,
+            });
+            continue;
+        }
+        let send = match file.send {
+            SendAs::Whole => SendAs::Whole,
+            _ => SendAs::Passages,
+        };
+        as_text.push((ix, file, send));
+    }
+
+    let passage_files = as_text
+        .iter()
+        .filter(|(_, _, send)| *send == SendAs::Passages)
+        .count();
+    let passage_budget = per_file_budget(passage_files);
+    // Passages keep their own share; whole files get what is left.
+    let mut whole_left = WHOLE_TOTAL.saturating_sub(passage_budget * passage_files);
+    let mut sources = Vec::with_capacity(as_text.len());
+    for (ix, file, send) in as_text {
         let candidates = load(conn, file.file_id)?;
-        let mut text = select(question, query, &candidates, budget);
+        let mut text = match send {
+            SendAs::Whole => {
+                let (text, _cut) = whole(&candidates, WHOLE_PER_FILE.min(whole_left));
+                whole_left = whole_left.saturating_sub(utf16_len(&text));
+                text
+            }
+            _ => select(question, query, &candidates, passage_budget),
+        };
         if text.is_empty() {
-            text = clip(file.fallback.trim(), budget).to_owned();
+            text = clip(file.fallback.trim(), passage_budget).to_owned();
         }
         sources.push(AskSource {
             id: (ix + 1).to_string(),
@@ -221,7 +350,15 @@ pub fn sources_for(
             text,
         });
     }
-    Ok(sources)
+    Ok(AskPayload { sources, images })
+}
+
+/// How much "whole" would send for a file, from the index alone: its text in
+/// UTF-16 units once the overlap is out, and whether [`WHOLE_PER_FILE`] cuts
+/// it. For the chip, before anything is sent.
+pub fn whole_size(conn: &Connection, file_id: i64) -> Result<(usize, bool)> {
+    let (text, cut) = whole(&load(conn, file_id)?, WHOLE_PER_FILE);
+    Ok((utf16_len(&text), cut))
 }
 
 #[cfg(test)]
@@ -299,6 +436,39 @@ mod tests {
         let text = select("", None, &chunks, 8);
         assert!(utf16_len(&text) <= 8);
         assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn whole_takes_out_the_overlap_between_chunks() {
+        let chunks = [
+            chunk(0, "one two three four five"),
+            chunk(1, "four five six seven"),
+            chunk(2, "seven eight"),
+        ];
+        assert_eq!(
+            whole(&chunks, 1000),
+            ("one two three four five six seven eight".to_owned(), false)
+        );
+    }
+
+    #[test]
+    fn whole_keeps_chunks_that_do_not_overlap_apart() {
+        let chunks = [chunk(0, "Page one."), chunk(1, "Page two.")];
+        assert_eq!(whole(&chunks, 1000).0, "Page one.\n\nPage two.");
+    }
+
+    #[test]
+    fn a_word_that_only_ends_the_same_is_not_overlap() {
+        // "concat" ends with "cat", but "cat" is not a word of it.
+        assert_eq!(overlap("go concat", "cat food"), 0);
+    }
+
+    #[test]
+    fn whole_stops_at_its_budget_and_says_so() {
+        let chunks = [chunk(0, "aaaa bbbb"), chunk(1, "cccc dddd")];
+        let (text, cut) = whole(&chunks, 12);
+        assert!(cut);
+        assert_eq!(utf16_len(&text), 12);
     }
 
     #[test]

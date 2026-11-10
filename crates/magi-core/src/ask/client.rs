@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    AskAnswer, AskError, AskSource, Endpoints, HttpRequest, HttpResponse, Method, Session,
+    AskAnswer, AskError, AskPayload, Endpoints, HttpRequest, HttpResponse, Method, Session,
     Transport,
 };
 
@@ -54,17 +54,19 @@ impl<'a> AuthedClient<'a> {
         self.transport.send(request).map_err(AskError::Network)
     }
 
-    pub fn ask(&self, question: &str, sources: &[AskSource]) -> Result<AskAnswer, AskError> {
-        let body = json!({ "question": question, "sources": sources }).to_string();
+    pub fn ask(&self, question: &str, payload: &AskPayload) -> Result<AskAnswer, AskError> {
+        let mut body = json!({ "question": question, "sources": payload.sources });
+        if !payload.images.is_empty() {
+            body["images"] = json!(payload.images);
+        }
+        let body = body.to_string();
         let response = self.send(&self.request(Method::Post, "/ask", Some(body)))?;
         match response.status {
             200 => {
                 let mut answer: AskAnswer =
                     serde_json::from_str(&response.body).map_err(|_| AskError::Upstream)?;
                 // The server drops unknown ids too; the client does not trust it.
-                answer
-                    .cited
-                    .retain(|id| sources.iter().any(|s| &s.id == id));
+                answer.cited.retain(|id| payload.has_id(id));
                 Ok(answer)
             }
             401 => Err(AskError::SessionExpired),

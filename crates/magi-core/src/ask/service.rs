@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::supabase;
 use super::{
-    AskAnswer, AskError, AskSource, AuthedClient, CredentialStore, Endpoints, FakeBackend,
-    MemoryStore, Session, StoredLogin, Transport, UreqTransport, unix_now,
+    AskAnswer, AskError, AskPayload, AskSource, AuthedClient, CredentialStore, Endpoints,
+    FakeBackend, MemoryStore, Session, StoredLogin, Transport, UreqTransport, unix_now,
 };
 
 /// A session this close to expiry is refreshed first.
@@ -96,9 +96,14 @@ impl AskService {
     }
 
     pub fn ask(&self, question: &str, sources: &[AskSource]) -> Result<AskAnswer, AskError> {
+        self.ask_with(question, &AskPayload::text_only(sources.to_vec()))
+    }
+
+    /// Like [`AskService::ask`], with pictures as well as text.
+    pub fn ask_with(&self, question: &str, payload: &AskPayload) -> Result<AskAnswer, AskError> {
         let session = self.fresh_session()?;
         let client = AuthedClient::new(&*self.inner.transport, self.endpoints()?, &session);
-        let result = client.ask(question, sources);
+        let result = client.ask(question, payload);
         self.drop_if_expired(&result);
         result
     }

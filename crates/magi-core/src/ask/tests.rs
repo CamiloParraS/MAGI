@@ -62,6 +62,31 @@ fn signed_out_makes_no_request_and_reads_nothing_until_asked() {
 }
 
 #[test]
+fn pictures_go_beside_the_text_and_can_be_cited() {
+    let rig = signed_up();
+    let payload = AskPayload {
+        sources: Vec::new(),
+        images: vec![AskImage {
+            id: "2".into(),
+            file_name: "receipt.jpg".into(),
+            data: "AAAA".into(),
+        }],
+    };
+    let answer = rig.service.ask_with("What is this?", &payload).unwrap();
+    assert_eq!(answer.cited, vec!["2".to_string()]);
+    let body = rig.backend.last_ask().unwrap();
+    assert_eq!(body["images"][0]["id"], "2");
+    assert_eq!(body["images"][0]["data"], "AAAA");
+}
+
+#[test]
+fn a_text_question_sends_no_images_field() {
+    let rig = signed_up();
+    rig.service.ask("q", &sources()).unwrap();
+    assert!(rig.backend.last_ask().unwrap().get("images").is_none());
+}
+
+#[test]
 fn sign_up_then_ask_answers_and_cites_a_sent_source() {
     let rig = signed_up();
     let answer = rig.service.ask("When?", &sources()).unwrap();
@@ -329,7 +354,7 @@ fn citations_the_server_invents_are_dropped() {
     };
     let endpoints = FakeBackend::endpoints();
     let answer = AuthedClient::new(&Liar, &endpoints, &session)
-        .ask("q", &sources())
+        .ask("q", &AskPayload::text_only(sources()))
         .unwrap();
     assert_eq!(answer.cited, vec!["7".to_string()]);
 }

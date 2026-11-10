@@ -12,7 +12,9 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use magi_core::ask::{AskService, AskSource, Endpoints, MemoryStore, UreqTransport};
+use magi_core::ask::{
+    AskImage, AskPayload, AskService, AskSource, Endpoints, MemoryStore, UreqTransport,
+};
 
 #[test]
 #[ignore = "reaches the deployed server"]
@@ -49,7 +51,7 @@ fn the_deployed_server_answers_a_question_about_a_source() {
 
 #[test]
 #[ignore = "reaches the deployed server"]
-fn the_deployed_server_accepts_the_larger_sources_and_rejects_oversized_ones() {
+fn the_deployed_server_takes_whole_files_and_pictures_and_rejects_oversized_ones() {
     let service = AskService::new(
         Box::new(UreqTransport::new()),
         Box::new(Arc::new(MemoryStore::new())),
@@ -63,9 +65,9 @@ fn the_deployed_server_accepts_the_larger_sources_and_rejects_oversized_ones() {
     let email = format!("magi-live-big-{stamp}@{domain}");
     service.sign_up(&email, "live-test-pass-42").unwrap();
 
-    // The fact sits at the very end of a 4,000-unit source (the new cap).
-    let mut text = "Filler about shipping and invoices. ".repeat(200);
-    text.truncate(3_940);
+    // The fact sits at the very end of a 60,000-unit source (a whole file).
+    let mut text = "Filler about shipping and invoices. ".repeat(1_800);
+    text.truncate(59_940);
     text.push_str(" The vault code is 7391.");
     let big = |id: &str, text: String| AskSource {
         id: id.into(),
@@ -74,16 +76,34 @@ fn the_deployed_server_accepts_the_larger_sources_and_rejects_oversized_ones() {
     };
     let fits = service.ask("What is the vault code?", &[big("1", text.clone())]);
     // Over the per-source cap, and over the total: both must be refused.
-    let too_long = service.ask("What is the vault code?", &[big("1", "x".repeat(4_001))]);
+    let too_long = service.ask("What is the vault code?", &[big("1", "x".repeat(60_001))]);
     let too_much = service.ask(
         "What is the vault code?",
-        &["1", "2", "3"].map(|id| big(id, "x".repeat(3_000))),
+        &["1", "2", "3"].map(|id| big(id, "x".repeat(40_001))),
     );
+    // A picture, as the app sends it: plain red, so the answer is clear.
+    let red = image::RgbImage::from_pixel(1600, 900, image::Rgb([220, 20, 20]));
+    let picture = AskPayload {
+        sources: Vec::new(),
+        images: vec![AskImage {
+            id: "1".into(),
+            file_name: "swatch.jpg".into(),
+            data: magi_core::ask::image::encode(&red).unwrap(),
+        }],
+    };
+    let seen = service.ask_with("What colour fills this picture? One word.", &picture);
     let deleted = service.delete_account();
 
     let answer = fits.unwrap();
     println!("{answer:#?}");
     assert!(answer.answer.contains("7391"), "{}", answer.answer);
     assert!(too_long.is_err() && too_much.is_err());
+    let seen = seen.unwrap();
+    println!("{seen:#?}");
+    assert!(
+        seen.answer.to_lowercase().contains("red"),
+        "{}",
+        seen.answer
+    );
     deleted.unwrap();
 }

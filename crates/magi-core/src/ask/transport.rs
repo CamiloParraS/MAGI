@@ -38,7 +38,8 @@ impl UreqTransport {
     pub fn new() -> Self {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(40)))
+            // The Worker gives the model 60 s for a whole file or a picture.
+            .timeout_global(Some(Duration::from_secs(75)))
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),

@@ -1,11 +1,19 @@
 //! Ask Magi on the host (ADR-0014): the account state in the config and the
 //! calls that reach the Magi server through `ask::AskService`.
 
+use std::path::Path;
+
+use rusqlite::{OptionalExtension, params};
+
 use super::{Host, lock};
 use crate::ask::{AskAnswer, AskError, AskFile, AskSource, context};
 use crate::config;
-use crate::dto::AccountState;
+use crate::discovery::Kind;
+use crate::dto::{AccountState, AskFileInfo, WholeSize};
 use crate::error::Result;
+
+/// How much of a dropped file's text its chip keeps for the tooltip.
+const PREVIEW_CHARS: usize = 1000;
 
 impl Host {
     /// From the config only: no keychain read and no request.
@@ -54,9 +62,64 @@ impl Host {
             .text
             .as_deref()
             .and_then(|embedder| embedder.embed_query(question).ok());
-        let sources =
-            context::sources_for(&lock(&self.inner.reader), query.as_deref(), question, files)?;
-        self.ask(question, &sources)
+        let payload =
+            context::payload_for(&lock(&self.inner.reader), query.as_deref(), question, files)?;
+        let result = self.inner.ask.ask_with(question, &payload);
+        self.forget_if_signed_out(&result)?;
+        Ok(result?)
+    }
+
+    /// What "whole file" would send for `file_id`, from the index alone.
+    pub fn ask_whole_size(&self, file_id: i64) -> Result<WholeSize> {
+        let (chars, cut) = context::whole_size(&lock(&self.inner.reader), file_id)?;
+        Ok(WholeSize { chars, cut })
+    }
+
+    /// The searchable indexed file at `path`, for a file dropped on the Ask
+    /// window. `None` for a file outside the roots, not indexed, or in a
+    /// paused root: Ask Magi only sends what search would show.
+    pub fn ask_file_at(&self, path: &Path) -> Result<Option<AskFileInfo>> {
+        let Ok(path) = crate::paths::canonicalize(path) else {
+            return Ok(None);
+        };
+        let conn = lock(&self.inner.reader);
+        let found = conn
+            .query_row(
+                concat!(
+                    "SELECT f.id, f.file_name, f.kind, f.thumb_key FROM files f
+                     JOIN roots r ON r.id = f.root_id
+                     WHERE f.path = ?1 AND ",
+                    crate::db::roots::searchable_sql!()
+                ),
+                params![path.to_string_lossy()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Kind>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((file_id, file_name, kind, thumb_key)) = found else {
+            return Ok(None);
+        };
+        let preview = context::load(&conn, file_id)?
+            .first()
+            .map(|c| c.text.trim().chars().take(PREVIEW_CHARS).collect())
+            .unwrap_or_default();
+        Ok(Some(AskFileInfo {
+            file_id,
+            file_name,
+            kind,
+            thumb_path: thumb_key.map(|key| {
+                crate::thumbs::thumb_path(&key)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+            preview,
+        }))
     }
 
     /// Deletes the account on the server, then signs out here.

@@ -26,6 +26,8 @@ struct State {
     issued: u64,
     lifetime_secs: u64,
     log: Vec<String>,
+    /// The body of the last `/ask`, for tests that check what was sent.
+    last_ask: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,11 @@ impl FakeBackend {
     /// How long a new access token lasts; 0 means it is already expired.
     pub fn set_lifetime_secs(&self, secs: u64) {
         self.state().lifetime_secs = secs;
+    }
+
+    /// The body of the last question sent, if any.
+    pub fn last_ask(&self) -> Option<Value> {
+        self.state().last_ask.clone()
     }
 
     /// Every request so far, as `METHOD /path`, plus anything passed to [`note`](Self::note).
@@ -219,13 +226,17 @@ impl FakeBackend {
                     );
                 }
                 *asked += 1;
-                let first = body["sources"][0]["id"].as_str();
+                let asked = *asked;
+                s.last_ask = Some(body.clone());
+                let first = body["sources"][0]["id"]
+                    .as_str()
+                    .or(body["images"][0]["id"].as_str());
                 reply(
                     200,
                     json!({
                         "answer": format!("Fake answer to: {}", body["question"].as_str().unwrap_or("")),
                         "cited": first.into_iter().collect::<Vec<_>>(),
-                        "used": *asked,
+                        "used": asked,
                         "limit": DAILY_LIMIT,
                     }),
                 )

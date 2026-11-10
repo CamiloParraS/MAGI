@@ -10,6 +10,7 @@ mod client;
 pub mod context;
 mod endpoints;
 mod fake;
+pub mod image;
 mod service;
 mod store;
 mod supabase;
@@ -35,6 +36,28 @@ pub struct AskSource {
     pub text: String,
 }
 
+/// A picture, as sent: a downscaled JPEG with no EXIF ([`image`]). `id`
+/// shares the numbering of [`AskSource::id`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskImage {
+    pub id: String,
+    pub file_name: String,
+    /// Base64 of the JPEG bytes, without a `data:` prefix.
+    pub data: String,
+}
+
+/// How a ticked file is sent (ADR-0014).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendAs {
+    /// The passages that best match the question.
+    #[default]
+    Passages,
+    /// The file's indexed text in order, up to [`context::WHOLE_PER_FILE`].
+    Whole,
+    /// A downscaled copy of the picture itself; text if it cannot be read.
+    Image,
+}
+
 /// A file the person ticked. The text sent for it is chosen per question
 /// ([`context`]); `fallback` is what goes when the index has no text for it
 /// any more.
@@ -43,6 +66,27 @@ pub struct AskFile {
     pub file_id: i64,
     pub file_name: String,
     pub fallback: String,
+    pub send: SendAs,
+}
+
+/// Everything one question sends besides the question itself.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AskPayload {
+    pub sources: Vec<AskSource>,
+    pub images: Vec<AskImage>,
+}
+
+impl AskPayload {
+    pub fn text_only(sources: Vec<AskSource>) -> Self {
+        Self {
+            sources,
+            images: Vec::new(),
+        }
+    }
+
+    pub fn has_id(&self, id: &str) -> bool {
+        self.sources.iter().any(|s| s.id == id) || self.images.iter().any(|i| i.id == id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

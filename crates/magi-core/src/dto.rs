@@ -479,5 +479,28 @@ pub struct AccountState {
     pub disclosed: bool,
 }
 
+/// An indexed file the person attaches to Ask Magi by dropping it on the
+/// window (`Host::ask_file_at`). From the index alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskFileInfo {
+    pub file_id: i64,
+    pub file_name: String,
+    pub kind: crate::discovery::Kind,
+    /// Inside the thumbnail cache.
+    pub thumb_path: Option<String>,
+    /// The start of its text, for the chip's tooltip and as the fallback
+    /// when the index loses the file. Empty for a picture with no text.
+    pub preview: String,
+}
+
+/// How much sending a file whole would send (`Host::ask_whole_size`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WholeSize {
+    /// UTF-16 units, as the server counts.
+    pub chars: usize,
+    /// Longer than one file may send; only the start goes.
+    pub cut: bool,
+}
+
 #[cfg(test)]
 mod tests;
