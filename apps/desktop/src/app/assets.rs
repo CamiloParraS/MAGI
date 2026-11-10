@@ -2,6 +2,8 @@
 
 use gpui_kit::*;
 
+use crate::ui::MARK;
+
 // The default bundle embeds only the component icons; these are the
 // settings sidebar's and rows' extras.
 gpui_kit::assets::icon_assets!(
@@ -38,6 +40,9 @@ gpui_kit::assets::icon_assets!(
         ArrowUp,
         RotateCcw,
         ShieldCheck,
+        // Ask Magi's sign-in fields.
+        Mail,
+        LockKeyhole,
         // Keycaps (onboarding).
         ArrowBigUp,
         ChevronUp,
@@ -46,10 +51,15 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+const MARK_SVG: &[u8] = include_bytes!("../../assets/brand/magi-mark.svg");
+
 pub(super) struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if path == MARK {
+            return Ok(Some(std::borrow::Cow::Borrowed(MARK_SVG)));
+        }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets.load(path),

@@ -4,13 +4,14 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Field, SettingsView};
 use crate::theme::Palette;
-use crate::ui::{group, grouped, note, row_icon};
+use crate::ui::{brand_tile, group, grouped, note, row_icon};
 
 impl SettingsView {
     /// Tells every window who is signed in now; an open Ask window goes
@@ -51,7 +52,39 @@ impl SettingsView {
         });
     }
 
+    /// The switch for the search window's Ask Magi button, then the account.
     pub(super) fn account(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let s = self.live.read(cx).lang.strings();
+        let toggle = self.setting(
+            Field::AskMagi,
+            IconName::MessageCircleQuestionMark,
+            s.ask_toggle,
+            Some(s.ask_toggle_note),
+            Switch::new("ask-magi-shown")
+                .cursor_pointer()
+                .checked(self.ui.ask_magi)
+                .color(p.accent)
+                .accessibility_label(s.ask_toggle)
+                .on_click(cx.listener(|this, &on: &bool, window, cx| {
+                    this.save(
+                        Field::AskMagi,
+                        serde_json::json!({ "ui": { "ask_magi": on } }),
+                        window,
+                        cx,
+                    );
+                })),
+            s,
+            p,
+        );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(grouped(p, [toggle]))
+            .child(self.account_box(p, cx))
+    }
+
+    fn account_box(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let live = self.live.read(cx);
         let s = live.lang.strings();
         // Signed out: the Ask window's own form, so either place works.
@@ -60,27 +93,29 @@ impl SettingsView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .items_center()
                     .px_4()
-                    .py(px(14.))
+                    .py(px(24.))
+                    .child(brand_tile(p, px(40.)))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(row_icon(IconName::CircleUser, p))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(s.ask_sign_in_title),
-                            ),
+                            .mt(px(14.))
+                            .text_size(px(18.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(s.ask_sign_in_title),
                     )
-                    .child(note(p).pl(px(28.)).child(s.ask_sign_in_body))
+                    .child(
+                        note(p)
+                            .mt(px(6.))
+                            .max_w(px(380.))
+                            .text_center()
+                            .child(s.ask_sign_in_body),
+                    )
                     .child(
                         div()
-                            .pl(px(28.))
-                            .pt(px(10.))
-                            .max_w(px(420.))
+                            .w_full()
+                            .max_w(px(380.))
+                            .mt(px(20.))
                             .child(self.sign_in.clone()),
                     ),
             );

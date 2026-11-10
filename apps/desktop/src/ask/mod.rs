@@ -42,6 +42,8 @@ pub struct Source {
     pub file_name: String,
     pub kind: Kind,
     pub text: String,
+    /// The result's thumbnail, for the chip and its preview.
+    pub thumb: Option<std::path::PathBuf>,
     pub ticked: bool,
 }
 
@@ -72,6 +74,7 @@ pub fn request(query: &str, results: &[SearchResult]) -> Request {
                 file_name: clip(&result.file_name, MAX_FILE_NAME_LEN),
                 kind: result.kind,
                 text: clip(text, MAX_SOURCE_LEN),
+                thumb: result.thumb_path.as_ref().map(std::path::PathBuf::from),
                 ticked: true,
             })
         })

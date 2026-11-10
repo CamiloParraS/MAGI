@@ -37,6 +37,8 @@ pub struct Live {
     /// Who is signed in to Ask Magi. Changing it in Settings or the Ask
     /// window reaches the other one through here.
     pub account: AccountState,
+    /// `ui.ask_magi`: the search window shows its Ask Magi button.
+    pub ask_enabled: bool,
 }
 
 impl Live {
@@ -56,6 +58,7 @@ impl Live {
             search_open: false,
             last_query: String::new(),
             account: AccountState::default(),
+            ask_enabled: true,
         }
     }
 

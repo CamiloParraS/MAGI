@@ -23,26 +23,30 @@ impl SearchView {
         let _ = self.events.try_send(AppEvent::Settings);
     }
 
-    /// Key first, like the hints beside it; off while there is nothing to
-    /// ask about.
-    fn ask_button(&self, idle: bool, cx: &Context<Self>) -> Div {
+    /// The shortcut and the button, at the end of the input row; off while
+    /// there is nothing to ask about.
+    pub(super) fn ask_button(&self, idle: bool, cx: &Context<Self>) -> Div {
         let s = self.live.read(cx).lang.strings();
         div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(2.))
-            .debug_selector(|| "ask-footer".into())
+            .gap(px(4.))
+            .opacity(if idle { 0.5 } else { 1. })
             .children(Keystroke::parse(ASK_KEY).ok().map(Kbd::new))
             .child(
-                Button::new("ask-footer")
-                    .cursor_pointer()
-                    .ghost()
-                    .xsmall()
-                    .icon(gpui_kit::assets::IconName::MessageCircleQuestionMark)
-                    .label(s.ask_magi)
-                    .disabled(idle)
-                    .on_click(cx.listener(|this, _, window, cx| this.ask(&AskMagi, window, cx))),
+                div().debug_selector(|| "ask-footer".into()).child(
+                    Button::new("ask-footer")
+                        .cursor_pointer()
+                        .ghost()
+                        .small()
+                        .icon(gpui_kit::assets::IconName::MessageCircleQuestionMark)
+                        .tooltip(s.ask_magi)
+                        .disabled(idle)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.ask(&AskMagi, window, cx)),
+                        ),
+                ),
             )
     }
 
@@ -93,7 +97,6 @@ impl SearchView {
         // Always shown, so they are learned in the empty window; dimmed while
         // there is no result to act on.
         let idle = self.state.results().is_empty();
-        let nothing_to_ask = !crate::ask::can_ask(self.state.askable());
         let pairs: &[(&str, &'static str)] = &[
             ("enter", s.open),
             ("secondary-enter", s.reveal),
@@ -129,7 +132,6 @@ impl SearchView {
                     })),
             )
             .child(div().flex_1().min_w_0().children(status))
-            .child(self.ask_button(nothing_to_ask, cx))
             .child(
                 keys(pairs, self.copied.is_some().then_some((self.copies, p)))
                     .when(idle, |keys| keys.opacity(0.7))

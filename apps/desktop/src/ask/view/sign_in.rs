@@ -2,22 +2,26 @@
 //! Account: email, password, Create account and Sign in. Signing in tells
 //! every window through `Live`, which is how both places move on.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Disableable as _, Sizable as _};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::host::Host;
 
 use crate::ask::{Problem, ask_error, credentials_ok, problem_of, problem_text};
 use crate::live::Live;
 use crate::theme::Palette;
-use crate::ui::{subheading, warn_note};
+use crate::ui::{pressable, subheading, warn_note};
 
 pub struct SignInForm {
     host: Host,
     live: Entity<Live>,
     email: Entity<InputState>,
     password: Entity<InputState>,
+    /// Which half of the segmented switch is up: Create account or Sign in.
+    create: bool,
     working: bool,
     problem: Option<Problem>,
     dark: bool,
@@ -43,6 +47,7 @@ impl SignInForm {
             live,
             email,
             password,
+            create: false,
             working: false,
             problem: None,
             dark: false,
@@ -53,6 +58,10 @@ impl SignInForm {
     /// The owner's theme, for the colors this form draws itself.
     pub fn set_dark(&mut self, dark: bool) {
         self.dark = dark;
+    }
+
+    pub fn creating(&self) -> bool {
+        self.create
     }
 
     pub fn working(&self) -> bool {
@@ -76,7 +85,7 @@ impl SignInForm {
     ) {
         match event {
             InputEvent::Change => cx.notify(),
-            InputEvent::PressEnter { .. } => self.submit(false, window, cx),
+            InputEvent::PressEnter { .. } => self.submit(window, cx),
             _ => {}
         }
     }
@@ -88,10 +97,20 @@ impl SignInForm {
         )
     }
 
-    fn submit(&mut self, create: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Does what the switch says: sign in, or create the account.
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (email, password) = self.credentials(cx);
         if credentials_ok(&email, &password) {
+            let create = self.create;
             self.authenticate(email, password, create, window, cx);
+        }
+    }
+
+    fn set_mode(&mut self, create: bool, cx: &mut Context<Self>) {
+        if self.create != create && !self.working {
+            self.create = create;
+            self.problem = None;
+            cx.notify();
         }
     }
 
@@ -143,13 +162,58 @@ impl SignInForm {
     }
 }
 
-fn field(label: &'static str, input: impl IntoElement, p: &Palette) -> Div {
+/// A labelled field with its icon inside the box.
+fn field(label: &'static str, icon: IconName, input: Input, p: &Palette) -> Div {
     div()
         .flex()
         .flex_col()
         .gap(px(6.))
         .child(subheading(label, p))
-        .child(input)
+        .child(
+            input
+                .large()
+                .prefix(Icon::new(icon).size(px(15.)).text_color(p.mute)),
+        )
+}
+
+/// One half of the Sign in / Create account switch. The track is the window
+/// color, so the chosen half reads as the raised one.
+fn segment(
+    id: &'static str,
+    label: &'static str,
+    on: bool,
+    p: &Palette,
+    click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    pressable(
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(30.))
+            .rounded(px(7.))
+            .border_1()
+            .text_size(px(13.))
+            .map(|d| match on {
+                true => d
+                    .bg(p.card)
+                    .border_color(p.line)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .when(!p.dark, |d| d.shadow_sm()),
+                false => d
+                    .border_color(gpui_kit::transparent_black())
+                    .text_color(p.mute)
+                    .hover(|d| d.text_color(p.ink)),
+            })
+            .child(label),
+        id,
+    )
+    .flex_1()
+    .cursor_pointer()
+    .role(Role::Tab)
+    .aria_label(label)
+    .aria_selected(on)
+    .on_click(move |_, window, cx| click(window, cx))
 }
 
 impl Render for SignInForm {
@@ -158,47 +222,70 @@ impl Render for SignInForm {
         let s = self.live.read(cx).lang.strings();
         let (email, password) = self.credentials(cx);
         let ready = credentials_ok(&email, &password) && !self.working;
+        let this = cx.entity();
+        let (to_sign_in, to_create) = (this.clone(), this);
         div()
             .flex()
             .flex_col()
             .gap(px(14.))
             .w_full()
-            .child(field(s.ask_email, Input::new(&self.email), &p))
-            .child(field(s.ask_password, Input::new(&self.password), &p))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(2.))
+                    .p(px(3.))
+                    .rounded(px(10.))
+                    .bg(p.solid)
+                    .border_1()
+                    .border_color(p.line)
+                    .child(segment(
+                        "mode-sign-in",
+                        s.ask_sign_in,
+                        !self.create,
+                        &p,
+                        move |_, cx| {
+                            to_sign_in.update(cx, |form, cx| form.set_mode(false, cx));
+                        },
+                    ))
+                    .child(segment(
+                        "mode-create",
+                        s.ask_create_account,
+                        self.create,
+                        &p,
+                        move |_, cx| {
+                            to_create.update(cx, |form, cx| form.set_mode(true, cx));
+                        },
+                    )),
+            )
+            .child(field(
+                s.ask_email,
+                IconName::Mail,
+                Input::new(&self.email),
+                &p,
+            ))
+            .child(field(
+                s.ask_password,
+                IconName::LockKeyhole,
+                Input::new(&self.password).mask_toggle(),
+                &p,
+            ))
             .children(
                 self.problem
                     .map(|problem| warn_note(&p, problem_text(problem, s)).mt_0()),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .pt(px(4.))
-                    .child(
-                        Button::new("sign-in-create")
-                            .cursor_pointer()
-                            .ghost()
-                            .small()
-                            .label(s.ask_create_account)
-                            .disabled(!ready)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.submit(true, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("sign-in-submit")
-                            .cursor_pointer()
-                            .primary()
-                            .small()
-                            .label(s.ask_sign_in)
-                            .loading(self.working)
-                            .disabled(!ready)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.submit(false, window, cx);
-                            })),
-                    ),
+                Button::new("sign-in-submit")
+                    .cursor_pointer()
+                    .primary()
+                    .w_full()
+                    .label(if self.create {
+                        s.ask_create_account
+                    } else {
+                        s.ask_sign_in
+                    })
+                    .loading(self.working)
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
             )
     }
 }

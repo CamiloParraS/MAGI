@@ -91,6 +91,7 @@ pub enum Field {
     Feature(Feature),
     LaunchAtLogin,
     CopyAsFile,
+    AskMagi,
     DetailPane,
     Language,
     Results,

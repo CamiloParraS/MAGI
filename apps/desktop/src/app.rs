@@ -110,6 +110,7 @@ pub fn run(
         let mut live = Live::new(Lang::current(ui.language), ui.theme.clone());
         // From the config alone: no keychain read and no request.
         live.account = host.account_state().unwrap_or_default();
+        live.ask_enabled = ui.ask_magi;
         // Wayland may refuse the hotkey manager outright; settings then says
         // to bind `magi --toggle` in the desktop (SPEC.md §6.3).
         if hotkey.is_none() && magi_core::platform::is_wayland() {
@@ -235,6 +236,7 @@ impl Shell {
                 self.live.update(cx, |live, cx| {
                     live.lang = lang;
                     live.theme = ui.theme.clone();
+                    live.ask_enabled = ui.ask_magi;
                     cx.notify();
                 });
                 // The search window reads the rest when it next opens.

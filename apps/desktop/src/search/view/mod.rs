@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::input::{Copy as CopyText, Input, InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Icon, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{ErrorCode, FileDetails, SearchRequest};
 use magi_core::host::Host;
@@ -446,7 +447,10 @@ impl SearchView {
 
     /// Every way of asking comes here; this window closes itself when the
     /// Ask window takes the focus.
-    fn ask(&mut self, _: &AskMagi, _: &mut Window, _: &mut Context<Self>) {
+    fn ask(&mut self, _: &AskMagi, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.live.read(cx).ask_enabled {
+            return;
+        }
         let results = self.state.askable();
         if ask::can_ask(results) {
             let request = ask::request(self.state.query(), results);
@@ -504,7 +508,10 @@ impl Render for SearchView {
                             .child(self.search_icon(&p))
                             // The large size's own text size: its line box is
                             // fixed at 20 px, so bigger text clips descenders.
-                            .child(Input::new(&self.input).appearance(false).large()),
+                            .child(Input::new(&self.input).appearance(false).large())
+                            .when(self.live.read(cx).ask_enabled, |row| {
+                                row.child(self.ask_button(!ask::can_ask(self.state.askable()), cx))
+                            }),
                     )
                     .children(self.shortcut_hint(&p, cx))
                     .child(loading_track(&p, self.dimmed()))

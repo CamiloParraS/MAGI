@@ -30,6 +30,10 @@ pub(crate) fn pressable(el: impl IntoElement, id: impl Into<ElementId>) -> State
     div().id(id).relative().active(|s| s.top(PRESS)).child(el)
 }
 
+/// The asset path of the single-colour brand mark, drawn tinted wherever a
+/// window wants it (see `app/assets.rs`).
+pub(crate) const MARK: &str = "brand/magi-mark.svg";
+
 /// The space between groups.
 const STACK_GAP: Pixels = px(10.);
 
@@ -254,4 +258,19 @@ pub(crate) fn feature_icon(feature: Feature) -> IconName {
         Feature::ImageText => IconName::ScanText,
         Feature::ImageVisual => IconName::ScanEye,
     }
+}
+
+/// Magi's mark on an accent tile: the one brand moment of the Ask window,
+/// big on the sign-in scene and the empty chat.
+pub(crate) fn brand_tile(p: &Palette, tile: Pixels) -> Div {
+    let on_accent: Hsla = if p.dark { black() } else { white() };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(tile)
+        .rounded(tile * 0.3)
+        .bg(p.accent)
+        .child(svg().path(MARK).size(tile * 0.6).text_color(on_accent))
 }

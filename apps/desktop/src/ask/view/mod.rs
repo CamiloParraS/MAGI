@@ -20,7 +20,7 @@ use sign_in::SignInForm;
 actions!(magi_ask, [Close]);
 
 const CONTEXT: &str = "AskWindow";
-pub const SIZE: Size<Pixels> = size(px(620.), px(680.));
+pub const SIZE: Size<Pixels> = size(px(620.), px(620.));
 pub const MIN_SIZE: Size<Pixels> = size(px(480.), px(440.));
 
 /// [`SIZE`], no taller than most of the screen it opens on: a scaled
@@ -105,6 +105,7 @@ impl AskView {
                 }
                 cx.notify();
             }),
+            cx.observe(&sign_in, |_, _, cx| cx.notify()),
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.sync_appearance(window, cx);
             }),

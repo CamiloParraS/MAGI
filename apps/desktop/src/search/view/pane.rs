@@ -8,6 +8,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use magi_core::dto::{MatchSource, SearchResult};
 
@@ -187,19 +188,21 @@ impl SearchView {
                             .items_center()
                             .justify_end()
                             .gap_2()
-                            .child(
-                                div().debug_selector(|| "ask-pane".into()).child(
-                                    Button::new("pane-ask")
-                                        .cursor_pointer()
-                                        .ghost()
-                                        .small()
-                                        .icon(IconName::MessageCircleQuestionMark)
-                                        .label(s.ask_magi)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.ask(&AskMagi, window, cx)
-                                        })),
-                                ),
-                            )
+                            .when(self.live.read(cx).ask_enabled, |row| {
+                                row.child(
+                                    div().debug_selector(|| "ask-pane".into()).child(
+                                        Button::new("pane-ask")
+                                            .cursor_pointer()
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::MessageCircleQuestionMark)
+                                            .label(s.ask_magi)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.ask(&AskMagi, window, cx)
+                                            })),
+                                    ),
+                                )
+                            })
                             .child(
                                 Button::new("pane-reveal")
                                     .cursor_pointer()
