@@ -4,6 +4,19 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### 0.2.2
+
+- **Ask Magi: files found by name now carry their text.** A result matched
+  only by its file name used to be attached to a question as an empty chip;
+  it now shows the start of the file's indexed text, and the best-matching
+  parts are sent as for any other file.
+- **Ask Magi:** the file picker lines names up whatever the icon (glyph or
+  thumbnail), and the suggested questions stay out of the way while it is
+  open.
+- **Clearer empty states, a labelled Ask key and a calmer finish screen**
+  during setup; the finish screen says when models are still downloading.
+- The detail pane fades in the first time it appears.
+
 ### 0.2.1
 
 - **Ask Magi can read more than snippets.** Each file you attach to a
