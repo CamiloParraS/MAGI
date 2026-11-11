@@ -39,7 +39,7 @@ pub struct Scene {
     pub steps: Vec<Step>,
 }
 
-fn scene(name: &str, open: Open, steps: Vec<Step>) -> Scene {
+pub(super) fn scene(name: &str, open: Open, steps: Vec<Step>) -> Scene {
     Scene {
         name: name.to_owned(),
         open,
@@ -198,10 +198,20 @@ fn ask_scenes() -> Vec<Scene> {
                 });
             })],
         ),
+        scene(
+            "ask-picker-results",
+            ask(true, true),
+            vec![Box::new(|_, handle, cx| {
+                on_ask(handle, cx, |view, window, cx| {
+                    view.toggle_picker(window, cx);
+                    view.set_picker_query("lease", window, cx);
+                });
+            })],
+        ),
     ]
 }
 
-fn on_ask(
+pub(super) fn on_ask(
     handle: AnyWindowHandle,
     cx: &mut App,
     f: impl FnOnce(&mut AskView, &mut Window, &mut Context<AskView>),
@@ -226,7 +236,7 @@ fn on_onboarding(
 }
 
 /// The view inside a window's Root.
-fn content<V: 'static>(root: AnyView, cx: &mut App) -> Option<Entity<V>> {
+pub(super) fn content<V: 'static>(root: AnyView, cx: &mut App) -> Option<Entity<V>> {
     root.downcast::<base::Root>()
         .ok()?
         .read(cx)
@@ -253,7 +263,7 @@ fn options(size: Size<Pixels>) -> WindowOptions {
 
 /// Opens `build` hidden at `size`. A hidden window's drawing surface stays
 /// 1x1 until the window is resized, so it is resized once at the start.
-fn open_hidden<V: Render + 'static>(
+pub(super) fn open_hidden<V: Render + 'static>(
     size: Size<Pixels>,
     cx: &mut App,
     build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
@@ -264,7 +274,7 @@ fn open_hidden<V: Render + 'static>(
 }
 
 /// Back to the shared state every scene starts from.
-fn reset(kit: &Kit, cx: &mut App) {
+pub(super) fn reset(kit: &Kit, cx: &mut App) {
     let status = kit.status.clone();
     kit.live.update(cx, |live, cx| {
         live.status = Some(status);
@@ -276,7 +286,7 @@ fn reset(kit: &Kit, cx: &mut App) {
     });
 }
 
-fn search_window(query: &'static str, teach: Option<&'static str>, pane: bool) -> Open {
+pub(super) fn search_window(query: &'static str, teach: Option<&'static str>, pane: bool) -> Open {
     Box::new(move |kit, cx| {
         reset(kit, cx);
         kit.host
@@ -316,7 +326,7 @@ fn open_search(kit: &Kit, teach: Option<&str>, cx: &mut App) -> anyhow::Result<A
     Ok(handle)
 }
 
-fn settings_window(section: Section, signed_in: bool) -> Open {
+pub(super) fn settings_window(section: Section, signed_in: bool) -> Open {
     Box::new(move |kit, cx| {
         reset(kit, cx);
         let who = signed_in.then(|| SETTINGS_EMAIL.to_owned());
@@ -330,7 +340,7 @@ fn settings_window(section: Section, signed_in: bool) -> Open {
     })
 }
 
-fn onboarding_window(step: Onboarding) -> Open {
+pub(super) fn onboarding_window(step: Onboarding) -> Open {
     Box::new(move |kit, cx| {
         reset(kit, cx);
         kit.host
@@ -363,7 +373,7 @@ const PASSWORD: &str = "shots-pass-42";
 /// A new account for each Ask scene: the fake server counts questions per
 /// account, and a shared one would reach the daily limit partway through.
 /// The Ask window never shows the email.
-fn fresh_email() -> String {
+pub(super) fn fresh_email() -> String {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("ask-{n}@example.com")
@@ -371,7 +381,12 @@ fn fresh_email() -> String {
 
 /// Signs the fake account in as `who`, or out (`MAGI_FAKE_ASK`: in memory,
 /// never the keychain), and sets whether the first-use disclosure was seen.
-fn account(kit: &Kit, who: Option<String>, disclosed: bool, cx: &mut App) -> anyhow::Result<()> {
+pub(super) fn account(
+    kit: &Kit,
+    who: Option<String>,
+    disclosed: bool,
+    cx: &mut App,
+) -> anyhow::Result<()> {
     let host = &kit.host;
     if host.account_state()?.signed_in_as != who {
         host.sign_out()?;
@@ -417,7 +432,9 @@ fn ask_request(host: &Host) -> anyhow::Result<Request> {
     };
     let mut results: Vec<SearchResult> = search("rent")?.into_iter().take(2).collect();
     results.extend(search("whiteboard")?.into_iter().take(1));
-    let mut request = ask::request("rent", &results);
+    let mut request = ask::request("rent", &results, |id| {
+        host.ask_preview(id).unwrap_or_default()
+    });
     request.question = "When is the rent due?".into();
     Ok(request)
 }

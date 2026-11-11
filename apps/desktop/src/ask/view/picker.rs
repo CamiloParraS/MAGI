@@ -13,7 +13,7 @@ use gpui_kit::*;
 use magi_core::dto::{SearchRequest, SearchResult};
 
 use super::AskView;
-use super::chip::{chip_shell, file_icon, preview_tip};
+use super::chip::{CHIP_THUMB, chip_shell, file_icon, preview_tip};
 use crate::ask::attach::{Notice, file_info, notice_for};
 use crate::ask::{MAX_SOURCES, Phase};
 use crate::i18n::Strings;
@@ -97,6 +97,17 @@ impl AskView {
             _subscription: subscription,
         });
         cx.notify();
+    }
+
+    /// Puts `text` in the open picker's box and searches for it, as typing
+    /// would.
+    pub fn set_picker_query(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.picker.as_ref().map(|picker| picker.input.clone()) else {
+            return;
+        };
+        let text = text.to_owned();
+        input.update(cx, |input, cx| input.set_value(text, window, cx));
+        self.search_picker(cx);
     }
 
     /// Searches the index for what the picker's box says, once typing has
@@ -258,7 +269,15 @@ impl AskView {
                     d.tooltip(preview_tip(preview.into(), thumb.clone()))
                 })
                 .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
-                .child(file_icon(result.kind, &result.file_name, thumb.as_ref()))
+                // One width for glyphs and thumbnails, so the names line up.
+                .child(
+                    div()
+                        .flex_none()
+                        .w(CHIP_THUMB)
+                        .flex()
+                        .justify_center()
+                        .child(file_icon(result.kind, &result.file_name, thumb.as_ref())),
+                )
                 .child(
                     div()
                         .flex_1()

@@ -146,6 +146,9 @@ fn a_whole_file_and_a_picture_go_as_chosen_and_never_with_the_path() {
     let red = rig.host.ask_file_at(&red).unwrap().unwrap();
     assert_eq!(red.kind, magi_core::discovery::Kind::Image);
     assert!(notes.preview.starts_with("lease terms"));
+    // What a name-only search result's chip shows: the same opening text.
+    assert_eq!(rig.host.ask_preview(notes.file_id).unwrap(), notes.preview);
+    assert_eq!(rig.host.ask_preview(-1).unwrap(), "");
     let size = rig.host.ask_whole_size(notes.file_id).unwrap();
     assert!(!size.cut && size.chars > 2000, "{size:?}");
     // Outside every root: not something Ask Magi can use.

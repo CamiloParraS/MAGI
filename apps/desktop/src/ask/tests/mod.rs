@@ -26,6 +26,11 @@ fn result(file_id: i64, kind: Kind, snippet: Option<&str>) -> SearchResult {
     }
 }
 
+/// What the search window hands over when the index has no text to add.
+fn request(query: &str, results: &[SearchResult]) -> Request {
+    super::request(query, results, |_| String::new())
+}
+
 fn texts(n: i64) -> Vec<SearchResult> {
     (1..=n)
         .map(|id| result(id, Kind::Text, Some("the tenant shall pay rent")))
@@ -97,6 +102,39 @@ fn a_snippet_that_only_repeats_the_path_is_not_sent() {
         .map(|s| s.file_id)
         .collect();
     assert_eq!(ids, [3]);
+}
+
+#[test]
+fn a_file_found_by_its_name_alone_is_taken_with_its_own_text() {
+    // "alquiler" matches contrato_alquiler.txt's name only: the snippet is
+    // the path, but the file has text, which the index supplies.
+    let results = [
+        result(1, Kind::Text, Some("private folder 1 bin")),
+        result(2, Kind::Text, None),
+        result(3, Kind::Text, Some("private folder 3 bin")),
+    ];
+    let mut asked = Vec::new();
+    let taken = super::request("alquiler", &results, |id| {
+        asked.push(id);
+        match id {
+            1 => "El arrendatario pagará".to_owned(),
+            2 => "  ".to_owned(),
+            _ => String::new(),
+        }
+    });
+    let sent: Vec<(i64, &str)> = taken
+        .sources
+        .iter()
+        .map(|s| (s.file_id, s.text.as_str()))
+        .collect();
+    assert_eq!(sent, [(1, "El arrendatario pagará")]);
+    assert_eq!(asked, [1, 2, 3]);
+}
+
+#[test]
+fn the_index_is_not_asked_about_a_result_that_has_a_snippet() {
+    let taken = super::request("rent", &texts(2), |id| panic!("asked about {id}"));
+    assert_eq!(taken.sources.len(), 2);
 }
 
 #[test]

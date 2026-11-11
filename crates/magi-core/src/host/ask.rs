@@ -105,10 +105,7 @@ impl Host {
         let Some((file_id, file_name, kind, thumb_key)) = found else {
             return Ok(None);
         };
-        let preview = context::load(&conn, file_id)?
-            .first()
-            .map(|c| c.text.trim().chars().take(PREVIEW_CHARS).collect())
-            .unwrap_or_default();
+        let preview = preview(&conn, file_id)?;
         Ok(Some(AskFileInfo {
             file_id,
             file_name,
@@ -120,6 +117,13 @@ impl Host {
             }),
             preview,
         }))
+    }
+
+    /// The start of a searchable file's indexed text, for its chip: what a
+    /// search result found by its name alone has no snippet for. Empty when
+    /// the file has no text or search would not show it.
+    pub fn ask_preview(&self, file_id: i64) -> Result<String> {
+        preview(&lock(&self.inner.reader), file_id)
     }
 
     /// Deletes the account on the server, then signs out here.
@@ -155,4 +159,10 @@ impl Host {
             disclosed: current.ask.disclosed,
         })
     }
+}
+
+fn preview(conn: &rusqlite::Connection, file_id: i64) -> Result<String> {
+    Ok(context::first_text(conn, file_id)?
+        .map(|text| text.trim().chars().take(PREVIEW_CHARS).collect())
+        .unwrap_or_default())
 }

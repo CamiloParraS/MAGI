@@ -69,14 +69,26 @@ fn excerpt(result: &SearchResult) -> Option<&str> {
 /// A copy of the top results that have something to send, ticked, with the
 /// search text as the question. Photos go as pictures, up to
 /// [`attach::MAX_IMAGES`]; past that, as their text if they have any.
-pub fn request(query: &str, results: &[SearchResult]) -> Request {
+///
+/// A result found by its name alone shows no text of its own, so `preview`
+/// (`Host::ask_preview`) supplies the start of the file's indexed text, or
+/// nothing when it has none; the chip shows it and `Host::ask_about` then
+/// picks the passages to send.
+pub fn request(
+    query: &str,
+    results: &[SearchResult],
+    mut preview: impl FnMut(i64) -> String,
+) -> Request {
     let mut images = 0;
     let mut sources = Vec::new();
     for result in results {
         if sources.len() == MAX_SOURCES {
             break;
         }
-        let text = excerpt(result).map_or_else(String::new, |t| clip(t, MAX_SOURCE_LEN));
+        let text = match excerpt(result) {
+            Some(text) => clip(text, MAX_SOURCE_LEN),
+            None => clip(preview(result.file_id).trim(), MAX_SOURCE_LEN),
+        };
         let Some(send) = attach::default_send(result.kind, !text.is_empty(), images) else {
             continue;
         };

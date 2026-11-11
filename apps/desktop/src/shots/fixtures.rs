@@ -50,7 +50,9 @@ pub struct Profile {
     pub config: PathBuf,
 }
 
-pub fn start(dir: &Path) -> anyhow::Result<Profile> {
+/// With `demo`, a models folder: [`super::demo`]'s files over real models
+/// instead of the samples and the fake embedder.
+pub fn start(dir: &Path, demo: Option<&Path>) -> anyhow::Result<Profile> {
     if dir.exists() {
         std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
     }
@@ -58,16 +60,29 @@ pub fn start(dir: &Path) -> anyhow::Result<Profile> {
     for d in [&data, &config, &root] {
         std::fs::create_dir_all(d)?;
     }
-    for (name, text) in TEXT_FILES {
-        std::fs::write(root.join(name), text)?;
-    }
-    write_picture(&root.join("Whiteboard.png"))?;
-    write_picture_dark(&root.join("Receipt scan.png"))?;
+    let want = match demo {
+        Some(models) => {
+            super::demo::write_files(&root)?;
+            super::demo::link_models(models, &data)?;
+            std::fs::write(config.join("config.toml"), super::demo::CONFIG)?;
+            super::demo::FILES.len() as u64
+        }
+        None => {
+            for (name, text) in TEXT_FILES {
+                std::fs::write(root.join(name), text)?;
+            }
+            write_picture(&root.join("Whiteboard.png"))?;
+            write_picture_dark(&root.join("Receipt scan.png"))?;
+            TEXT_FILES.len() as u64 + 2
+        }
+    };
     // SAFETY: set before the host or GPUI starts any thread that reads them.
     unsafe {
         std::env::set_var("MAGI_DATA_DIR", &data);
         std::env::set_var("MAGI_CONFIG_DIR", &config);
-        std::env::set_var("MAGI_FAKE_EMBEDDER", "1");
+        if demo.is_none() {
+            std::env::set_var("MAGI_FAKE_EMBEDDER", "1");
+        }
         std::env::set_var("MAGI_FAKE_ASK", "1");
     }
     let host = Host::start(
@@ -81,9 +96,10 @@ pub fn start(dir: &Path) -> anyhow::Result<Profile> {
         host.engine().is_ok()
     })?;
     host.engine()?.add_root(&root)?;
-    let want = TEXT_FILES.len() as u64 + 2;
     let engine = host.engine()?;
-    wait_for(Duration::from_secs(120), "indexing the samples", || {
+    // Real models read every photo and page: minutes, not seconds.
+    let limit = Duration::from_secs(if demo.is_some() { 1200 } else { 120 });
+    wait_for(limit, "indexing the samples", || {
         engine
             .status()
             .is_ok_and(|s| s.state == IndexState::Idle && s.indexed + s.skipped + s.errors >= want)

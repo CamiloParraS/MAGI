@@ -9,6 +9,7 @@
 //! Output, under `<target>/shots/`: `latest/` (this run), `previous/` (the
 //! run before), `diff/` (where they differ) and `index.html`.
 
+mod demo;
 mod diff;
 mod fixtures;
 mod scenes;
@@ -44,6 +45,8 @@ struct Filter {
     only: Vec<String>,
     theme: Option<String>,
     lang: Option<String>,
+    /// `--demo <models>`: the demo video's screens, over real models.
+    demo: Option<PathBuf>,
 }
 
 impl Filter {
@@ -56,6 +59,7 @@ impl Filter {
                 "--only" => filter.only.extend(value()?.split(',').map(str::to_owned)),
                 "--theme" => filter.theme = Some(value()?),
                 "--lang" => filter.lang = Some(value()?),
+                "--demo" => filter.demo = Some(PathBuf::from(value()?)),
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -78,14 +82,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
         Ok(filter) => filter,
         Err(error) => {
             eprintln!(
-                "{error}\nusage: magi-shots [--only a,b] [--theme light|dark] [--lang en|es]"
+                "{error}\nusage: magi-shots [--only a,b] [--theme light|dark] [--lang en|es] [--demo <models>]"
             );
             return ExitCode::FAILURE;
         }
     };
     let out = std::env::var_os("CARGO_TARGET_DIR")
         .map_or_else(|| PathBuf::from("target"), PathBuf::from)
-        .join("shots");
+        .join(if filter.demo.is_some() {
+            "shots-demo"
+        } else {
+            "shots"
+        });
     match prepare(&out, &filter) {
         Ok(profile) => run(out, filter, profile),
         Err(error) => {
@@ -109,7 +117,7 @@ fn prepare(out: &Path, filter: &Filter) -> anyhow::Result<fixtures::Profile> {
     let _ = std::fs::remove_dir_all(out.join("diff"));
     std::fs::create_dir_all(out.join("diff"))?;
     eprintln!("indexing the sample files...");
-    fixtures::start(&out.join("profile"))
+    fixtures::start(&out.join("profile"), filter.demo.as_deref())
 }
 
 fn run(out: PathBuf, filter: Filter, profile: fixtures::Profile) -> ExitCode {
@@ -157,7 +165,10 @@ fn run(out: PathBuf, filter: Filter, profile: fixtures::Profile) -> ExitCode {
 
 /// Takes every scene the filter allows; returns the names written.
 async fn take_all(kit: &Kit, out: &Path, filter: &Filter, cx: &mut AsyncApp) -> Vec<String> {
-    let scenes = scenes::all();
+    let scenes = match filter.demo {
+        Some(_) => demo::scenes(),
+        None => scenes::all(),
+    };
     let mut taken = Vec::new();
     for theme in THEMES {
         for (lang, lang_code) in LANGS {
@@ -339,7 +350,10 @@ fn finish(out: &Path, filter: &Filter, taken: &[String]) -> i32 {
 }
 
 fn expected_count(filter: &Filter) -> usize {
-    let scenes = scenes::all();
+    let scenes = match filter.demo {
+        Some(_) => demo::scenes(),
+        None => scenes::all(),
+    };
     THEMES
         .iter()
         .flat_map(|t| LANGS.iter().map(move |(_, l)| (*t, *l)))

@@ -206,6 +206,29 @@ pub fn load(conn: &Connection, file_id: i64) -> Result<Vec<Candidate>> {
     Ok(out)
 }
 
+/// The first of a searchable file's text chunks, read alone: [`load`] reads
+/// them all with their vectors, too much for a chip's preview.
+pub fn first_text(conn: &Connection, file_id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            concat!(
+                "SELECT c.text
+                 FROM chunks c
+                 JOIN files f ON f.id = c.file_id
+                 JOIN roots r ON r.id = f.root_id
+                 WHERE c.file_id = ?1 AND c.source IN ('body', 'ocr', 'code_symbol')
+                   AND trim(c.text) <> '' AND ",
+                searchable_sql!(),
+                "
+                 ORDER BY c.ordinal
+                 LIMIT 1"
+            ),
+            params![file_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
 /// The longest start of `next` that `prev` ends with, cut at a word end:
 /// the overlap the chunker carried from one chunk into the next.
 fn overlap(prev: &str, next: &str) -> usize {

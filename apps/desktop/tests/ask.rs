@@ -184,7 +184,7 @@ fn asking_twice_keeps_one_window_with_the_new_contents(cx: &mut TestAppContext) 
             &host,
             &live,
             Backdrop::Solid,
-            request("rent", &[hit(1)]),
+            request("rent", &[hit(1)], |_| String::new()),
             cx,
         );
     });
@@ -198,7 +198,7 @@ fn asking_twice_keeps_one_window_with_the_new_contents(cx: &mut TestAppContext) 
             &host,
             &live,
             Backdrop::Solid,
-            request("deposit", &[hit(2), hit(3)]),
+            request("deposit", &[hit(2), hit(3)], |_| String::new()),
             cx,
         );
     });
@@ -222,7 +222,7 @@ fn asking_twice_keeps_one_window_with_the_new_contents(cx: &mut TestAppContext) 
             &host,
             &live,
             Backdrop::Solid,
-            request("lease", &[hit(4)]),
+            request("lease", &[hit(4)], |_| String::new()),
             cx,
         );
     });
@@ -251,7 +251,7 @@ fn sign_in_works_from_the_keyboard_alone(cx: &mut TestAppContext) {
             &host,
             &live,
             Backdrop::Solid,
-            request("rent", &[hit(1)]),
+            request("rent", &[hit(1)], |_| String::new()),
             cx,
         );
     });
@@ -290,7 +290,7 @@ fn signing_in_from_settings_opens_the_chat(cx: &mut TestAppContext) {
                 host,
                 live,
                 Backdrop::Solid,
-                request("rent", &[hit(1)]),
+                request("rent", &[hit(1)], |_| String::new()),
                 window,
                 cx,
             )
@@ -327,7 +327,7 @@ fn the_whole_chat_runs_against_the_fake_server(cx: &mut TestAppContext) {
             host.clone(),
             live,
             Backdrop::Solid,
-            request("rent", &[hit(1), hit(2)]),
+            request("rent", &[hit(1), hit(2)], |_| String::new()),
             window,
             cx,
         )

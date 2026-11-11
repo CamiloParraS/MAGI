@@ -248,6 +248,27 @@ impl AskView {
         }
     }
 
+    /// Asks `question` and shows `answer` as its reply without reaching any
+    /// service: the demo video's shots.
+    #[cfg(feature = "shots")]
+    pub fn show_answer(
+        &mut self,
+        question: &str,
+        answer: magi_core::ask::AskAnswer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut outgoing = None;
+        self.change(window, cx, |model| outgoing = model.start(question));
+        if let Some(outgoing) = outgoing {
+            self.question
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.change(window, cx, |model| {
+                model.finished(outgoing.generation, Ok(answer))
+            });
+        }
+    }
+
     /// Sends the failed question again.
     pub fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut outgoing = None;

@@ -268,7 +268,9 @@ impl AskView {
                     .line_height(relative(1.5))
                     .child(body),
             )
-            .when(has_text, |d| {
+            // The open picker makes the dock taller; the ideas would run
+            // under it, and while picking they are not what is wanted.
+            .when(has_text && self.picker.is_none(), |d| {
                 d.child(
                     div()
                         .mt(px(22.))

@@ -186,6 +186,15 @@ impl SearchView {
         }
     }
 
+    /// The query as if just typed, caret at its end: the demo video's shots.
+    #[cfg(feature = "shots")]
+    pub fn deselect_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            let text = input.value();
+            input.set_value(text, window, cx);
+        });
+    }
+
     pub fn state(&self) -> &SearchState {
         &self.state
     }
@@ -453,7 +462,13 @@ impl SearchView {
         }
         let results = self.state.askable();
         if ask::can_ask(results) {
-            let request = ask::request(self.state.query(), results);
+            // At most five quick reads of the index, for name-only matches.
+            let request = ask::request(self.state.query(), results, |file_id| {
+                self.host.ask_preview(file_id).unwrap_or_else(|error| {
+                    tracing::warn!(%error, file_id, "no preview for Ask");
+                    String::new()
+                })
+            });
             let _ = self.events.try_send(AppEvent::Ask(request));
         }
     }
